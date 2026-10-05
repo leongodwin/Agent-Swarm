@@ -1,7 +1,6 @@
-import * as THREE from 'three';
 import { roundRect, SANS } from './draw';
 import { useCanvasTexture } from './interact';
-import { Box, Cyl } from './Toon';
+import { Box } from './Toon';
 
 /**
  * 3D Dataverse Schema & Entity Relationship Diagram (ERD) Visualizer Monitor.

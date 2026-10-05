@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
+import { useStore } from '../store';
 import { ELEVATOR, HALF_D, HALF_W, WALL_H } from './layout';
 import { drawSky } from './draw';
 import { useCanvasTexture } from './interact';
@@ -164,15 +165,18 @@ export function Shell({
 }
 
 export function Lights() {
+  const lightMode = useStore((s) => s.lightMode);
+  const keynote = lightMode === 'keynote';
+
   return (
     <>
-      <hemisphereLight args={['#ffffff', '#cbd5e1', 0.85]} />
-      <ambientLight intensity={0.25} />
-      {/* Warm natural sun through windows */}
+      <hemisphereLight args={keynote ? ['#1e1b4b', '#0f172a', 0.45] : ['#ffffff', '#cbd5e1', 0.85]} />
+      <ambientLight intensity={keynote ? 0.15 : 0.25} />
+      {/* Warm natural sun through windows or moody keynote spotlight */}
       <directionalLight
         position={[10, 15, 8]}
-        intensity={1.75}
-        color="#fffbf2"
+        intensity={keynote ? 0.6 : 1.75}
+        color={keynote ? '#818cf8' : '#fffbf2'}
         castShadow
         shadow-mapSize={[2048, 2048]}
         shadow-camera-left={-18}
@@ -185,8 +189,12 @@ export function Lights() {
         shadow-normalBias={0.02}
         shadow-radius={3.5}
       />
-      {/* Soft blue ambient skylight fill */}
-      <directionalLight position={[-12, 10, -6]} intensity={0.4} color="#38bdf8" />
+      {/* Soft blue / purple ambient fill */}
+      <directionalLight
+        position={[-12, 10, -6]}
+        intensity={keynote ? 0.85 : 0.4}
+        color={keynote ? '#c084fc' : '#38bdf8'}
+      />
     </>
   );
 }

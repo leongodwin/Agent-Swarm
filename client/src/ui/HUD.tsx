@@ -82,6 +82,14 @@ export function HUD() {
       <div className="hud-status">
         {demo && <span className="pill pill-demo">DEMO</span>}
         <span className={`pill ${connected ? 'pill-ok' : restarting ? 'pill-demo' : 'pill-bad'}`}>{connected ? '● live' : restarting ? '○ restarting' : '○ reconnecting'}</span>
+        <button
+          className="pill"
+          onClick={() => useStore.getState().toggleLightMode()}
+          style={{ cursor: 'pointer', background: 'rgba(255, 255, 255, 0.12)', border: '1px solid rgba(255, 255, 255, 0.2)' }}
+          title="Toggle Daylight / Keynote Lighting (or press K)"
+        >
+          {useStore((s) => s.lightMode === 'keynote' ? '🌙 Keynote' : '☀️ Daylight')} <kbd style={{ marginLeft: 4, fontSize: '0.7em' }}>K</kbd>
+        </button>
         <span className="pill">
           ⚙️ {settings.sessionLimit ? `${running}/${settings.sessionLimit}` : running} sessions
         </span>
@@ -104,7 +112,7 @@ export function HUD() {
       {started && !overlay && !locked && !travel && <div className="hud-resume">Click to look around</div>}
       {started && !(settings.setupDone && settings.tutorialStep >= 0) && (
         <div className="hud-help">
-          <kbd>WASD</kbd> move · <kbd>Shift</kbd> run · <kbd>E</kbd> / <kbd>Click</kbd> interact · <kbd>P</kbd> phone · <kbd>Tab</kbd> workers · <kbd>H</kbd> help · <kbd>Esc</kbd> free mouse
+          <kbd>WASD</kbd> move · <kbd>Shift</kbd> run · <kbd>E</kbd> / <kbd>Click</kbd> interact · <kbd>K</kbd> lighting · <kbd>P</kbd> phone · <kbd>Tab</kbd> workers · <kbd>H</kbd> help · <kbd>Esc</kbd> free mouse
         </div>
       )}
 

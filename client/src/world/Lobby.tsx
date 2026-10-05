@@ -9,9 +9,9 @@ import { drawCandidateTag, drawSign, roundRect, SANS } from './draw';
 import { Elevator } from './Elevator';
 import { useCanvasTexture, useInteractable } from './interact';
 import { CEO_DESK, CEO_ROOM, HALF_D, HALF_W, MANAGER_DESK, MANAGER_ROOM, RECEPTION, WAITING, WAITING_ROTATION } from './layout';
-import { glow, shade } from './materials';
+import { acousticFabric, brushedMetal, cyberGlow, glow, pbrWood, shade } from './materials';
 import { WallSign } from './OfficeFloor';
-import { Bookshelf, Couch, CoffeeTable, GlassWall, Plant, Rug, WallClock } from './Props';
+import { Couch, CoffeeTable, GlassWall, LivingMossWall, Plant, Rug, WallClock } from './Props';
 import { Shell } from './Shell';
 import { Ball, Box, Cyl } from './Toon';
 import { Toys } from './toys';
@@ -154,7 +154,7 @@ function ManagerVisualCv({ position, rotationY = Math.PI / 2 }: { position: [num
   );
 }
 
-/** Interactive Boardroom Swarm Ideation Table */
+/** Interactive Boardroom Swarm Ideation Table with Stadium Curvature & Holographic Studio */
 function WarRoomTable() {
   const ref = useInteractable<THREE.Group>(
     {
@@ -167,20 +167,51 @@ function WarRoomTable() {
 
   return (
     <group ref={ref}>
-      {/* Boardroom Conference Table */}
-      <Box size={[3.4, 0.08, 1.6]} position={[0, 0.74, 0]} color="#334155" outline />
-      <Cyl r={0.16} h={0.7} position={[-1.1, 0.35, 0]} color="#64748b" />
-      <Cyl r={0.16} h={0.7} position={[1.1, 0.35, 0]} color="#64748b" />
-
-      {/* Central Holographic Multi-Agent Projector */}
-      <Cyl r={0.34} h={0.06} position={[0, 0.81, 0]} color="#0078d4" />
-      <mesh position={[0, 0.98, 0]} material={glow('#38bdf8')}>
-        <octahedronGeometry args={[0.15]} />
+      {/* Organic Stadium Curved Executive Boardroom Table */}
+      {/* Central rectangular core */}
+      <mesh position={[0, 0.74, 0]} material={pbrWood('#1e293b', 0.28)}>
+        <boxGeometry args={[2.4, 0.08, 1.4]} />
       </mesh>
-      {/* Glowing Energy Ring */}
-      <mesh position={[0, 0.85, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.42, 0.48, 32]} />
-        <meshBasicMaterial color="#38bdf8" transparent opacity={0.75} side={THREE.DoubleSide} />
+      {/* Rounded half-cylinder endcaps giving a luxurious stadium/racetrack table silhouette */}
+      {[-1.2, 1.2].map((x, i) => (
+        <mesh key={i} position={[x, 0.74, 0]} rotation={[0, 0, 0]} material={pbrWood('#1e293b', 0.28)}>
+          <cylinderGeometry args={[0.7, 0.7, 0.08, 24, 1, false, i === 0 ? Math.PI / 2 : -Math.PI / 2, Math.PI]} />
+        </mesh>
+      ))}
+
+      {/* Perimeter Brushed Champagne Brass Accent Edge */}
+      <mesh position={[0, 0.71, 0]} material={brushedMetal('#d4af37', 0.2)}>
+        <boxGeometry args={[2.42, 0.02, 1.42]} />
+      </mesh>
+
+      {/* Sculptural Twin Fluted Pedestal Bases */}
+      {[-1.0, 1.0].map((x, i) => (
+        <group key={i} position={[x, 0, 0]}>
+          <mesh position={[0, 0.35, 0]} material={brushedMetal('#334155', 0.3)}>
+            <cylinderGeometry args={[0.28, 0.36, 0.7, 24]} />
+          </mesh>
+          <mesh position={[0, 0.02, 0]} material={brushedMetal('#d4af37', 0.2)}>
+            <cylinderGeometry args={[0.38, 0.38, 0.04, 24]} />
+          </mesh>
+        </group>
+      ))}
+
+      {/* Central Holographic Multi-Agent Projector with Cyber Glow */}
+      <mesh position={[0, 0.79, 0]} material={brushedMetal('#0f172a')}>
+        <cylinderGeometry args={[0.36, 0.4, 0.04, 28]} />
+      </mesh>
+      <mesh position={[0, 0.81, 0]} material={cyberGlow('#0078d4', 3.0)}>
+        <ringGeometry args={[0.3, 0.35, 32]} />
+      </mesh>
+      <mesh position={[0, 1.05, 0]} material={cyberGlow('#38bdf8', 3.5)}>
+        <octahedronGeometry args={[0.18]} />
+      </mesh>
+      {/* Orbiting concentric pulse rings */}
+      <mesh position={[0, 0.88, 0]} rotation={[Math.PI / 2, 0, 0]} material={cyberGlow('#a855f7', 2.8)}>
+        <ringGeometry args={[0.45, 0.47, 32]} />
+      </mesh>
+      <mesh position={[0, 0.94, 0]} rotation={[Math.PI / 2, 0, 0]} material={cyberGlow('#38bdf8', 2.0)}>
+        <ringGeometry args={[0.55, 0.56, 32]} />
       </mesh>
     </group>
   );
@@ -445,7 +476,6 @@ export function Lobby() {
   const m = MANAGER_ROOM;
   const user = useStore((s) => s.user);
   const managerName = useStore((s) => s.settings.managerName);
-  const company = useStore((s) => s.settings.companyName);
   const boss = managerName || user;
   return (
     <group>
@@ -568,13 +598,39 @@ export function Lobby() {
         {/* Interactive Boardroom Table with Swarm Ideator */}
         <WarRoomTable />
 
-        {/* Conference Ergonomic Swarm Chairs */}
-        {[-0.9, 0.9].map((x) => (
+        {/* Executive Conference Swarm Chairs */}
+        {[-0.9, 0, 0.9].map((x) => (
           <group key={x}>
-            <Box size={[0.48, 0.08, 0.46]} position={[x, 0.44, 0.95]} color="#475569" outline />
-            <Box size={[0.48, 0.42, 0.06]} position={[x, 0.69, 1.15]} color="#475569" outline />
-            <Box size={[0.48, 0.08, 0.46]} position={[x, 0.44, -0.95]} color="#475569" outline />
-            <Box size={[0.48, 0.42, 0.06]} position={[x, 0.69, -1.15]} color="#475569" outline />
+            {/* North side chairs */}
+            <group position={[x, 0, 0.95]}>
+              <mesh position={[0, 0.44, 0]} material={acousticFabric('#334155')}>
+                <boxGeometry args={[0.48, 0.08, 0.46]} />
+              </mesh>
+              <mesh position={[0, 0.72, 0.22]} rotation={[-0.08, 0, 0]} material={acousticFabric('#1e293b')}>
+                <boxGeometry args={[0.44, 0.46, 0.05]} />
+              </mesh>
+              <mesh position={[0, 0.22, 0]} material={brushedMetal('#475569')}>
+                <cylinderGeometry args={[0.03, 0.035, 0.36, 12]} />
+              </mesh>
+              <mesh position={[0, 0.03, 0]} material={brushedMetal('#1e293b')}>
+                <cylinderGeometry args={[0.22, 0.24, 0.04, 16]} />
+              </mesh>
+            </group>
+            {/* South side chairs */}
+            <group position={[x, 0, -0.95]} rotation={[0, Math.PI, 0]}>
+              <mesh position={[0, 0.44, 0]} material={acousticFabric('#334155')}>
+                <boxGeometry args={[0.48, 0.08, 0.46]} />
+              </mesh>
+              <mesh position={[0, 0.72, 0.22]} rotation={[-0.08, 0, 0]} material={acousticFabric('#1e293b')}>
+                <boxGeometry args={[0.44, 0.46, 0.05]} />
+              </mesh>
+              <mesh position={[0, 0.22, 0]} material={brushedMetal('#475569')}>
+                <cylinderGeometry args={[0.03, 0.035, 0.36, 12]} />
+              </mesh>
+              <mesh position={[0, 0.03, 0]} material={brushedMetal('#1e293b')}>
+                <cylinderGeometry args={[0.22, 0.24, 0.04, 16]} />
+              </mesh>
+            </group>
           </group>
         ))}
 
@@ -588,6 +644,17 @@ export function Lobby() {
           deps={[]}
         />
       </group>
+
+      {/* Biophilic Living Moss Feature Wall behind Reception / Waiting Wall */}
+      <LivingMossWall position={[HALF_W - 0.04, 1.3, -4.5]} rotationY={-Math.PI / 2} width={5.2} height={2.8} />
+
+      {/* Cyber-Fluent Glowing Architecture Floor Bus Pipe connecting War Room to Elevator */}
+      <mesh position={[-1.5, 0.015, 6.2]} rotation={[0, 0, 0]} material={cyberGlow('#0078d4', 2.2)}>
+        <boxGeometry args={[0.06, 0.015, 6.8]} />
+      </mesh>
+      <mesh position={[1.5, 0.015, 6.2]} rotation={[0, 0, 0]} material={cyberGlow('#38bdf8', 2.0)}>
+        <boxGeometry args={[0.04, 0.015, 6.8]} />
+      </mesh>
 
       {/* 3D Acrylic Power Platform icon monument near entrance / elevator */}
       <group position={[-2.4, 0, HALF_D - 1.2]}>

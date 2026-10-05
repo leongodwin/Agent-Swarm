@@ -161,7 +161,7 @@ export function FlowRunHistoryView({ repoId }: { repoId?: string }) {
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 22 }}>⚡</span>
-          <span>Power Automate · Cloud Flow Telemetry & Run Engine</span>
+          <span>Power Automate · Cloud Flow Telemetry & Run Engine {repo ? `(${repo.fullName})` : ''}</span>
           <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 999, background: '#0066FF', color: '#fff', fontWeight: 600 }}>
             FLOW: {selectedRun.flowId}
           </span>

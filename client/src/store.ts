@@ -64,6 +64,7 @@ interface State {
   officeUpdate?: OfficeUpdateView;
   usage: UsageView; // Claude's subscription usage: normal, pacing after a warning, or paused at the limit
   restarting: boolean; // the connection dropped because the office is restarting to update
+  lightMode: 'daylight' | 'keynote';
 
   floor: number; // 0 = lobby
   travel: { to: number; phase: 'closing' | 'opening' } | null;
@@ -80,6 +81,7 @@ interface State {
   setConnected(v: boolean): void;
   setRestarting(v: boolean): void;
   setOfficeUpdate(u: OfficeUpdateView): void;
+  toggleLightMode(): void;
   openOverlay(o: Overlay | null): void;
   setFocus(f: Focus | null): void;
   /** Pick something up (or swap), or let go of it with null. Always ends a charge. */
@@ -159,6 +161,7 @@ export const useStore = create<State>((set, get) => ({
   phoneReadAt: 0,
   usage: { state: 'normal', until: null },
   restarting: false,
+  lightMode: 'daylight',
 
   floor: loadView()?.floor ?? 0,
   travel: null,
@@ -316,6 +319,11 @@ export const useStore = create<State>((set, get) => ({
   setConnected: (connected) => set({ connected }),
   setRestarting: (restarting) => set({ restarting }),
   setOfficeUpdate: (officeUpdate) => set({ officeUpdate }),
+  toggleLightMode() {
+    const next = get().lightMode === 'daylight' ? 'keynote' : 'daylight';
+    set({ lightMode: next });
+    get().pushToast('info', next === 'keynote' ? '🌙 Cyber Keynote Lighting Active' : '☀️ Studio Daylight Active');
+  },
   openOverlay(overlay) {
     // Opening any panel drops whatever you're carrying, so nothing is left floating behind it.
     set(overlay ? { overlay, focus: null, held: null, chargeAt: null } : { overlay });

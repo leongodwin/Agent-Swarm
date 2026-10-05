@@ -7,7 +7,7 @@ import { Box, Cyl, Ball } from './Toon';
 import { Character } from './Character';
 import { drawSign, drawTag, drawTerminal } from './draw';
 import { useCanvasTexture, useInteractable } from './interact';
-import { glow, shade, toon } from './materials';
+import { acousticFabric, brushedMetal, glow, shade, toon } from './materials';
 import { FluentIconMesh, type FluentIconName } from './FluentIcons';
 
 const SCREEN = { w: 1.0, h: 0.6, px: 896, py: 538 };
@@ -291,12 +291,49 @@ export function Desk({
         </>
       )}
 
-      {/* chair */}
+      {/* modern ergonomic mesh task chair */}
       <group position={[0, 0, agent ? 0.8 : 0.6]}>
-        <Box size={[0.52, 0.08, 0.5]} position={[0, 0.44, 0]} color={chair} outline />
-        <Box size={[0.48, 0.42, 0.07]} position={[0, 0.72, 0.28]} color={chair} outline />
-        <Cyl r={0.035} h={0.36} position={[0, 0.22, 0]} color="#444a5c" />
-        <Cyl r={0.26} h={0.04} position={[0, 0.03, 0]} color="#444a5c" />
+        {/* seat cushion with acoustic fabric */}
+        <mesh position={[0, 0.44, 0]} material={acousticFabric(chair)}>
+          <boxGeometry args={[0.52, 0.08, 0.5]} />
+        </mesh>
+        {/* curved ergonomic backrest */}
+        <mesh position={[0, 0.74, 0.26]} rotation={[-0.08, 0, 0]} material={acousticFabric(shade(chair, -0.15))}>
+          <boxGeometry args={[0.46, 0.48, 0.05]} />
+        </mesh>
+        {/* headrest */}
+        <mesh position={[0, 1.05, 0.28]} rotation={[-0.05, 0, 0]} material={acousticFabric(chair)}>
+          <boxGeometry args={[0.26, 0.14, 0.05]} />
+        </mesh>
+        {/* armrests */}
+        {[-0.27, 0.27].map((ax) => (
+          <group key={ax} position={[ax, 0.58, 0.05]}>
+            <mesh position={[0, 0, 0]} material={acousticFabric('#1e293b')}>
+              <boxGeometry args={[0.07, 0.03, 0.28]} />
+            </mesh>
+            <mesh position={[0, -0.1, 0.05]} material={brushedMetal('#475569')}>
+              <boxGeometry args={[0.03, 0.18, 0.04]} />
+            </mesh>
+          </group>
+        ))}
+        {/* central gas piston and polished star base */}
+        <mesh position={[0, 0.22, 0]} material={brushedMetal('#334155')}>
+          <cylinderGeometry args={[0.03, 0.035, 0.36, 12]} />
+        </mesh>
+        {/* 5-star castor base */}
+        {[0, 1, 2, 3, 4].map((i) => {
+          const ang = (i * Math.PI * 2) / 5;
+          return (
+            <group key={i} rotation={[0, ang, 0]}>
+              <mesh position={[0.13, 0.04, 0]} material={brushedMetal('#1e293b')}>
+                <boxGeometry args={[0.26, 0.03, 0.04]} />
+              </mesh>
+              <mesh position={[0.26, 0.02, 0]} material={brushedMetal('#0f172a')}>
+                <sphereGeometry args={[0.022, 8, 8]} />
+              </mesh>
+            </group>
+          );
+        })}
         {agent && <Character agent={agent} />}
       </group>
     </group>

@@ -544,7 +544,7 @@ const demoOffice: OfficeHost = {
 
 // ---------- the demo preview ----------
 
-function placeholderPage(title: string, hue: number) {
+function placeholderPage(title: string, _hue: number) {
   const safe = title.replace(/[<>&"]/g, '');
   const isCopilot = safe.toLowerCase().includes('copilot') || safe.toLowerCase().includes('customer');
   return `<!doctype html>

@@ -1,19 +1,78 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { glass, glow, shade, toon } from './materials';
+import { brushedMetal, glass, glow, pbrWood, shade, toon } from './materials';
 import { Ball, Box, Cyl } from './Toon';
 
 type P = [number, number, number];
 
-export function Plant({ position, scale = 1, pot = '#e07a5f' }: { position: P; scale?: number; pot?: string }) {
+export function Plant({ position, scale = 1, pot = '#f8fafc' }: { position: P; scale?: number; pot?: string }) {
+  // Architectural fluted ceramic cylinder planter with tropical Monstera / Ficus leaf fans
   return (
     <group position={position} scale={scale}>
-      <Cyl r={0.22} rTop={0.28} h={0.5} position={[0, 0.25, 0]} color={pot} outline />
-      <Ball r={0.36} position={[0, 0.8, 0]} color="#52b788" outline />
-      <Ball r={0.28} position={[0.2, 1.05, 0.08]} color="#40916c" outline />
-      <Ball r={0.25} position={[-0.18, 1.12, -0.05]} color="#74c69d" outline />
-      <Ball r={0.2} position={[0.02, 1.35, 0]} color="#52b788" outline />
+      {/* Matte ceramic fluted planter with brushed brass base */}
+      <mesh position={[0, 0.04, 0]} material={brushedMetal('#d4af37', 0.22)}>
+        <cylinderGeometry args={[0.26, 0.28, 0.08, 24]} />
+      </mesh>
+      <mesh position={[0, 0.32, 0]} material={pbrWood(pot, 0.25)}>
+        <cylinderGeometry args={[0.3, 0.25, 0.52, 24]} />
+      </mesh>
+      {/* Pot soil */}
+      <mesh position={[0, 0.57, 0]} material={pbrWood('#2c1d11', 0.9)}>
+        <cylinderGeometry args={[0.28, 0.28, 0.04, 16]} />
+      </mesh>
+      {/* Organic tropical foliage stalks with flared leaf disks */}
+      {[
+        { rot: [0.35, 0.2, 0.2], pos: [0.12, 0.85, 0.12], r: [0.24, 0.38] },
+        { rot: [-0.3, 1.2, -0.15], pos: [-0.15, 0.95, 0.1], r: [0.26, 0.42] },
+        { rot: [0.1, 2.4, 0.35], pos: [-0.08, 1.05, -0.18], r: [0.28, 0.45] },
+        { rot: [-0.2, -1.1, -0.25], pos: [0.16, 1.15, -0.14], r: [0.25, 0.4] },
+        { rot: [0.05, 0.7, 0.05], pos: [0.02, 1.32, 0.02], r: [0.22, 0.36] },
+      ].map((leaf, idx) => (
+        <group key={idx}>
+          {/* Stem */}
+          <mesh position={[leaf.pos[0] * 0.5, 0.6 + idx * 0.08, leaf.pos[2] * 0.5]} rotation={leaf.rot as any}>
+            <cylinderGeometry args={[0.015, 0.02, 0.45, 8]} />
+            <meshStandardMaterial color="#2d6a4f" roughness={0.35} />
+          </mesh>
+          {/* Leaf Fan blade */}
+          <mesh position={leaf.pos as any} rotation={leaf.rot as any}>
+            <cylinderGeometry args={[leaf.r[0], leaf.r[1], 0.012, 12]} />
+            <meshStandardMaterial color={idx % 2 === 0 ? '#1b4332' : '#2d6a4f'} roughness={0.28} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+/** Biophilic Living Moss Wall with multi-tone preserved moss discs & ambient back-glow */
+export function LivingMossWall({ position, rotationY = 0, width = 3.6, height = 2.4 }: { position: P; rotationY?: number; width?: number; height?: number }) {
+  return (
+    <group position={position} rotation={[0, rotationY, 0]}>
+      {/* Dark acoustic backing frame */}
+      <mesh position={[0, height / 2, 0]} material={pbrWood('#0f172a', 0.4)}>
+        <boxGeometry args={[width, height, 0.06]} />
+      </mesh>
+      {/* Perimeter subtle gold / brass frame trim */}
+      <mesh position={[0, height / 2, 0.035]} material={brushedMetal('#d4af37', 0.2)}>
+        <boxGeometry args={[width + 0.08, height + 0.08, 0.02]} />
+      </mesh>
+      {/* Organic moss clusters */}
+      {Array.from({ length: 18 }, (_, i) => {
+        const row = Math.floor(i / 6);
+        const col = i % 6;
+        const x = -width / 2 + 0.35 + col * (width / 6);
+        const y = 0.4 + row * 0.75 + (col % 2 === 0 ? 0.08 : -0.08);
+        const colors = ['#2d6a4f', '#40916c', '#52b788', '#1b4332', '#74c69d'];
+        const c = colors[i % colors.length];
+        return (
+          <mesh key={i} position={[x, y, 0.05]} rotation={[0, 0, (i * 0.7) % 3]}>
+            <cylinderGeometry args={[0.22 + (i % 3) * 0.04, 0.25 + (i % 3) * 0.04, 0.05, 14]} />
+            <meshStandardMaterial color={c} roughness={0.85} />
+          </mesh>
+        );
+      })}
     </group>
   );
 }

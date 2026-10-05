@@ -1,5 +1,6 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
+import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { AdaptiveResolution, FrameWhilePaused, MAX_DPR, StatsProbe, statsEnabled, useRenderPaused } from '../perf';
 import { repoOnFloor, useStore } from '../store';
@@ -33,6 +34,8 @@ function Travel() {
 export function Game() {
   const floor = useStore((s) => s.floor);
   const repos = useStore((s) => s.repos);
+  const lightMode = useStore((s) => s.lightMode);
+  const keynote = lightMode === 'keynote';
   const repo = floor === 0 ? null : repoOnFloor(repos, floor);
   const isOffice = !!repo;
   const colliders = useMemo(() => (isOffice ? officeColliders() : lobbyColliders()), [isOffice]);
@@ -49,12 +52,12 @@ export function Game() {
       gl={{ antialias: true, powerPreference: 'high-performance' }}
       onCreated={({ gl }) => {
         gl.toneMapping = THREE.ACESFilmicToneMapping;
-        gl.toneMappingExposure = 1.0;
+        gl.toneMappingExposure = keynote ? 1.15 : 1.0;
         gl.shadowMap.type = THREE.PCFSoftShadowMap;
       }}
     >
-      <color attach="background" args={['#bfe3ff']} />
-      <fog attach="fog" args={['#f3ece2', 30, 70]} />
+      <color attach="background" args={[keynote ? '#090d16' : '#bfe3ff']} />
+      <fog attach="fog" args={[keynote ? '#0f172a' : '#f3ece2', 30, keynote ? 55 : 70]} />
       <Lights />
       <Suspense fallback={null}>{repo ? <OfficeFloor key={repo.id} repo={repo} /> : <Lobby />}</Suspense>
       <Player colliders={colliders} floor={floor} />
@@ -62,6 +65,15 @@ export function Game() {
       <FrameWhilePaused paused={paused} />
       <AdaptiveResolution onChange={setMaxDpr} />
       {statsEnabled && <StatsProbe paused={paused} />}
+      <EffectComposer multisampling={0}>
+        <Bloom
+          luminanceThreshold={0.88}
+          luminanceSmoothing={0.3}
+          intensity={keynote ? 1.6 : 0.85}
+          mipmapBlur
+        />
+        <Vignette eskil={false} offset={0.15} darkness={keynote ? 0.65 : 0.25} />
+      </EffectComposer>
     </Canvas>
   );
 }

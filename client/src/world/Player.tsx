@@ -180,6 +180,9 @@ export function Player({ colliders, floor }: { colliders: Rect[]; floor: number 
       if (e.code === 'KeyF' && !e.repeat && !s.travel) startCharge();
       if (e.code === 'KeyG' && !e.repeat) dropHeld();
       if (e.code === 'KeyR' && !e.repeat && !s.travel) reloadHeld();
+      if (e.code === 'KeyK' && !e.repeat && !isConfirmOpen()) {
+        s.toggleLightMode();
+      }
       if (e.code === 'KeyH') s.openOverlay({ kind: 'help' });
       if (e.code === 'KeyP') {
         e.preventDefault(); // don't type the "p" into the phone's message box

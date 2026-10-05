@@ -1,7 +1,6 @@
-import { useRef } from 'react';
 import * as THREE from 'three';
 import { useInteractable } from './interact';
-import { Box, Cyl, Ball } from './Toon';
+import { Box, Cyl } from './Toon';
 import { FluentIconMesh } from './FluentIcons';
 import { glow } from './materials';
 

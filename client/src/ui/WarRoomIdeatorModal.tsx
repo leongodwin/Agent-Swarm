@@ -132,8 +132,7 @@ export function WarRoomIdeatorModal() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedArch, setGeneratedArch] = useState<GeneratedArchitecture | null>(null);
   const [dispatched, setDispatched] = useState(false);
-  const repos = useStore((s) => s.repos);
-  const addToast = useStore((s) => s.addToast);
+  const pushToast = useStore((s) => s.pushToast);
 
   const handleRunIdeation = () => {
     setIsGenerating(true);
@@ -151,7 +150,7 @@ export function WarRoomIdeatorModal() {
 
   const handleDispatchIssues = () => {
     setDispatched(true);
-    addToast('success', '🚀 Solution architecture dispatched! Created 3 GitHub issues for the agent swarm.');
+    pushToast('success', '🚀 Solution architecture dispatched! Created 3 GitHub issues for the agent swarm.');
   };
 
   return (
