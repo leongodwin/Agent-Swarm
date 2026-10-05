@@ -471,8 +471,18 @@ export function Lobby() {
       <ManagerVisualCv position={[-HALF_W + 0.05, 0, -8]} rotationY={Math.PI / 2} />
       <Plant position={[m.maxX - 0.6, 0, m.minZ + 0.6]} scale={1.1} pot="#0078d4" />
       <Plant position={[m.minX + 0.6, 0, m.maxZ - 0.6]} scale={0.9} />
+      {/* Modern Acoustic Vertical Oak Slat Feature Wall behind Manager Desk */}
+      <group position={[MANAGER_DESK.x, 1.8, -HALF_D + 0.02]}>
+        {/* Dark acoustic felt backing */}
+        <Box size={[4.2, 3.2, 0.02]} position={[0, 0, 0]} color="#1e293b" shadow={false} />
+        {/* Vertical natural oak architectural slats */}
+        {Array.from({ length: 26 }, (_, i) => (
+          <Box key={i} size={[0.07, 3.2, 0.04]} position={[-1.9 + i * 0.15, 0, 0.02]} color="#d4a373" shadow={false} />
+        ))}
+      </group>
+
       <WallSign
-        position={[MANAGER_DESK.x, 2.3, -HALF_D + 0.03]}
+        position={[MANAGER_DESK.x, 2.3, -HALF_D + 0.06]}
         rotationY={0}
         size={[2.5, 1.25]}
         px={[640, 320]}
