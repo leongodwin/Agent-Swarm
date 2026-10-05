@@ -15,9 +15,13 @@ import { Bookshelf, Couch, CoffeeTable, GlassWall, Plant, Rug, WallClock } from 
 import { Shell } from './Shell';
 import { Ball, Box, Cyl } from './Toon';
 import { Toys } from './toys';
+import { FluentIconMesh, MicrosoftWallBanner } from './FluentIcons';
+import { CopilotKiosk } from './CopilotKiosk';
+import { DlpSecurityKiosk } from './DlpSecurityKiosk';
 
-const ACCENT = '#ff8a5b';
-const CEO_ACCENT = '#9b5de5';
+// Microsoft Fluent UI Inspired Palette: Fluent Electric Blue & Copilot Purple
+const ACCENT = '#0078D4'; // Fluent Accent Blue
+const CEO_ACCENT = '#774AE0'; // Copilot Studio Violet
 
 function useOfficeStats() {
   const repos = useStore((s) => s.repos);
@@ -55,14 +59,15 @@ function ManagerComputer() {
     640,
     (ctx) => {
       const g = ctx.createLinearGradient(0, 0, 1024, 640);
-      g.addColorStop(0, '#20224a');
-      g.addColorStop(1, '#3a1f4d');
+      g.addColorStop(0, '#101a2e');
+      g.addColorStop(0.5, '#192038');
+      g.addColorStop(1, '#2d1845');
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, 1024, 640);
-      ctx.fillStyle = '#ffd6a5';
-      ctx.font = `700 54px ${SANS}`;
+      ctx.fillStyle = '#60a5fa';
+      ctx.font = `700 50px ${SANS}`;
       ctx.textBaseline = 'middle';
-      ctx.fillText('✻ Manager Console', 50, 70);
+      ctx.fillText('⚡ Microsoft AI Manager Console', 50, 70);
       const rows: [string, string][] = [
         ['Floors (repos)', `${stats.repos}`],
         ['Agents on staff', `${stats.agents}`],
@@ -115,6 +120,68 @@ function ManagerComputer() {
         <Cyl r={0.04} h={0.4} position={[0, 0.22, 0]} color="#6c757d" />
         <Cyl r={0.3} h={0.04} position={[0, 0.03, 0]} color="#6c757d" />
       </group>
+    </group>
+  );
+}
+
+/** 3D Interactive Visual CV Showcase on the Manager's Office Wall */
+function ManagerVisualCv({ position, rotationY = Math.PI / 2 }: { position: [number, number, number]; rotationY?: number }) {
+  const ref = useInteractable<THREE.Group>({ id: 'manager-visual-cv', label: "Inspect Leon's Visual CV (E)", action: { kind: 'visual-cv' } }, 5);
+  const tex = useMemo(() => {
+    const loader = new THREE.TextureLoader();
+    const t = loader.load('/Leon-visual-cv.jpg?v=2');
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }, []);
+  const w = 4.2;
+  const h = 2.6;
+
+  return (
+    <group ref={ref} position={position} rotation={[0, rotationY, 0]}>
+      {/* Premium Backing Board with Fluent Shadow Frame */}
+      <Box size={[w + 0.16, h + 0.16, 0.06]} position={[0, 1.55, 0]} color="#1e293b" outline />
+      {/* Visual CV Image Plane */}
+      <mesh position={[0, 1.55, 0.035]}>
+        <planeGeometry args={[w, h]} />
+        <meshBasicMaterial map={tex} toneMapped={false} />
+      </mesh>
+      {/* Acrylic Bottom Accent Shelf */}
+      <mesh position={[0, 0.22, 0.06]}>
+        <boxGeometry args={[w, 0.05, 0.12]} />
+        <meshBasicMaterial color="#0078D4" />
+      </mesh>
+    </group>
+  );
+}
+
+/** Interactive Boardroom Swarm Ideation Table */
+function WarRoomTable() {
+  const ref = useInteractable<THREE.Group>(
+    {
+      id: 'war-room-ideator',
+      label: 'Enter Swarm Ideation Studio (E)',
+      action: { kind: 'war-room-ideator' },
+    },
+    4.5,
+  );
+
+  return (
+    <group ref={ref}>
+      {/* Boardroom Conference Table */}
+      <Box size={[3.4, 0.08, 1.6]} position={[0, 0.74, 0]} color="#334155" outline />
+      <Cyl r={0.16} h={0.7} position={[-1.1, 0.35, 0]} color="#64748b" />
+      <Cyl r={0.16} h={0.7} position={[1.1, 0.35, 0]} color="#64748b" />
+
+      {/* Central Holographic Multi-Agent Projector */}
+      <Cyl r={0.34} h={0.06} position={[0, 0.81, 0]} color="#0078d4" />
+      <mesh position={[0, 0.98, 0]} material={glow('#38bdf8')}>
+        <octahedronGeometry args={[0.15]} />
+      </mesh>
+      {/* Glowing Energy Ring */}
+      <mesh position={[0, 0.85, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.42, 0.48, 32]} />
+        <meshBasicMaterial color="#38bdf8" transparent opacity={0.75} side={THREE.DoubleSide} />
+      </mesh>
     </group>
   );
 }
@@ -267,6 +334,7 @@ function CeoOffice() {
       />
       {ceo && <Desk agent={ceo} accent={CEO_ACCENT} repoId="" position={[CEO_DESK.x, 0, CEO_DESK.z]} />}
       <CeoBoard />
+      <FluentIconMesh name="copilot" size={0.4} position={[c.maxX - 0.05, 2.2, CEO_DESK.z - 1.5]} rotation={[0, -Math.PI / 2, 0]} showLabel />
       <Plant position={[c.maxX - 0.7, 0, c.maxZ - 0.7]} scale={1.1} pot={CEO_ACCENT} />
       <Plant position={[c.minX + 0.6, 0, c.maxZ - 0.6]} scale={0.9} />
     </group>
@@ -399,29 +467,42 @@ export function Lobby() {
         deps={[boss]}
       />
       <ManagerComputer />
-      <Bookshelf position={[-HALF_W + 0.4, 0, -8]} rotationY={Math.PI / 2} />
-      <Plant position={[m.maxX - 0.6, 0, m.minZ + 0.6]} scale={1.1} pot="#3a86ff" />
+      {/* Leon's Visual CV on the manager's office wall */}
+      <ManagerVisualCv position={[-HALF_W + 0.05, 0, -8]} rotationY={Math.PI / 2} />
+      <Plant position={[m.maxX - 0.6, 0, m.minZ + 0.6]} scale={1.1} pot="#0078d4" />
       <Plant position={[m.minX + 0.6, 0, m.maxZ - 0.6]} scale={0.9} />
       <WallSign
         position={[MANAGER_DESK.x, 2.3, -HALF_D + 0.03]}
         rotationY={0}
-        size={[2.4, 1.2]}
-        px={[512, 256]}
+        size={[2.5, 1.25]}
+        px={[640, 320]}
         draw={(ctx) =>
-          drawSign(ctx, 512, 256, [
-            { text: '⭐', size: 70 },
-            { text: 'World’s Best', size: 44, weight: 600 },
-            { text: 'Agent Wrangler', size: 50 },
-          ], '#9b5de5')
+          drawSign(
+            ctx,
+            640,
+            320,
+            [
+              { text: '✨ 🤖 ✨', size: 54 },
+              { text: 'Microsoft AI', size: 48, weight: 800, color: '#60A5FA' },
+              { text: 'Head Nerd', size: 58, weight: 700, color: '#FFFFFF' },
+            ],
+            '#1b1c38',
+          )
         }
         deps={[]}
       />
+      {/* 3D Fluent Copilot & Power Platform desk badges on manager console */}
+      <FluentIconMesh name="copilot" size={0.32} position={[MANAGER_DESK.x - 0.82, 0.96, MANAGER_DESK.z + 0.05]} rotation={[0, 0.35, 0]} />
+      <FluentIconMesh name="powerplatform" size={0.28} position={[MANAGER_DESK.x + 0.82, 0.94, MANAGER_DESK.z + 0.05]} rotation={[0, -0.35, 0]} />
 
       {/* reception */}
       <group position={[RECEPTION.x, 0, RECEPTION.z]}>
         <Box size={[RECEPTION.w, 1.05, RECEPTION.d]} position={[0, 0.525, 0]} color="#ffffff" outline />
         <Box size={[RECEPTION.w + 0.1, 0.08, RECEPTION.d + 0.1]} position={[0, 1.09, 0]} color={ACCENT} outline />
         <Box size={[RECEPTION.w - 0.4, 0.3, 0.02]} position={[0, 0.6, RECEPTION.d / 2 + 0.01]} color={shade(ACCENT, 0.15)} shadow={false} />
+        {/* Fluent UI Logo Plaque mounted right on the front of reception desk */}
+        <FluentIconMesh name="microsoft" size={0.42} position={[0, 0.62, RECEPTION.d / 2 + 0.03]} />
+
         {/* a very cheerful receptionist bot */}
         <group position={[0, 1.13, -0.1]}>
           <Cyl r={0.2} rTop={0.16} h={0.4} position={[0, 0.2, 0]} color="#e9ecef" outline />
@@ -438,19 +519,71 @@ export function Lobby() {
           </mesh>
         </group>
       </group>
-      <WallSign
-        position={[3, 2.25, -HALF_D + 0.03]}
-        rotationY={0}
-        size={[7, 1.6]}
-        px={[1400, 320]}
-        draw={(ctx) =>
-          drawSign(ctx, 1400, 320, [
-            { text: `✻ ${company || 'cubefarm'}`, size: 120 },
-            { text: company ? 'powered by a team of AI coding agents' : 'a team of AI coding agents', size: 48, weight: 500 },
-          ], ACCENT)
-        }
-        deps={[company]}
-      />
+
+      {/* Main Microsoft AI & Copilot Studio Feature Wall Banner above main north wall */}
+      <MicrosoftWallBanner position={[3.2, 2.25, -HALF_D + 0.03]} rotationY={0} width={6.8} height={1.7} />
+
+      {/* Fluent UI Icon Gallery Display on the North Lobby Wall (Office apps & Power Platform icons) */}
+      <group position={[8.8, 2.2, -HALF_D + 0.03]}>
+        <FluentIconMesh name="powerapps" size={0.52} position={[-1.2, 0.42, 0]} showLabel />
+        <FluentIconMesh name="powerautomate" size={0.52} position={[0, 0.42, 0]} showLabel />
+        <FluentIconMesh name="powerbi" size={0.52} position={[1.2, 0.42, 0]} showLabel />
+        <FluentIconMesh name="word" size={0.46} position={[-1.2, -0.42, 0]} />
+        <FluentIconMesh name="excel" size={0.46} position={[-0.4, -0.42, 0]} />
+        <FluentIconMesh name="powerpoint" size={0.46} position={[0.4, -0.42, 0]} />
+        <FluentIconMesh name="teams" size={0.46} position={[1.2, -0.42, 0]} />
+      </group>
+
+      {/* Floating 3D Acrylic Copilot Studio icon monument by waiting area / lounge */}
+      <group position={[11.5, 0, 7.8]}>
+        <Cyl r={0.35} h={0.7} position={[0, 0.35, 0]} color="#1e2430" outline />
+        <FluentIconMesh name="copilot" size={0.65} position={[0, 1.15, 0]} rotation={[0, -Math.PI / 4, 0]} showLabel />
+      </group>
+
+      {/* Interactive Copilot Studio Test Kiosk in Lobby */}
+      <CopilotKiosk position={[8.8, 0, 5.5]} rotationY={-Math.PI / 4} />
+
+      {/* Microsoft Entra ID & DLP Policy Security Kiosk */}
+      <DlpSecurityKiosk position={[-6.8, 0, 8.5]} rotationY={Math.PI / 5} />
+
+      {/* Multi-Agent Swarm Orchestration War Room (Conference Room in center-west lobby) */}
+      <group position={[-1.5, 0, 2.8]}>
+        {/* Glass Enclosure */}
+        <GlassWall from={[-2.8, -1.8]} to={[2.8, -1.8]} height={2.4} />
+        <GlassWall from={[2.8, -1.8]} to={[2.8, 1.8]} height={2.4} />
+        <GlassWall from={[-2.8, 1.8]} to={[0.8, 1.8]} height={2.4} />
+        <GlassWall from={[-2.8, -1.8]} to={[-2.8, 1.8]} height={2.4} />
+        <Rug position={[0, 0.005, 0]} size={[5.4, 3.4]} color="#1e293b" />
+
+        {/* Interactive Boardroom Table with Swarm Ideator */}
+        <WarRoomTable />
+
+        {/* Conference Ergonomic Swarm Chairs */}
+        {[-0.9, 0.9].map((x) => (
+          <group key={x}>
+            <Box size={[0.48, 0.08, 0.46]} position={[x, 0.44, 0.95]} color="#475569" outline />
+            <Box size={[0.48, 0.42, 0.06]} position={[x, 0.69, 1.15]} color="#475569" outline />
+            <Box size={[0.48, 0.08, 0.46]} position={[x, 0.44, -0.95]} color="#475569" outline />
+            <Box size={[0.48, 0.42, 0.06]} position={[x, 0.69, -1.15]} color="#475569" outline />
+          </group>
+        ))}
+
+        {/* Room Header Sign */}
+        <WallSign
+          position={[0, 2.7, 1.84]}
+          rotationY={0}
+          size={[3.8, 0.5]}
+          px={[912, 120]}
+          draw={(ctx) => drawSign(ctx, 912, 120, [{ text: '🤝 AGENT SWARM WAR ROOM · Low-Code + Pro-Code Fusion', size: 40 }], '#0284c7')}
+          deps={[]}
+        />
+      </group>
+
+      {/* 3D Acrylic Power Platform icon monument near entrance / elevator */}
+      <group position={[-2.4, 0, HALF_D - 1.2]}>
+        <Cyl r={0.3} h={0.6} position={[0, 0.3, 0]} color="#1e2430" outline />
+        <FluentIconMesh name="powerplatform" size={0.58} position={[0, 1.0, 0]} rotation={[0, Math.PI, 0]} showLabel />
+      </group>
 
       <CeoOffice />
       <WaitingRoom />
@@ -458,11 +591,11 @@ export function Lobby() {
       <Toys floor="lobby" />
       <Directory />
       <TrophyCabinet />
-      <WallClock position={[8.4, 2.8, -HALF_D + 0.05]} />
-      <Couch position={[11.5, 0, 4]} rotationY={Math.PI} color="#4cc9f0" />
+      <WallClock position={[6.6, 2.8, -HALF_D + 0.05]} />
+      <Couch position={[11.5, 0, 4]} rotationY={Math.PI} color="#5C2D91" />
       <CoffeeTable position={[11.5, 0, 6.2]} />
       <Plant position={[HALF_W - 0.7, 0, HALF_D - 0.7]} scale={1.2} />
-      <Plant position={[-HALF_W + 0.7, 0, HALF_D - 0.7]} scale={1.2} pot="#06d6a0" />
+      <Plant position={[-HALF_W + 0.7, 0, HALF_D - 0.7]} scale={1.2} pot="#0078D4" />
       <Plant position={[-3, 0, HALF_D - 0.6]} />
       <Plant position={[3, 0, -HALF_D + 0.7]} scale={0.8} />
     </group>

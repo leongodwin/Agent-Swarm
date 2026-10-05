@@ -8,6 +8,11 @@ import { KanbanView } from './KanbanView';
 import { ManagerConsole } from './ManagerConsole';
 import { Phone } from './Phone';
 import { TerminalView } from './TerminalView';
+import { SolutionArchitectureView } from './SolutionArchitectureView';
+import { FlowRunHistoryView } from './FlowRunHistoryView';
+import { VisualCvView } from './VisualCvView';
+import { WarRoomIdeatorModal } from './WarRoomIdeatorModal';
+import { CopilotChatOverlay } from './CopilotChatOverlay';
 import { getAudioPrefs, setAudioPrefs, subscribeAudio } from './sfx';
 
 // Closing a panel grabs the mouse again right away (world/lookLock.ts; "Grab the mouse when panels
@@ -174,12 +179,22 @@ export function Overlays() {
       return <Phone tab={overlay.tab} requestId={overlay.requestId} />;
     case 'kanban':
       return <KanbanView repoId={overlay.repoId} />;
+    case 'solution-architecture':
+      return <SolutionArchitectureView repoId={overlay.repoId} />;
+    case 'flow-runs':
+      return <FlowRunHistoryView repoId={overlay.repoId} />;
+    case 'visual-cv':
+      return <VisualCvView />;
+    case 'war-room-ideator':
+      return <WarRoomIdeatorModal />;
     case 'app':
       return <AppViewer repoId={overlay.repoId} />;
     case 'elevator':
       return <ElevatorPanel />;
     case 'manager':
       return <ManagerConsole initialTab={overlay.tab} initialRepo={overlay.repoId} />;
+    case 'copilot':
+      return <CopilotChatOverlay onClose={() => closeOverlay()} />;
     case 'help':
       return <Help />;
   }

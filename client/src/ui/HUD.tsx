@@ -4,6 +4,7 @@ import { CEO_ID } from '../../../shared/types';
 import { HeldHint } from './HeldHint';
 import { WorkersPanel } from './WorkersPanel';
 import { officeUpdateChip } from '../officeUpdate';
+import { TeamsToastFeed } from './TeamsToastFeed';
 
 /** While the office is on its way to updating itself (or restarting to do it); opens the console's Office row. */
 function OfficeUpdateChip() {
@@ -69,7 +70,7 @@ export function HUD() {
       <div className="hud-floor" style={{ ['--accent' as string]: repo?.color ?? '#ff8a5b' }}>
         <div className="floor-num">{repo ? repo.floor : 'G'}</div>
         <div>
-          <div className="floor-name">{repo ? repo.fullName : `${settings.companyName || 'cubefarm'} · Lobby`}</div>
+          <div className="floor-name">{repo ? repo.fullName : `${settings.companyName || 'Copilot Swarm'} · Lobby`}</div>
           <div className="floor-sub">
             {repo
               ? `${floorAgents.length} agents · ${floorAgents.filter((a) => a.status === 'working' || a.status === 'preparing').length} working · ${floorQa.filter((q) => q.status !== 'passed').length} in QA · ${floorQa.filter((q) => q.status === 'passed').length} ready to merge`
@@ -112,6 +113,7 @@ export function HUD() {
       </div>
 
       <PhoneButton />
+      <TeamsToastFeed />
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className={`toast toast-${t.level}`} onClick={() => dismiss(t.id)}>

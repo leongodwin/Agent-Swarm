@@ -54,11 +54,14 @@ const VERBS = ['Crafting', 'Pondering', 'Tinkering', 'Brewing', 'Noodling', 'Sch
 
 export function toolVerb(tool: string | null): string {
   if (!tool) return '';
-  if (tool.startsWith('mcp__playwright__')) return 'Browsing';
-  if (tool === 'Bash' || tool === 'PowerShell') return 'Running';
-  if (tool === 'Edit' || tool === 'Write' || tool === 'MultiEdit') return 'Editing';
-  if (tool === 'Read' || tool === 'Grep' || tool === 'Glob') return 'Reading';
-  if (tool === 'WebFetch' || tool === 'WebSearch') return 'Researching';
+  if (tool.startsWith('mcp__playwright__')) return 'Browsing & Validating';
+  if (tool === 'Bash' || tool === 'PowerShell') return 'Running PAC CLI';
+  if (tool === 'Edit' || tool === 'Write' || tool === 'MultiEdit') return 'Authoring Component';
+  if (tool === 'Read' || tool === 'Grep' || tool === 'Glob') return 'Reading Solution';
+  if (tool === 'WebFetch' || tool === 'WebSearch') return 'Querying Graph API';
+  if (tool.includes('pac') || tool.includes('solution')) return 'Packaging Solution';
+  if (tool.includes('copilot') || tool.includes('topic')) return 'Synthesizing Topics';
+  if (tool.includes('pcf')) return 'Building PCF Control';
   return tool;
 }
 

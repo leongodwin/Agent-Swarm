@@ -12,6 +12,11 @@ import { shade } from './materials';
 import { CoffeeTable, Couch, Kitchenette, Plant, Rug, WallClock, WaterCooler } from './Props';
 import { Shell } from './Shell';
 import { Toys } from './toys';
+import { FluentIconMesh } from './FluentIcons';
+import { SolutionArchitectureBoard } from './SolutionArchitectureBoard';
+import { FlowRunHistoryBoard } from './FlowRunHistoryBoard';
+import { DataverseSchemaMonitor } from './DataverseSchemaMonitor';
+import { CopilotKiosk } from './CopilotKiosk';
 
 export function WallSign({
   position,
@@ -51,7 +56,7 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
 
   return (
     <group>
-      <Shell accent={repo.color} floorColor="#d9b48a" seed={repo.floor} />
+      <Shell accent={repo.color} floorColor="#d9b48a" westWindows={[-8, 8]} eastWindows={[-8]} seed={repo.floor} />
       {DESK_ROWS.map((z) => (
         <Rug key={z} position={[0, 0.004, z + 0.35]} size={[24.4, 2.9]} color={rugColor} />
       ))}
@@ -61,22 +66,36 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
         return <Desk key={slot} agent={devBySlot.get(slot) ?? null} accent={repo.color} repoId={repo.id} position={[x, 0, z]} />;
       })}
 
-      {/* QA lab */}
-      <Rug position={[QA_LAB.x - 0.4, 0.005, -2]} size={[3.4, 10.4]} color="#ffd8bf" />
+      {/* QA & Guardrails Eval lab */}
+      <Rug position={[QA_LAB.x - 0.4, 0.005, -2]} size={[3.4, 10.4]} color="#e0e7ff" />
       {QA_LAB.stations.map((_, slot) => {
         const { x, z } = qaDeskPosition(slot);
         return <Desk key={`qa${slot}`} role="qa" rotationY={QA_ROTATION} agent={qaBySlot.get(slot) ?? null} accent={repo.color} repoId={repo.id} position={[x, 0, z]} />;
       })}
       <WallSign
-        position={[HALF_W - 0.03, 3.2, -2]}
+        position={[HALF_W - 0.03, 3.25, -2]}
         rotationY={-Math.PI / 2}
-        size={[3.2, 0.55]}
-        px={[768, 132]}
-        draw={(ctx) => drawSign(ctx, 768, 132, [{ text: `🔍 QA LAB · ${inQa} in testing`, size: 56 }], '#ff9f68')}
+        size={[3.8, 0.6]}
+        px={[912, 144]}
+        draw={(ctx) => drawSign(ctx, 912, 144, [{ text: `🛡️ COPILOT EVAL & GUARDRAILS LAB · ${inQa} PRs`, size: 48 }], '#4338ca')}
         deps={[inQa]}
       />
 
+      {/* Primary Interactive Kanban Board (North Wall Center) */}
       <KanbanBoard repo={repo} agents={agents} />
+
+      {/* Live Power Platform Solution Architecture Board (East Wall, visible alongside Kanban) */}
+      <SolutionArchitectureBoard position={[HALF_W - 0.05, 0.45, 3.2]} rotationY={-Math.PI / 2} width={5.6} height={2.8} repoId={repo.id} />
+
+      {/* Live Power Automate Flow Run History Telemetry Board (West Wall) */}
+      <FlowRunHistoryBoard position={[-HALF_W + 0.05, 0.45, 0]} rotationY={Math.PI / 2} width={5.2} height={2.6} repoId={repo.id} />
+
+      {/* Dataverse Schema & ERD Screen (North Wall, East of Kanban) */}
+      <DataverseSchemaMonitor position={[9.8, 2.25, -HALF_D + 0.04]} rotationY={0} width={3.4} height={1.8} />
+
+      {/* Interactive Copilot Studio Test Kiosk on the office floor */}
+      <CopilotKiosk position={[-9.2, 0, 7.8]} rotationY={Math.PI / 3} />
+
       <AppMonitor repo={repo} agents={agents} />
       <Elevator floorLabel={`▲ ${repo.floor} · ${name}`} accent={repo.color} />
       <Toys floor="office" />
@@ -127,23 +146,18 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
       <Plant position={[HALF_W - 0.7, 0, HALF_D - 0.7]} scale={0.9} pot="#8338ec" />
       <Couch position={[-HALF_W + 0.9, 0, 6.5]} rotationY={-Math.PI / 2} color={shade(repo.color, -0.05)} />
       <CoffeeTable position={[-HALF_W + 2.6, 0, 6.5]} rotationY={Math.PI / 2} />
-      <Kitchenette position={[HALF_W - 0.45, 0, 7]} />
+      <Kitchenette position={[HALF_W - 0.45, 0, 8.2]} />
       <WaterCooler position={[HALF_W - 0.5, 0, -9.5]} />
       <WallClock position={[-10, 2.75, -HALF_D + 0.05]} />
-      <WallSign
-        position={[10, 2.2, -HALF_D + 0.03]}
-        rotationY={0}
-        size={[2.2, 1.4]}
-        px={[512, 326]}
-        draw={(ctx) =>
-          drawSign(ctx, 512, 326, [
-            { text: '🚀', size: 90 },
-            { text: 'SHIP IT', size: 64 },
-            { text: 'small PRs, happy reviewers', size: 26, weight: 500 },
-          ], '#3a86ff')
-        }
-        deps={[]}
-      />
+      {/* Fluent UI Microsoft AI & Power Platform Wall Display */}
+      <group position={[10, 2.2, -HALF_D + 0.03]}>
+        <FluentIconMesh name="copilot" size={0.45} position={[-0.8, 0.45, 0]} />
+        <FluentIconMesh name="powerplatform" size={0.45} position={[0, 0.45, 0]} />
+        <FluentIconMesh name="powerautomate" size={0.45} position={[0.8, 0.45, 0]} />
+        <FluentIconMesh name="word" size={0.38} position={[-0.8, -0.25, 0]} />
+        <FluentIconMesh name="excel" size={0.38} position={[0, -0.25, 0]} />
+        <FluentIconMesh name="teams" size={0.38} position={[0.8, -0.25, 0]} />
+      </group>
     </group>
   );
 }

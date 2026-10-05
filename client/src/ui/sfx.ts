@@ -237,41 +237,66 @@ export function swish() {
 
 // ---------- event cues ----------
 
-export type Cue = 'error' | 'qaFailed' | 'ready' | 'merged' | 'welcome';
+export type Cue = 'error' | 'qaFailed' | 'ready' | 'merged' | 'welcome' | 'copilot' | 'solutionChecked';
+
+/** Microsoft Fluent UI 4-tone ascending bell chime (inspired by Teams / Windows notification harmony). */
+export function fluentChime() {
+  const chords = [523.25, 659.25, 783.99, 1046.5]; // C5 - E5 - G5 - C6
+  chords.forEach((freq, i) => {
+    tone({ freq, type: 'sine', at: i * 0.08, dur: 0.45, peak: 0.09, attack: 0.015 });
+  });
+}
+
+/** Copilot Studio AI spark acoustic response chime. */
+export function copilotChime() {
+  tone({ freq: 880, to: 1318.5, type: 'sine', at: 0, dur: 0.22, peak: 0.08, attack: 0.01 });
+  tone({ freq: 1760, to: 2093, type: 'triangle', at: 0.1, dur: 0.35, peak: 0.06, attack: 0.01 });
+}
 
 const CUES: Record<Cue, { rank: number; play: () => void }> = {
   // An agent hit an error: a soft low buzz.
   error: {
-    rank: 5,
+    rank: 6,
     play: () => [0, 0.2].forEach((at) => tone({ freq: 110, type: 'sawtooth', at, dur: 0.16, peak: 0.035, attack: 0.02 })),
   },
   // QA failed a PR: a gentle descending "womp".
   qaFailed: {
-    rank: 4,
+    rank: 5,
     play: () => {
       tone({ freq: 392, to: 370, type: 'triangle', dur: 0.26, peak: 0.12 });
       tone({ freq: 311, to: 196, type: 'triangle', at: 0.26, dur: 0.55, peak: 0.12 });
     },
   },
-  // A PR passed QA and is ready to merge: a short bright arpeggio.
+  // Solution Checker / Guardrails validation passed
+  solutionChecked: {
+    rank: 4,
+    play: () => {
+      tone({ freq: 659.25, type: 'sine', at: 0, dur: 0.25, peak: 0.08 });
+      tone({ freq: 987.77, type: 'sine', at: 0.1, dur: 0.4, peak: 0.08 });
+    },
+  },
+  // A PR passed QA and is ready to merge: Microsoft Fluent bright chord
   ready: {
     rank: 3,
-    play: () => [784, 988, 1175, 1568].forEach((freq, i) => tone({ freq, type: 'triangle', at: i * 0.07, dur: 0.28, peak: 0.09 })),
+    play: () => [659.25, 783.99, 987.77, 1318.5].forEach((freq, i) => tone({ freq, type: 'sine', at: i * 0.06, dur: 0.35, peak: 0.08 })),
   },
-  // A PR was merged: a pop and a little cheer.
+  // A PR was merged / Power Platform Solution deployed: Fluent celebration chime
   merged: {
     rank: 2,
     play: () => {
-      noise({ dur: 0.07, peak: 0.16, filter: 'bandpass', freq: 1400, q: 1.2, attack: 0.002 });
-      tone({ freq: 523, to: 1046, type: 'square', at: 0.04, dur: 0.12, peak: 0.04 });
-      [1046.5, 1318.5, 1568].forEach((freq) => tone({ freq, type: 'triangle', at: 0.14, dur: 0.5, peak: 0.05 }));
-      noise({ at: 0.12, dur: 0.6, peak: 0.03, filter: 'bandpass', freq: 2500, q: 0.6, attack: 0.08 });
+      fluentChime();
+      noise({ at: 0.2, dur: 0.5, peak: 0.02, filter: 'bandpass', freq: 2800, q: 0.6, attack: 0.05 });
     },
   },
-  // A hire was approved or a new teammate arrived: a small welcome jingle.
+  // A hire was approved or new Copilot topic was activated
   welcome: {
     rank: 1,
-    play: () => [659, 784, 1046.5].forEach((freq, i) => tone({ freq, type: 'sine', at: i * 0.12, dur: i === 2 ? 0.5 : 0.2, peak: 0.12 })),
+    play: () => [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => tone({ freq, type: 'sine', at: i * 0.1, dur: i === 3 ? 0.6 : 0.22, peak: 0.11 })),
+  },
+  // Copilot Studio interaction event
+  copilot: {
+    rank: 1,
+    play: () => copilotChime(),
   },
 };
 

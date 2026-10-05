@@ -29,7 +29,7 @@ export function StartScreen() {
     <div className="start">
       <div className="start-card">
         <div className="start-logo">✻</div>
-        <h1>{settings.companyName || 'cubefarm'}</h1>
+        <h1>{settings.companyName || 'Copilot Swarm'}</h1>
         <p className="start-tag">{settings.managerName ? `Welcome back, ${settings.managerName}.` : 'A cartoon office where a team of AI coding agents works through your GitHub issues.'}</p>
         <ul className="start-list">
           <li>

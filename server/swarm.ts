@@ -215,7 +215,7 @@ const EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 // The CEO thinks harder than the staff: Opus 5.5 at xhigh effort unless the manager changes it.
 const CEO_MODEL = 'claude-opus-5-5';
 const CEO_EFFORT: EffortLevel = 'xhigh';
-const CEO_NAME = 'Morgan';
+const CEO_NAME = 'Satya';
 // The CEO's own folder: its notes about the company live here. Repos are read through their clones.
 const CEO_DIR = path.join(HOME_DIR, 'ceo');
 const DEFAULT_PROJECTS_DIR = defaultProjectsDir(path.resolve(import.meta.dirname, '..'));
@@ -532,7 +532,7 @@ export class Swarm {
 
     if (this.backend.demo && this.state.repos.length === 0) {
       // The demo opens on a busy office; the tutorial still runs so it can be tried.
-      Object.assign(this.state.settings, { setupDone: true, managerName: 'Demo Manager', companyName: 'Demo Co.' });
+      Object.assign(this.state.settings, { setupDone: true, managerName: 'Demo Manager', companyName: 'Grasp AI' });
       for (const r of await this.backend.listMyRepos()) {
         const repo = await this.connectRepo(r.nameWithOwner);
         for (let i = 0; i < (repo.floor === 1 ? 5 : 3); i++) this.hireAgent(repo.id, {});

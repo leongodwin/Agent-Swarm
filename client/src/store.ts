@@ -14,9 +14,14 @@ export type Overlay =
   | { kind: 'elevator' }
   | { kind: 'manager'; tab?: ManagerTab; repoId?: string }
   | { kind: 'phone'; tab?: PhoneTab; requestId?: string }
+  | { kind: 'copilot' }
+  | { kind: 'solution-architecture'; repoId?: string }
+  | { kind: 'flow-runs'; repoId?: string }
+  | { kind: 'visual-cv' }
+  | { kind: 'war-room-ideator' }
   | { kind: 'help' };
 
-export type ManagerTab = 'floors' | 'ceo' | 'team' | 'issues' | 'settings';
+export type ManagerTab = 'floors' | 'ceo' | 'team' | 'issues' | 'settings' | 'powerbi';
 
 export interface Focus {
   id: string;

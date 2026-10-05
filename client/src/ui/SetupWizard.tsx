@@ -9,7 +9,7 @@ import { ProjectPicker } from './ProjectPicker';
 // "Skip" (or just pressing Next) gets a working office.
 
 const COMPANIES = ['Pixel & Pine', 'Byte Bakery', 'Night Owl Software', 'Tiny Rocket Co.', 'Moonbeam Works', 'Happy Path Inc.', 'Merge Conflict Ltd.', 'Quokka Labs', 'Blue Kettle Studio', 'Paper Plane Software'];
-const CEO_NAMES = ['Morgan', 'Avery', 'Jordan', 'Riley', 'Quinn', 'Harper', 'Rowan', 'Sasha', 'Casey', 'Jamie', 'Alex', 'Robin'];
+const CEO_NAMES = ['Satya', 'Morgan', 'Avery', 'Jordan', 'Riley', 'Quinn', 'Harper', 'Rowan', 'Sasha', 'Casey', 'Jamie', 'Alex', 'Robin'];
 const TIES = ['#e63946', '#3a86ff', '#06d6a0', '#ffbe0b', '#9b5de5', '#fb5607'];
 const STEPS = ['Welcome', 'You', 'Your CEO', 'First project', 'Ready'];
 
@@ -47,7 +47,7 @@ export function SetupWizard() {
   const [step, setStep] = useState(0);
   const [managerName, setManagerName] = useState('');
   const [companyName, setCompanyName] = useState(() => COMPANIES[Math.floor(Math.random() * COMPANIES.length)]);
-  const [ceoName, setCeoName] = useState(ceoAgent?.name ?? 'Morgan');
+  const [ceoName, setCeoName] = useState(ceoAgent?.name ?? 'Satya');
   const [ceoLook, setCeoLook] = useState<'feminine' | 'masculine'>(ceoAgent?.look ?? 'masculine');
   const [ceoColor, setCeoColor] = useState(ceoAgent?.color ?? TIES[0]);
   const [hiring, setHiring] = useState<'approve' | 'auto'>('approve');
@@ -55,7 +55,7 @@ export function SetupWizard() {
   const [busy, setBusy] = useState(false);
 
   const me = managerName.trim() || user || 'Boss';
-  const ceo = ceoName.trim() || 'Morgan';
+  const ceo = ceoName.trim() || 'Satya';
   const company = companyName.trim() || COMPANIES[0];
 
   const save = () => api.setup({ managerName: me, companyName: company, hiring, ceoName: ceo, ceoLook, ceoColor });
@@ -96,7 +96,7 @@ export function SetupWizard() {
         {step === 0 && (
           <>
             <div className="start-logo">✻</div>
-            <h1>cubefarm</h1>
+            <h1>Copilot Swarm</h1>
             <p className="start-tag">Your own cartoon software company, staffed by AI coding agents.</p>
             <ul className="start-list">
               <li>🏢 Every project gets its own floor, with developers and a QA lab working through its GitHub issues.</li>

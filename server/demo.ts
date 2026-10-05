@@ -53,18 +53,16 @@ function seed(fullName: string, description: string, titles: [string, string][])
   repos.set(fullName, r);
 }
 
-seed('demo-co/pixel-todo', 'A cheerful todo app', [
-  ['Add dark mode toggle', 'Users want a dark theme. Persist the choice in localStorage.'],
-  ['Todos should support due dates', 'Add an optional due date and highlight overdue items.'],
-  ['Drag and drop to reorder', 'Let users reorder todos by dragging.'],
-  ['Empty state illustration', 'Show a friendly illustration when the list is empty.'],
-  ['Keyboard shortcuts', 'N for new todo, / to search, ? for help.'],
-  ['Fix: completed count off by one', 'The footer shows one more completed item than there is.'],
+seed('contoso/copilot-customer-service', 'Enterprise Copilot Studio & Dataverse Agent Swarm', [
+  ['Create Copilot Studio topic for SLA ticket lookup via Dataverse', 'Implement intent recognition topic for ticket status queries, link to Dataverse cr_ticket entity, and configure dynamic generative prompt.'],
+  ['Add Azure OpenAI fallback topic with internal SharePoint indexing', 'When trigger phrase confidence is below 75%, query vector index of internal SharePoint standard operating procedures.'],
+  ['Trigger Power Automate flow to post Adaptive Card to Teams on escalation', 'When customer asks to speak to an agent, trigger cloud flow with incident payload and post actionable card to Tier 2 support channel.'],
+  ['PAC Solution Checker audit & rule verification', 'Execute pac solution check against contoso_copilot_service solution package and resolve all medium/high violations.'],
 ]);
-seed('demo-co/weather-api', 'Tiny weather REST API', [
-  ['Add /forecast endpoint', 'Return a 5-day forecast for a city.'],
-  ['Rate limit anonymous callers', '60 requests per minute per IP.'],
-  ['OpenAPI spec', 'Publish an OpenAPI 3.1 document at /openapi.json.'],
+seed('contoso/claims-pcf-controls', 'Fluent UI React PCF Control & Power Apps Components', [
+  ['Build Fluent UI PCF Grid control for insurance claim photo review', 'Develop a responsive Power Apps component framework (PCF) control with multi-image preview and zoom capabilities.'],
+  ['Enforce Dataverse business rules and table permissions for Claims table', 'Configure row-level security roles for claim adjusters and audit trail plugins on status changes.'],
+  ['Automate ALM GitHub Actions pipeline with PAC CLI', 'Pack solution with pac solution pack, unpack to source control, and trigger staging release upon PR approval.'],
 ]);
 
 function screenshotSvg(title: string, url: string, hue: number) {
@@ -89,36 +87,38 @@ type Step = LogEntry[] | (() => void);
 function devScript(opts: SessionOptions, cb: SessionCallbacks, issueNumber: number, issueTitle: string): Step[] {
   const branch = path.basename(opts.cwd);
   const hue = (issueNumber * 67) % 360;
-  const file = ['src/App.tsx', 'src/components/TodoList.tsx', 'src/api/routes.ts', 'src/styles.css'][issueNumber % 4];
+  const file = ['topics/TicketSla.yaml', 'components/PhotoGrid.tsx', 'flows/EscalationWebhook.json', 'schemas/cr_ticket.xml'][issueNumber % 4];
   const port = 5200 + (issueNumber % 50);
   return [
-    [{ kind: 'text', text: `● I'll start by getting familiar with the codebase for "${issueTitle}".` }],
-    [{ kind: 'tool', tool: 'Glob', text: '⏺ Glob src/**/*.{ts,tsx}' }, { kind: 'result', text: '  ⎿ Found 23 files' }],
-    [{ kind: 'tool', tool: 'Read', text: `⏺ Read ${file}` }, { kind: 'result', text: '  ⎿ Read 184 lines' }],
-    [{ kind: 'thinking', text: '✻ Thinking…' }],
+    [{ kind: 'text', text: `● Power Platform Agent active: analyzing enterprise requirements for "${issueTitle}".` }],
+    [{ kind: 'tool', tool: 'Glob', text: '⏺ Glob src/**/*.{ts,tsx,yaml,json}' }, { kind: 'result', text: '  ⎿ Found 34 solution components' }],
+    [{ kind: 'tool', tool: 'Read', text: `⏺ Read ${file}` }, { kind: 'result', text: '  ⎿ Read 210 lines' }],
+    [{ kind: 'thinking', text: '✻ Synthesizing Copilot Studio topic boundaries & Dataverse schema…' }],
     [
-      { kind: 'tool', tool: 'TodoWrite', text: '⏺ Update todo list' },
-      { kind: 'result', text: '  ◐ Understand current behaviour' },
-      { kind: 'result', text: '  ☐ Implement the change' },
-      { kind: 'result', text: '  ☐ Add tests' },
-      { kind: 'result', text: '  ☐ Verify in the browser' },
+      { kind: 'tool', tool: 'TodoWrite', text: '⏺ Update Solution Implementation Plan' },
+      { kind: 'result', text: '  ◐ Author conversational nodes and trigger phrases' },
+      { kind: 'result', text: '  ☐ Bind Power Automate flow webhook actions' },
+      { kind: 'result', text: '  ☐ Run PAC Solution Checker audit' },
+      { kind: 'result', text: '  ☐ Package solution zip with pac solution pack' },
     ],
-    [{ kind: 'tool', tool: 'Grep', text: '⏺ Grep "useTodos"' }, { kind: 'result', text: '  ⎿ Found 6 matches in 4 files' }],
-    [{ kind: 'text', text: "● The state lives in a single hook. I'll extend it and keep the API backwards compatible." }],
-    [{ kind: 'tool', tool: 'Edit', text: `⏺ Edit ${file}` }, { kind: 'result', text: '  ⎿ Updated' }],
-    [{ kind: 'tool', tool: 'Write', text: '⏺ Write src/__tests__/feature.test.ts' }, { kind: 'result', text: '  ⎿ Saved' }],
+    [{ kind: 'tool', tool: 'Grep', text: '⏺ Grep "cr_ticket"' }, { kind: 'result', text: '  ⎿ Found 12 matches in 6 solution files' }],
+    [{ kind: 'text', text: "● Aligning entity fields with Dataverse solution conventions and Fluent UI design system." }],
+    [{ kind: 'tool', tool: 'Edit', text: `⏺ Edit ${file}` }, { kind: 'result', text: '  ⎿ Solution Component Updated' }],
+    [{ kind: 'tool', tool: 'Write', text: '⏺ Write src/__tests__/guardrails.eval.ts' }, { kind: 'result', text: '  ⎿ Saved Guardrail Evaluation Suite' }],
+    [{ kind: 'tool', tool: 'Bash', text: '⏺ $ pac solution check --path ./dist/contoso_solution.zip' }, { kind: 'result', text: '  ⎿ PAC Solution Checker: 0 Errors, 0 Warnings, 100% Compliant' }],
+    [{ kind: 'tool', tool: 'Bash', text: '⏺ $ pac pcf push --publisher-prefix contoso' }, { kind: 'result', text: '  ⎿ PCF control published to Dataverse successfully' }],
     [{ kind: 'tool', tool: 'Bash', text: '⏺ $ npm test -- --run' }],
     [
-      { kind: 'result', text: '  ⎿ ✓ src/__tests__/feature.test.ts (4 tests) 38ms' },
-      { kind: 'result', text: '    Test Files  7 passed (7)' },
+      { kind: 'result', text: '  ⎿ ✓ src/__tests__/guardrails.eval.ts (12 evals) 42ms' },
+      { kind: 'result', text: '    Evals: 100% intent recognition accuracy, 0 jailbreak vulnerabilities' },
     ],
-    [{ kind: 'tool', tool: 'Bash', text: `⏺ $ npm run dev -- --port ${port} &` }, { kind: 'result', text: '  ⎿ VITE ready in 412 ms' }],
+    [{ kind: 'tool', tool: 'Bash', text: `⏺ $ npm run dev -- --port ${port} &` }, { kind: 'result', text: '  ⎿ Power Apps Preview Canvas active' }],
     () => cb.browserUrl(`http://localhost:${port}/`),
     [{ kind: 'tool', tool: 'mcp__playwright__browser_navigate', text: `⏺ 🌐 navigate http://localhost:${port}/` }, { kind: 'result', text: `  ⎿ Page URL: http://localhost:${port}/` }],
     () => cb.screenshot(Buffer.from(screenshotSvg(issueTitle, `localhost:${port}`, hue)), 'image/svg+xml'),
-    [{ kind: 'tool', tool: 'mcp__playwright__browser_take_screenshot', text: '⏺ 🌐 take_screenshot' }, { kind: 'result', text: '  ⎿ Took a screenshot of the current page' }],
-    [{ kind: 'text', text: '● Looks right in the browser. Committing and opening a PR.' }],
-    [{ kind: 'tool', tool: 'Bash', text: `⏺ $ git commit -am "feat: ${issueTitle.toLowerCase()}"` }, { kind: 'result', text: `  ⎿ [${branch} 3f2a91c] feat: ${issueTitle.toLowerCase()}` }],
+    [{ kind: 'tool', tool: 'mcp__playwright__browser_take_screenshot', text: '⏺ 🌐 take_screenshot' }, { kind: 'result', text: '  ⎿ Captured Copilot Studio test canvas preview' }],
+    [{ kind: 'text', text: '● Solution verified against Dataverse environment. Packaging and creating GitHub PR.' }],
+    [{ kind: 'tool', tool: 'Bash', text: `⏺ $ git commit -am "feat: ${issueTitle.toLowerCase()}"` }, { kind: 'result', text: `  ⎿ [${branch} 4a8b21e] feat: ${issueTitle.toLowerCase()}` }],
     [{ kind: 'tool', tool: 'Bash', text: '⏺ $ git push -u origin HEAD' }, { kind: 'result', text: '  ⎿ branch set up to track origin' }],
     [{ kind: 'tool', tool: 'Bash', text: `⏺ $ gh pr create --title "${issueTitle}" --body "Closes #${issueNumber}"` }],
   ];
@@ -128,14 +128,14 @@ function qaScript(cb: SessionCallbacks, pr: number, title: string, round: number
   const port = 5600 + (pr % 50);
   const hue = (pr * 41) % 360;
   return [
-    [{ kind: 'text', text: `● Testing PR #${pr} "${title}" (round ${round}). First, the acceptance criteria from the issue.` }],
-    [{ kind: 'tool', tool: 'Bash', text: '⏺ $ git diff origin/main...HEAD --stat' }, { kind: 'result', text: '  ⎿  3 files changed, 82 insertions(+), 9 deletions(-)' }],
-    [{ kind: 'tool', tool: 'Bash', text: '⏺ $ npm ci && npm test -- --run' }],
+    [{ kind: 'text', text: `● Copilot Evaluation Lab: validating PR #${pr} "${title}" (round ${round}).` }],
+    [{ kind: 'tool', tool: 'Bash', text: '⏺ $ git diff origin/main...HEAD --stat' }, { kind: 'result', text: '  ⎿  4 solution files changed, 142 insertions(+), 12 deletions(-)' }],
+    [{ kind: 'tool', tool: 'Bash', text: '⏺ $ pac solution check --ruleset "Microsoft.PowerPlatform.Recommended"' }],
     [
-      { kind: 'result', text: '  ⎿ Test Files  8 passed (8)' },
-      { kind: 'result', text: '    Tests  41 passed (41)' },
+      { kind: 'result', text: '  ⎿ Solution Checker: PASS (0 violations)' },
+      { kind: 'result', text: '    Security Assessment: Zero high/medium severity findings' },
     ],
-    [{ kind: 'tool', tool: 'Bash', text: '⏺ $ npm run lint && npm run build' }, { kind: 'result', text: '  ⎿ ✓ built in 1.84s' }],
+    [{ kind: 'tool', tool: 'Bash', text: '⏺ $ npm run eval:guardrails' }, { kind: 'result', text: '  ⎿ 48/48 prompt injection test vectors blocked' }],
     [{ kind: 'tool', tool: 'Bash', text: `⏺ $ npm run preview -- --port ${port} &` }, { kind: 'result', text: `  ⎿ Local: http://localhost:${port}/` }],
     () => cb.browserUrl(`http://localhost:${port}/`),
     [{ kind: 'tool', tool: 'mcp__playwright__browser_navigate', text: `⏺ 🌐 navigate http://localhost:${port}/` }, { kind: 'result', text: `  ⎿ Page URL: http://localhost:${port}/` }],
@@ -523,7 +523,7 @@ export function createDemoBackend(): Backend {
  * the real one started the demo, or with SWARM_DEMO_LAUNCHER=1; either way the update is faked: a short pause, then
  * the result message, and nothing restarts.
  */
-const OFFICE_REPO = 'demo-co/pixel-todo';
+const OFFICE_REPO = 'contoso/copilot-customer-service';
 const DEMO_HEAD = `0ff1ce5${'0'.repeat(33)}`;
 const lastFakeUpdate = { to: '', commits: 0 };
 const demoOffice: OfficeHost = {
@@ -546,29 +546,151 @@ const demoOffice: OfficeHost = {
 
 function placeholderPage(title: string, hue: number) {
   const safe = title.replace(/[<>&"]/g, '');
+  const isCopilot = safe.toLowerCase().includes('copilot') || safe.toLowerCase().includes('customer');
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${safe}</title><link rel="icon" href="data:,">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${safe} · Microsoft Power Platform Solution</title>
+<link rel="icon" href="data:,">
+<link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: 'Segoe UI', Arial, sans-serif; background: hsl(${hue},60%,96%); color: #222; }
-  main { text-align: center; padding: 32px 40px; background: #fff; border-radius: 18px; box-shadow: 0 8px 30px hsla(${hue},50%,40%,.18); }
-  h1 { margin: 0 0 6px; font-size: 26px; color: hsl(${hue},60%,38%); }
-  p { margin: 0 0 22px; color: #666; }
-  button { font: inherit; font-size: 18px; padding: 10px 26px; border: 0; border-radius: 999px; background: hsl(${hue},70%,55%); color: #fff; cursor: pointer; }
-  button:active { transform: scale(.97); }
-  #count { display: block; margin-top: 16px; font-size: 15px; color: #444; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif; background: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; flex-direction: column; }
+  header { background: #1e293b; border-bottom: 1px solid #334155; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+  .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 16px; color: #fff; }
+  .logo-badge { background: ${isCopilot ? '#774ae0' : '#742774'}; color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 800; }
+  .env-badge { font-size: 11px; background: #064e3b; color: #34d399; padding: 3px 8px; border-radius: 999px; font-weight: 600; }
+  .main-container { flex: 1; display: grid; grid-template-columns: ${isCopilot ? '1fr 380px' : '1fr'}; gap: 20px; padding: 24px; max-width: 1400px; margin: 0 auto; width: 100%; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+  .card-title { font-size: 18px; font-weight: 700; color: #ffffff; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .card-subtitle { font-size: 13px; color: #94a3b8; margin-bottom: 18px; }
+  
+  /* Claims PCF Form */
+  .grid-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  .grid-table th { text-align: left; padding: 10px 14px; background: #0f172a; color: #94a3b8; font-size: 12px; border-bottom: 1px solid #334155; }
+  .grid-table td { padding: 12px 14px; border-bottom: 1px solid #334155; font-size: 13px; }
+  .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+  .badge-active { background: #0284c7; color: #fff; }
+  .badge-urgent { background: #b91c1c; color: #fff; }
+  .badge-done { background: #15803d; color: #fff; }
+  
+  /* Copilot Webchat simulation */
+  .chat-box { display: flex; flex-direction: column; height: 100%; min-height: 480px; }
+  .chat-stream { flex: 1; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding: 10px 0; }
+  .bubble { padding: 12px 16px; border-radius: 12px; font-size: 13px; line-height: 1.45; max-width: 88%; }
+  .bot-bubble { background: #334155; color: #f8fafc; border-bottom-left-radius: 2px; align-self: flex-start; }
+  .user-bubble { background: #0078d4; color: #fff; border-bottom-right-radius: 2px; align-self: flex-end; }
+  .chat-input-bar { display: flex; gap: 8px; margin-top: 12px; }
+  .chat-input { flex: 1; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 14px; color: #fff; font-size: 13px; outline: none; }
+  .send-btn { background: #0078d4; color: #fff; border: 0; padding: 10px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+  .status-row { display: flex; gap: 16px; margin-top: 14px; }
+  .stat-pill { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 16px; flex: 1; }
+  .stat-val { font-size: 18px; font-weight: 700; color: #38bdf8; }
+  .stat-lbl { font-size: 11px; color: #94a3b8; }
 </style></head>
-<body><main>
-  <h1>${safe}</h1>
-  <p>A placeholder app served by the demo office.</p>
-  <button id="btn" type="button">Click me</button>
-  <span id="count">Clicked 0 times</span>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo-badge">${isCopilot ? 'COPILOT STUDIO' : 'POWER APPS MODEL-DRIVEN'}</span>
+    <span>${safe}</span>
+  </div>
+  <div style="display: flex; gap: 10px; align-items: center;">
+    <span class="env-badge">● Dataverse: FabrikamProd</span>
+    <span style="font-size: 12px; color: #94a3b8;">Solution v2.4.0.1</span>
+  </div>
+</header>
+
+<main class="main-container">
+  <div class="card">
+    <div class="card-title">
+      <span>${isCopilot ? 'Active Customer Support Cases (cr_serviceticket)' : 'Claims Assessment Inspection Grid (cr_claim)'}</span>
+      <span style="font-size: 12px; color: #38bdf8; font-weight: 600;">Dataverse Live Stream</span>
+    </div>
+    <div class="card-subtitle">Real-time enterprise records synced via Microsoft Dataverse Web API & PAC CLI ALM pipeline</div>
+
+    <div class="status-row">
+      <div class="stat-pill"><div class="stat-val">12</div><div class="stat-lbl">Active Tickets</div></div>
+      <div class="stat-pill"><div class="stat-val">1.2h</div><div class="stat-lbl">Avg Resolution</div></div>
+      <div class="stat-pill"><div class="stat-val">99.4%</div><div class="stat-lbl">Copilot SLA Accuracy</div></div>
+    </div>
+
+    <table class="grid-table">
+      <thead>
+        <tr>
+          <th>Reference #</th>
+          <th>Subject / Entity</th>
+          <th>Priority</th>
+          <th>Responsible Agent / Flow</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="font-weight:700; color:#38bdf8;">CAS-10492-X9</td>
+          <td>Damage claim photo inspection review</td>
+          <td><span class="badge badge-urgent">High</span></td>
+          <td>Instant Cloud Flow · Tier 2 Teams</td>
+          <td><span class="badge badge-active">In Progress</span></td>
+        </tr>
+        <tr>
+          <td style="font-weight:700; color:#38bdf8;">CAS-10488-B2</td>
+          <td>Commercial fleet liability endorsement</td>
+          <td><span class="badge badge-active">Medium</span></td>
+          <td>Copilot Studio Topics Engine</td>
+          <td><span class="badge badge-done">Resolved</span></td>
+        </tr>
+        <tr>
+          <td style="font-weight:700; color:#38bdf8;">CAS-10475-A1</td>
+          <td>Policy coverage query via SharePoint SOP</td>
+          <td><span class="badge badge-active">Normal</span></td>
+          <td>Azure OpenAI Grounded RAG</td>
+          <td><span class="badge badge-done">Resolved</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  ${isCopilot ? `
+  <div class="card chat-box">
+    <div class="card-title">
+      <span>Copilot Webchat</span>
+      <span class="badge badge-active">Generative AI</span>
+    </div>
+    <div class="card-subtitle">Customer test canvas with grounding</div>
+    <div class="chat-stream" id="chatStream">
+      <div class="bubble bot-bubble">Hello! I am your Contoso Customer Service Copilot. How can I assist you with your active claims or policy questions today?</div>
+      <div class="bubble user-bubble">What is the status of my claim #CAS-10492-X9?</div>
+      <div class="bubble bot-bubble">Claim #CAS-10492-X9 is currently with Tier 2 Support. Your collision photos were inspected and approved for reimbursement under your Commercial Gold policy!</div>
+    </div>
+    <div class="chat-input-bar">
+      <input class="chat-input" id="chatInput" placeholder="Type a message to test Copilot..." />
+      <button class="send-btn" id="sendBtn">Send</button>
+    </div>
+  </div>
+  ` : ''}
 </main>
+
 <script>
-  let n = 0;
-  document.getElementById('btn').addEventListener('click', () => {
-    n++;
-    document.getElementById('count').textContent = 'Clicked ' + n + (n === 1 ? ' time' : ' times');
-  });
+  const sendBtn = document.getElementById('sendBtn');
+  const chatInput = document.getElementById('chatInput');
+  const chatStream = document.getElementById('chatStream');
+  if (sendBtn && chatInput && chatStream) {
+    sendBtn.addEventListener('click', () => {
+      const txt = chatInput.value.trim();
+      if (!txt) return;
+      chatInput.value = '';
+      const u = document.createElement('div');
+      u.className = 'bubble user-bubble';
+      u.textContent = txt;
+      chatStream.appendChild(u);
+      setTimeout(() => {
+        const b = document.createElement('div');
+        b.className = 'bubble bot-bubble';
+        b.textContent = 'Copilot Studio analyzed "' + txt + '" -> executing Dataverse action query... Done!';
+        chatStream.appendChild(b);
+        chatStream.scrollTop = chatStream.scrollHeight;
+      }, 600);
+    });
+  }
 </script>
 </body></html>`;
 }
@@ -667,38 +789,38 @@ interface Profile {
 }
 
 const PROFILES: Record<string, Profile> = {
-  'pixel-todo': {
-    summary: 'Todo web app · React + Vite + TypeScript',
-    qa: '- Add, complete, edit and delete todos; they survive a reload\n- Keyboard only: every action reachable, focus always visible\n- Phone width (375px): nothing overflows or gets cut off\n- No errors in the browser console',
-    qaTitle: 'UI QA tester',
-    qaJob: 'You test every PR the way a picky user would: click through the whole flow, try it on a phone-sized screen and with the keyboard only.',
-    devTitle: 'React UI engineer',
-    devSpecialty: 'frontend',
-    devJob: 'You own the React components and styling. Keep components small, reuse the existing hooks, and check every change at desktop and phone widths.',
+  'copilot-customer-service': {
+    summary: 'Enterprise Copilot Studio & Dataverse Agent Swarm',
+    qa: '- PAC Solution Checker passes with 0 high/critical violations\n- Copilot Studio fallback triggers vector search against SharePoint knowledge base\n- Responsible AI Prompt Shield blocks adversarial prompt injections\n- Instant Cloud Flow successfully posts Adaptive Card to Teams on escalation',
+    qaTitle: 'Copilot Guardrails & QA Lead',
+    qaJob: 'You evaluate every solution PR against Microsoft Responsible AI safety benchmarks, check Dataverse column security roles, and verify PAC CLI solution packaging.',
+    devTitle: 'Conversational AI Architect',
+    devSpecialty: 'copilot',
+    devJob: 'You author Copilot Studio topic boundaries, dynamic prompt engineering nodes, and configure entity extraction pipelines.',
     hires: [
       {
-        title: 'Accessibility engineer',
-        specialty: 'a11y',
+        title: 'Power Automate Flow Architect',
+        specialty: 'flows',
         job_description:
-          'You make the app work for **everyone**:\n\n- Keyboard navigation and focus management\n- ARIA roles, checked with `axe`\n- Colour contrast (WCAG AA)\n\nTest with the keyboard only. The [WAI-ARIA practices](https://www.w3.org/WAI/ARIA/apg/) are your reference.',
-        reason: 'Keyboard shortcuts and drag-and-drop are in the backlog, and both are *easy to get wrong* for keyboard and screen-reader users.',
+          'You build low-latency Instant Cloud Flows connecting Copilot Studio actions with Microsoft Dataverse and Teams Adaptive Cards:\n\n- HTTP Webhook Request Triggers\n- Asynchronous Escalation approval flows\n- Exception handling & retry policies',
+        reason: 'Automating Tier 2 escalation approvals with Teams Adaptive Cards is in the sprint backlog.',
       },
     ],
   },
-  'weather-api': {
-    summary: 'REST API · Node + Express',
-    qa: '- Every endpoint: happy path, bad input (400), unknown city (404)\n- Response shapes match the OpenAPI document\n- Rate limiting returns 429 with Retry-After\n- Tests and lint pass',
-    qaTitle: 'API QA tester',
-    qaJob: 'You test the API from the outside: curl every endpoint, try bad input and edge cases, and compare responses with the OpenAPI document.',
-    devTitle: 'Backend engineer',
-    devSpecialty: 'backend',
-    devJob: 'You own the routes and data layer. Validate input at the edge, return consistent error shapes, and add tests for every endpoint you touch.',
+  'claims-pcf-controls': {
+    summary: 'Fluent UI React PCF Control & Power Apps Components',
+    qa: '- PCF Control renders seamlessly in Model-Driven & Canvas App forms\n- Fluent UI v9 controls follow WCAG AA accessibility & contrast standards\n- Dataverse Web API CRUD operations respect row and column-level security\n- pac pcf push succeeds without manifest validation errors',
+    qaTitle: 'Power Platform Solution Tester',
+    qaJob: 'You test PCF controls inside the Power Apps Canvas test harness and Model-Driven form view, verifying Fluent UI components and Dataverse Web API calls.',
+    devTitle: 'PCF Pro-Code Engineer',
+    devSpecialty: 'pcf',
+    devJob: 'You develop pro-code Power Apps Component Framework (PCF) controls using TypeScript, React 18, and Fluent UI v9.',
     hires: [
       {
-        title: 'API reliability engineer',
-        specialty: 'reliability',
-        job_description: 'You own rate limiting, caching and error handling. Measure before you optimise and document every limit in the OpenAPI spec.',
-        reason: 'Rate limiting is in the backlog and the forecast endpoint will call an upstream service that needs caching and timeouts.',
+        title: 'Dataverse Security Architect',
+        specialty: 'dataverse',
+        job_description: 'You configure Dataverse table schemas, business rules, row-level security profiles, and PAC CLI build automation.',
+        reason: 'Deploying custom insurance claim adjuster security roles and inspection photo storage policies is in the sprint backlog.',
       },
     ],
   },

@@ -134,6 +134,7 @@ export function AppViewer({ repoId }: { repoId: string }) {
   const preview = repo?.preview;
   const [picked, setPicked] = useState<number | null>(preview?.pr ?? null);
   const [width, setWidth] = useState(lastWidth);
+  const [viewMode, setViewMode] = useState<'app' | 'pcf'>('app');
   const [busy, setBusy] = useState(false);
   const [reloads, setReloads] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -253,6 +254,13 @@ export function AppViewer({ repoId }: { repoId: string }) {
             📱 Phone
           </button>
         </div>
+        <button
+          className={`btn btn-small ${viewMode === 'pcf' ? 'btn-good' : ''}`}
+          onClick={() => setViewMode((m) => (m === 'pcf' ? 'app' : 'pcf'))}
+          title="Toggle Power Apps Model-Driven PCF Control Host Canvas"
+        >
+          🧩 {viewMode === 'pcf' ? 'Live App' : 'Power Apps PCF Preview'}
+        </button>
         <span className="spacer" />
         {preview.url ? (
           <a className="btn btn-small" href={preview.url} target="_blank" rel="noreferrer">
@@ -265,7 +273,67 @@ export function AppViewer({ repoId }: { repoId: string }) {
         )}
       </div>
 
-      {preview.status === 'running' && preview.url ? (
+      {viewMode === 'pcf' ? (
+        <div style={{ background: '#f3f4f6', borderRadius: 8, padding: 18, color: '#111827', minHeight: 480 }}>
+          {/* Power Apps Command Bar */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#ffffff', padding: '10px 16px', borderRadius: 6, border: '1px solid #e5e7eb', marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+              <span style={{ fontWeight: 800, color: '#742774', fontSize: 16 }}>Power Apps</span>
+              <span style={{ color: '#d1d5db' }}>|</span>
+              <button style={{ background: '#0078d4', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: 4, fontWeight: 600, fontSize: 12 }}>💾 Save</button>
+              <button style={{ background: '#f3f4f6', border: '1px solid #d1d5db', padding: '6px 14px', borderRadius: 4, fontSize: 12 }}>Save & Close</button>
+              <button style={{ background: '#f3f4f6', border: '1px solid #d1d5db', padding: '6px 14px', borderRadius: 4, fontSize: 12 }}>⚡ Run Flow</button>
+            </div>
+            <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>Entity: cr_claim (Insurance Claim) · Model-Driven Form</div>
+          </div>
+
+          {/* Form Content with Embedded PCF Control */}
+          <div style={{ background: '#ffffff', borderRadius: 8, border: '1px solid #e5e7eb', padding: 20 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>Claim #CLM-90214-X · Auto Collision Assessment</div>
+            <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Customer: Contoso Fleet Logistics · Policy: Commercial Gold</div>
+
+            {/* PCF Custom Control Container */}
+            <div style={{ border: '2px dashed #0078d4', borderRadius: 8, padding: 16, background: '#f8fafc', marginBottom: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, color: '#0078d4', fontSize: 14 }}>
+                  🧩 Custom PCF Control: FluentClaimsPhotoGrid (TypeScript + React 18)
+                </div>
+                <span style={{ background: '#dcfce7', color: '#15803d', padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>
+                  ● PAC PCF PUSHED (LIVE)
+                </span>
+              </div>
+
+              {/* PCF Image Grid Preview */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+                {[
+                  { title: 'Front Bumper Impact', status: 'AI Damage Score: 88%', src: '🚗 Front Bumper (Damage Verified)' },
+                  { title: 'Quarter Panel Scrape', status: 'AI Damage Score: 45%', src: '🚙 Side Panel (Surface Scrape)' },
+                  { title: 'Headlight Assembly', status: 'AI Damage Score: 95%', src: '💡 Shattered Lens (Replace Required)' },
+                ].map((item) => (
+                  <div key={item.title} style={{ background: '#ffffff', borderRadius: 6, border: '1px solid #cbd5e1', padding: 14 }}>
+                    <div style={{ height: 110, background: '#e2e8f0', borderRadius: 4, display: 'grid', placeItems: 'center', fontWeight: 600, color: '#334155', fontSize: 13 }}>
+                      {item.src}
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginTop: 10 }}>{item.title}</div>
+                    <div style={{ color: '#0284c7', fontSize: 12, fontWeight: 600, marginTop: 2 }}>{item.status}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, fontSize: 13 }}>
+              <div>
+                <label style={{ display: 'block', color: '#4b5563', fontWeight: 600, marginBottom: 4 }}>Adjuster Decision</label>
+                <input readOnly value="Recommended for Fast-Track Repair Approval" style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 4, background: '#f9fafb' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', color: '#4b5563', fontWeight: 600, marginBottom: 4 }}>Estimated Payout</label>
+                <input readOnly value="$3,450.00 USD (Auto-calculated by Dataverse Rule)" style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 4, background: '#f9fafb' }} />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : preview.status === 'running' && preview.url ? (
         <>
           <div className={`app-stage ${width === 'phone' ? 'app-stage-phone' : ''}`}>
             <iframe

@@ -8,6 +8,7 @@ import { Character } from './Character';
 import { drawSign, drawTag, drawTerminal } from './draw';
 import { useCanvasTexture, useInteractable } from './interact';
 import { glow, shade, toon } from './materials';
+import { FluentIconMesh, type FluentIconName } from './FluentIcons';
 
 const SCREEN = { w: 1.0, h: 0.6, px: 896, py: 538 };
 const WOOD = '#f1d19b';
@@ -148,9 +149,9 @@ function VacantMonitor({ accent, qa }: { accent: string; qa: boolean }) {
       ctx.fillStyle = '#151621';
       ctx.fillRect(0, 0, 640, 384);
       drawSign(ctx, 640, 384, [
-        { text: qa ? '🔍' : '🪑', size: 70 },
-        { text: qa ? 'QA STATION' : 'VACANT', size: 70, color: '#ffd6a5' },
-        { text: qa ? 'press E or click to hire a tester' : 'press E or click to hire an agent', size: 36, color: '#a9adc6', weight: 500 },
+        { text: qa ? '🛡️' : '⚡', size: 70 },
+        { text: qa ? 'COPILOT EVAL LAB' : 'POWER PLATFORM', size: 54, color: '#60a5fa' },
+        { text: qa ? 'press E or click to assign tester' : 'press E or click to deploy agent', size: 34, color: '#a9adc6', weight: 500 },
       ], 'rgba(0,0,0,0)');
     },
     [qa],
@@ -235,7 +236,7 @@ export function Desk({
         }
       : {
           id: `vacant-${role}-${repoId}-${position.join()}`,
-          label: qa ? 'Hire a QA tester for this station' : 'Hire an agent for this desk',
+          label: qa ? 'Hire a Copilot Guardrails & Eval Tester for this station' : 'Hire a Power Platform & Copilot Studio Engineer for this desk',
           action: { kind: 'hire', repoId, role },
         },
     3.6,
@@ -267,6 +268,14 @@ export function Desk({
       ) : (
         <VacantMonitor accent={accent} qa={qa} />
       )}
+      {/* Microsoft Fluent UI Badge on agent desk */}
+      {(() => {
+        const icons: FluentIconName[] = ['copilot', 'powerapps', 'powerautomate', 'powerbi', 'teams', 'excel', 'word', 'azure'];
+        const seed = agent ? (agent.name.charCodeAt(0) + agent.name.length) : (position[0] * 7 + position[2] * 13);
+        const iconName = icons[Math.abs(Math.round(seed)) % icons.length];
+        return <FluentIconMesh name={iconName} size={0.16} position={[0.76, 0.82, -0.22]} rotation={[0, -0.2, 0]} />;
+      })()}
+
       {qa ? (
         // test-tube rack: every good QA desk has one
         <group position={[-0.72, 0.77, -0.2]}>
