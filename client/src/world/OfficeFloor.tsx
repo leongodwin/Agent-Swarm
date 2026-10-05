@@ -17,6 +17,7 @@ import { SolutionArchitectureBoard } from './SolutionArchitectureBoard';
 import { FlowRunHistoryBoard } from './FlowRunHistoryBoard';
 import { DataverseSchemaMonitor } from './DataverseSchemaMonitor';
 import { CopilotKiosk } from './CopilotKiosk';
+import { DataFlowPulseField } from './ParticleFx';
 
 export function WallSign({
   position,
@@ -86,6 +87,10 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
 
       {/* Live Power Platform Solution Architecture Board (East Wall, visible alongside Kanban) */}
       <SolutionArchitectureBoard position={[HALF_W - 0.05, 0.45, 3.2]} rotationY={-Math.PI / 2} width={5.6} height={2.8} repoId={repo.id} />
+      {/* 3D Glowing Data Pulse Pipeline traversing under the architecture board */}
+      <group position={[HALF_W - 0.12, 0.45, 3.2]} rotation={[0, -Math.PI / 2, 0]}>
+        <DataFlowPulseField position={[0, -0.25, 0]} />
+      </group>
 
       {/* Live Power Automate Flow Run History Telemetry Board (West Wall) */}
       <FlowRunHistoryBoard position={[-HALF_W + 0.05, 0.45, 0]} rotationY={Math.PI / 2} width={5.2} height={2.6} repoId={repo.id} />

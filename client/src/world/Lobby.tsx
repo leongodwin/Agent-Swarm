@@ -18,6 +18,7 @@ import { Toys } from './toys';
 import { FluentIconMesh, MicrosoftWallBanner } from './FluentIcons';
 import { CopilotKiosk } from './CopilotKiosk';
 import { DlpSecurityKiosk } from './DlpSecurityKiosk';
+import { CoffeeSteam, HolographicSpire } from './ParticleFx';
 
 // Microsoft Fluent UI Inspired Palette: Fluent Electric Blue & Copilot Purple
 const ACCENT = '#0078D4'; // Fluent Accent Blue
@@ -112,6 +113,7 @@ function ManagerComputer() {
       </mesh>
       <Box size={[0.5, 0.025, 0.16]} position={[0, 0.815, 0.25]} color="#f4f4f8" outline />
       <Cyl r={0.05} h={0.11} position={[0.9, 0.855, 0.1]} color="#ffd166" outline />
+      <CoffeeSteam position={[0.9, 0.93, 0.1]} />
       <Box size={[0.3, 0.2, 0.03]} position={[-0.95, 0.9, -0.1]} rotation={[-0.3, 0.3, 0]} color="#e9c46a" outline />
       {/* manager chair (yours) */}
       <group position={[0, 0, -1.1]}>
@@ -196,23 +198,16 @@ function WarRoomTable() {
         </group>
       ))}
 
-      {/* Central Holographic Multi-Agent Projector with Cyber Glow */}
+      {/* Central Holographic Multi-Agent Projector Base */}
       <mesh position={[0, 0.79, 0]} material={brushedMetal('#0f172a')}>
         <cylinderGeometry args={[0.36, 0.4, 0.04, 28]} />
       </mesh>
       <mesh position={[0, 0.81, 0]} material={cyberGlow('#0078d4', 3.0)}>
         <ringGeometry args={[0.3, 0.35, 32]} />
       </mesh>
-      <mesh position={[0, 1.05, 0]} material={cyberGlow('#38bdf8', 3.5)}>
-        <octahedronGeometry args={[0.18]} />
-      </mesh>
-      {/* Orbiting concentric pulse rings */}
-      <mesh position={[0, 0.88, 0]} rotation={[Math.PI / 2, 0, 0]} material={cyberGlow('#a855f7', 2.8)}>
-        <ringGeometry args={[0.45, 0.47, 32]} />
-      </mesh>
-      <mesh position={[0, 0.94, 0]} rotation={[Math.PI / 2, 0, 0]} material={cyberGlow('#38bdf8', 2.0)}>
-        <ringGeometry args={[0.55, 0.56, 32]} />
-      </mesh>
+
+      {/* Dynamic Holographic Spire with orbiting data rings & floating particle dust */}
+      <HolographicSpire position={[0, 0, 0]} />
     </group>
   );
 }
