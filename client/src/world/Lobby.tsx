@@ -635,7 +635,7 @@ export function Lobby() {
           rotationY={0}
           size={[3.8, 0.5]}
           px={[912, 120]}
-          draw={(ctx) => drawSign(ctx, 912, 120, [{ text: '🤝 AGENT SWARM WAR ROOM · Low-Code + Pro-Code Fusion', size: 40 }], '#0284c7')}
+          draw={(ctx) => drawSign(ctx, 912, 120, [{ text: '🤝 AGENT SWARM WAR ROOM', size: 40 }], '#0284c7')}
           deps={[]}
         />
       </group>
