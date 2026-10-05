@@ -35,9 +35,12 @@ npm run test:e2e     # browser smoke tests (Playwright): builds, boots a demo of
 ## Architecture
 
 ```
-client/  Vite + React + react-three-fiber (toon materials, canvas textures)
-  src/world/   the 3D building: floors, desks, characters, laptops, whiteboard, elevator, player
-  src/ui/      HUD and panels: terminal, Kanban, elevator, manager's console
+client/  Vite + React + react-three-fiber (PBR materials, post-processing bloom, canvas textures)
+  src/world/   the 3D building: floors, desks, characters, laptops, whiteboard, elevator, player,
+               Copilot kiosks, Solution Architecture boards, Flow telemetry boards, Dataverse monitors,
+               DLP security kiosks, Fluent 3D icons, biophilic plants, War Room
+  src/ui/      HUD and panels: terminal, Kanban, elevator, manager's console, Teams toasts,
+               Copilot Chat canvas, Solution Architecture viewer, Flow Run History, War Room Ideator, Visual CV
 bin/cubefarm.js  the `npx cubefarm` command: checks the machine, starts the server, opens the browser
 scripts/office.mjs  the launcher for a checkout (npm run dev / demo / start): runs the office and updates it
 server/  Node + Express + ws

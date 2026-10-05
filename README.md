@@ -38,10 +38,15 @@ Demo mode fakes GitHub and the agents, so it costs nothing and changes nothing.
 ## What's in the office
 
 - **Floors**: one per project. Ride the elevator between them.
-- **Desks**: walk up behind an agent to watch their monitor. Open it to see their real terminal: every agent is an actual coding agent running on your machine, and you can type into it. It also shows a live browser when they test the UI. Pick the coding agent, model and effort for the whole team or per agent.
-- **The QA lab**: every floor has at least one QA tester.
-- **The whiteboard**: the Kanban board, from backlog to merged.
-- **The lobby**: the manager's office, where you connect projects, hire, file issues and change settings, and the CEO's corner office.
+- **Desks**: walk up behind an agent to watch their dual curved monitors. Open it to see their real terminal: every agent is an actual coding agent running on your machine, and you can type into it. It also shows a live browser when they test the UI. Pick the coding agent, model and effort for the whole team or per agent.
+- **Copilot Studio Kiosks & Agent Stations**: test conversational bots directly via interactive Copilot chat testing canvases on the office floor and lobby.
+- **Solution Architecture & Flow Telemetry Boards**: interactive 3D wall monitors displaying real-time Power Platform solution topologies and Power Automate flow run telemetry with live run histories.
+- **Dataverse Schema & DLP Kiosks**: live table schema monitors and security policy compliance posture checkpoints.
+- **Multi-Agent War Room**: interactive boardroom table in the lobby equipped with a Swarm Ideator workshop tool.
+- **The QA & Guardrails Lab**: every floor has at least one QA / Responsible AI tester verifying PRs, PAC CLI checks, and guardrails.
+- **The Whiteboard**: the live Kanban board, from backlog to merged.
+- **The Lobby**: features the manager's office (with executive portfolio visual CV), reception, CEO corner office, and Fluent icon showcases.
+- **PBR Visuals & Studio Lighting**: procedural herringbone oak parquet, acoustic fluted slat walls, frosted glass partitions, designer biophilic plants, and post-processing bloom.
 
 ## Controls
 
@@ -50,8 +55,10 @@ Demo mode fakes GitHub and the agents, so it costs nothing and changes nothing.
 | `W A S D` / arrows | walk |
 | `Shift` | run |
 | mouse | look around (click the view first) |
-| `E` | use what you're looking at: a desk, the whiteboard, the elevator, the manager's computer |
+| `E` / click | interact with desks, whiteboard, kiosks, solution boards, elevator, manager's console |
+| `K` | toggle Daylight / Keynote studio lighting modes |
 | `P` | your phone |
+| `Tab` | workers panel |
 | `H` | help |
 | `Esc` | let go of the mouse, or close a panel |
 

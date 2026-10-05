@@ -41,6 +41,19 @@ You can message an agent at any time. While they're working, the message is inje
 - QA testers use the same model and effort settings as everyone else. Their instructions tell them not to push, comment on, review, merge or edit PRs or issues: the office posts their report for them.
 - QA is automatic for every PR from a `swarm/` branch, whether or not auto-assign is on.
 
+## Copilot Swarm & Interactive 3D Stations
+
+In addition to traditional coding agent terminals, the office environment includes dedicated interactive enterprise stations:
+
+- **Copilot Studio Kiosks**: Stations located on office floors and in the lobby. Approach and press `E` to open the full Copilot test canvas overlay with live generative chat, suggested enterprise prompts, topic triggering, and source citation inspection.
+- **Solution Architecture Visualizer**: Mounted on the floor's east wall. Press `E` to inspect interactive architecture diagrams mapping Copilot Studio triggers, Power Automate cloud flows, Dataverse tables, and enterprise ERP/CRM connectors.
+- **Power Automate Flow Run History**: West wall telemetry board providing live run logs, execution durations, run IDs, and instant retry triggers for failed automations.
+- **Dataverse Schema Monitor**: Live entity relationship and schema monitor displaying table attributes, primary columns, and row counts.
+- **Microsoft Entra & DLP Policy Kiosk**: Lobby checkpoint displaying active Data Loss Prevention policies, connector classification (Business vs. Non-Business), and tenant security posture.
+- **Multi-Agent War Room & Swarm Ideator**: A glass-enclosed boardroom in the lobby. Interacting with the conference table launches the Swarm Ideator workshop tool to generate multi-agent fusion architecture proposals.
+- **Teams Toast Feed**: Real-time Microsoft Teams style status notifications and alerts for deployment, flow runs, and agent task milestones.
+- **Visual Portfolio & CV**: Displayed in the manager's office for reviewing enterprise credentials and architecture leadership highlights.
+
 ## The team
 
 Agents get names from a pool of computing pioneers (developers) and fictional detectives (QA testers). Each character's look is picked from their name, so Ada, Grace and Marple are drawn with long hair, a ponytail or a bun. You can change any agent's name or look in the manager's console → Team.
