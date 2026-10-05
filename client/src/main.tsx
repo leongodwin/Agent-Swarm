@@ -5,5 +5,5 @@ import { useStore } from './store';
 import './styles.css';
 
 connect();
-if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__swarmStore = useStore;
+(window as unknown as Record<string, unknown>).__swarmStore = useStore;
 createRoot(document.getElementById('root')!).render(<App />);

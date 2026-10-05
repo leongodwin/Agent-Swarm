@@ -221,9 +221,11 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                       boxShadow: active ? '0 0 12px rgba(56, 189, 248, 0.25)' : 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{n.name.split(' ')[0]}</span>
-                      <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{n.badge}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+                        <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>{n.badge}</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3 }}>{n.summary.slice(0, 50)}…</div>
                   </button>
@@ -253,9 +255,11 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                       boxShadow: active ? '0 0 12px rgba(192, 132, 252, 0.25)' : 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{n.name.split(' ')[0]}</span>
-                      <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{n.badge}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+                        <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>{n.badge}</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3 }}>{n.summary.slice(0, 50)}…</div>
                   </button>
@@ -285,9 +289,11 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                       boxShadow: active ? '0 0 12px rgba(96, 165, 250, 0.25)' : 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{n.name.split(' ')[0]}</span>
-                      <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{n.badge}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+                        <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>{n.badge}</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3 }}>{n.summary.slice(0, 50)}…</div>
                   </button>
@@ -317,9 +323,11 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                       boxShadow: active ? '0 0 12px rgba(244, 114, 182, 0.25)' : 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{n.name.split(' ')[0]}</span>
-                      <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{n.badge}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+                        <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>{n.badge}</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3 }}>{n.summary.slice(0, 50)}…</div>
                   </button>

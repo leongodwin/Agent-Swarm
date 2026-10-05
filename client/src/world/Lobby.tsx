@@ -556,10 +556,10 @@ export function Lobby() {
       </group>
 
       {/* Main Microsoft AI & Copilot Studio Feature Wall Banner above main north wall */}
-      <MicrosoftWallBanner position={[3.2, 2.25, -HALF_D + 0.03]} rotationY={0} width={6.8} height={1.7} />
+      <MicrosoftWallBanner position={[2.5, 2.25, -HALF_D + 0.03]} rotationY={0} width={6.2} height={1.6} />
 
       {/* Fluent UI Icon Gallery Display on the North Lobby Wall (Office apps & Power Platform icons) */}
-      <group position={[8.8, 2.2, -HALF_D + 0.03]}>
+      <group position={[8.4, 2.2, -HALF_D + 0.03]}>
         <FluentIconMesh name="powerapps" size={0.52} position={[-1.2, 0.42, 0]} showLabel />
         <FluentIconMesh name="powerautomate" size={0.52} position={[0, 0.42, 0]} showLabel />
         <FluentIconMesh name="powerbi" size={0.52} position={[1.2, 0.42, 0]} showLabel />
@@ -663,7 +663,7 @@ export function Lobby() {
       <Toys floor="lobby" />
       <Directory />
       <TrophyCabinet />
-      <WallClock position={[6.6, 2.8, -HALF_D + 0.05]} />
+      <WallClock position={[11.2, 2.85, -HALF_D + 0.05]} />
       <Couch position={[11.5, 0, 4]} rotationY={Math.PI} color="#5C2D91" />
       <CoffeeTable position={[11.5, 0, 6.2]} />
       <Plant position={[HALF_W - 0.7, 0, HALF_D - 0.7]} scale={1.2} />
