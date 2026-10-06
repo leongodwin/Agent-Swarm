@@ -258,27 +258,69 @@ export function Character({ agent }: { agent: Agent }) {
   );
 }
 
-function AgentThoughtBubble({ agent }: { agent: Agent }) {
+function getAgentThoughtLabel(agent: Agent): string {
   const busy = agent.status === 'working' || agent.status === 'preparing';
   const cheering = agent.status === 'done' && agent.endedAt != null && Date.now() - agent.endedAt < 7000;
   const isError = agent.status === 'error';
 
-  // Floating thought icon
-  const icon = busy
-    ? agent.currentTool?.startsWith('mcp__playwright')
-      ? '🌐 QA Harness'
-      : agent.currentTool === 'Bash' || agent.currentTool === 'PowerShell'
-        ? '⚡ PAC CLI'
-        : agent.status === 'preparing'
-          ? '📦 Solution Init'
-          : '💭 Prompt Node'
-    : isError
-      ? '❗ Needs Attention'
-      : cheering
-        ? '🎉 Solution Merged!'
-        : agent.role === 'qa'
-          ? '🛡️ Guardrails Ready'
-          : '✨ Standby';
+  if (!busy) {
+    if (isError) return '❗ Needs Attention';
+    if (cheering) return '🎉 Solution Merged!';
+    if (agent.role === 'qa') return '🛡️ Guardrails Ready';
+    return '✨ Standby';
+  }
+
+  if (agent.status === 'preparing') {
+    return '📦 Solution Init';
+  }
+
+  if (agent.currentTool?.startsWith('mcp__playwright')) {
+    return '🌐 QA Browser Test';
+  }
+
+  if (agent.currentTool === 'Bash' || agent.currentTool === 'PowerShell') {
+    return '⚡ PAC CLI';
+  }
+
+  const spec = (agent.specialty || '').toLowerCase();
+  const title = (agent.title || '').toLowerCase();
+  const issue = (agent.issueTitle || '').toLowerCase();
+
+  if (spec.includes('copilot') || title.includes('copilot') || issue.includes('copilot') || issue.includes('topic')) {
+    return '🤖 Copilot Topic';
+  }
+  if (spec.includes('flow') || title.includes('flow') || issue.includes('flow') || issue.includes('automate')) {
+    return '⚡ Cloud Flow';
+  }
+  if (spec.includes('dataverse') || title.includes('dataverse') || issue.includes('table') || issue.includes('schema') || issue.includes('entity')) {
+    return '💾 Dataverse Schema';
+  }
+  if (spec.includes('pcf') || title.includes('pcf') || issue.includes('pcf') || issue.includes('fluent')) {
+    return '🧩 PCF React Control';
+  }
+  if (spec.includes('security') || spec.includes('dlp') || issue.includes('dlp') || issue.includes('entra')) {
+    return '🛡️ DLP Policy Check';
+  }
+  if (spec.includes('architect') || title.includes('architect') || issue.includes('hld') || issue.includes('architecture')) {
+    return '📐 Solution Design';
+  }
+
+  if (agent.role === 'qa') {
+    return '🧪 QA Evaluation';
+  }
+
+  if (agent.currentTool === 'Edit' || agent.currentTool === 'Write') {
+    return '📝 Solution Code';
+  }
+
+  return '💻 Pro-Code Task';
+}
+
+function AgentThoughtBubble({ agent }: { agent: Agent }) {
+  const busy = agent.status === 'working' || agent.status === 'preparing';
+  const cheering = agent.status === 'done' && agent.endedAt != null && Date.now() - agent.endedAt < 7000;
+  const isError = agent.status === 'error';
+  const icon = getAgentThoughtLabel(agent);
 
   const tex = useCanvasTexture(
     256,

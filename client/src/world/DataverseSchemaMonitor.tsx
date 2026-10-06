@@ -41,9 +41,9 @@ export function DataverseSchemaMonitor({
       ctx.fillText('🗄️ MICROSOFT DATAVERSE SCHEMA & ERD EXPLORER', 28, 32);
 
       ctx.textAlign = 'right';
-      ctx.font = `600 18px ${SANS}`;
-      ctx.fillStyle = '#f5d0fe';
-      ctx.fillText('SOLUTION: contoso_core_v1.4.2 · ALM UNPACKED', texW - 28, 32);
+      ctx.font = `700 18px ${SANS}`;
+      ctx.fillStyle = '#fde047';
+      ctx.fillText('SOLUTION: contoso_core_v1.4.2 · [SIMULATED SCHEMA]', texW - 28, 32);
       ctx.textAlign = 'left';
 
       // 2. Entity Tables

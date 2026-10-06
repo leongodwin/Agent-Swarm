@@ -17,6 +17,8 @@ import { SolutionArchitectureBoard } from './SolutionArchitectureBoard';
 import { FlowRunHistoryBoard } from './FlowRunHistoryBoard';
 import { DataverseSchemaMonitor } from './DataverseSchemaMonitor';
 import { CopilotKiosk } from './CopilotKiosk';
+import { HldStation } from './HldStation';
+import { ReleaseApprovalStation } from './ReleaseApprovalStation';
 import { DataFlowPulseField } from './ParticleFx';
 
 export function WallSign({
@@ -91,6 +93,12 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
       <group position={[HALF_W - 0.12, 0.45, 3.2]} rotation={[0, -Math.PI / 2, 0]}>
         <DataFlowPulseField position={[0, -0.25, 0]} />
       </group>
+
+      {/* High-Level Design (HLD) Drafting Station & Architecture Hub */}
+      <HldStation position={[HALF_W - 2.8, 0, 7.2]} rotationY={-Math.PI / 3} repoId={repo.id} />
+
+      {/* Multi-Environment ALM Release Gate & Approval Station */}
+      <ReleaseApprovalStation position={[HALF_W - 2.8, 0, 3.8]} rotationY={-Math.PI / 3} />
 
       {/* Live Power Automate Flow Run History Telemetry Board (West Wall) */}
       <FlowRunHistoryBoard position={[-HALF_W + 0.05, 0.45, 0]} rotationY={Math.PI / 2} width={5.2} height={2.6} repoId={repo.id} />

@@ -9,6 +9,7 @@ import { defaultProjectsDir, HOME_DIR, LOG_BUFFER, SCHEDULER_INTERVAL_MS, STATE_
 import { ceoJobPrompt, ceoSystemPrompt, createOfficeTools, IssueCap, jobLabel, planRoute, specialtyLabel, specialtySlug, type CeoJob, type OfficeTools } from './ceo.ts';
 import { HttpError } from './httpError.ts';
 import { CHECKS_ALERT_MS, MAX_MERGE_FIXES, MERGE_RETRY_MS, mergeStep } from './mergeGate.ts';
+import { auditPrDiff, type DlpPolicyViolation } from '../shared/dlp.ts';
 import { DEFAULT_PREVIEW, Previews, parsePreviewPatch } from './previews.ts';
 import { drainDecision, lastUpdateMessage, POSTPONE_MS, type DrainInput, type LastUpdate } from './officeUpdate.ts';
 import { clampPacingSessions, DEFAULT_PACING_SESSIONS, mayStart, PACING_MS, pacingMessage, usageLabel, usageView, type UsageWarning, type WorkKind } from './pacing.ts';
@@ -108,7 +109,7 @@ interface QaRecord extends QaView {
   sessionFailures: number;
   testedSha: string | null; // the head commit QA is testing
   passedSha: string | null; // the head commit QA signed off on: auto-merge merges exactly that
-  fixReason: 'qa' | 'checks' | 'conflict' | null; // why it was last sent back to a developer
+  fixReason: 'qa' | 'checks' | 'conflict' | 'dlp' | null; // why it was last sent back to a developer
   mergeFixes: number; // times it went back for failing checks or conflicts
   retests: number; // QA rounds caused by merge fixes or new commits rather than by QA failing it
   pendingSince: number | null; // when auto-merge started waiting on its checks
@@ -1005,12 +1006,21 @@ export class Swarm {
 
   /** One step toward merging a QA-passed PR. Returns true when it merged. */
   private async advanceMerge(repo: PersistedRepo, rec: QaRecord, pr: PullInfo): Promise<boolean> {
-    let step = mergeStep(pr, rec, Date.now(), { base: repo.defaultBranch });
+    let dlpViolations: DlpPolicyViolation[] = [];
+    try {
+      const diff = await this.backend.prDiff(repo.fullName, pr.number);
+      if (diff) {
+        dlpViolations = auditPrDiff(diff);
+      }
+    } catch (err) {
+      console.warn(`DLP scan failed for ${repo.fullName}#${pr.number}`, err);
+    }
+    let step = mergeStep({ ...pr, dlpViolations }, rec, Date.now(), { base: repo.defaultBranch });
     if (step.do === 'details') {
       // GitHub works mergeability out lazily and lists often say UNKNOWN; asking about the PR itself gets an answer.
       const d = await this.backend.prDetails(repo.fullName, pr.number);
       pr = { ...pr, headSha: d.headSha, mergeable: d.mergeable, mergeState: d.mergeState };
-      step = mergeStep(pr, rec, Date.now(), { base: repo.defaultBranch, detailed: true });
+      step = mergeStep({ ...pr, dlpViolations }, rec, Date.now(), { base: repo.defaultBranch, detailed: true });
     }
     Object.assign(rec, step.set);
     if (step.do === 'requeue') {
@@ -1070,10 +1080,11 @@ export class Swarm {
   }
 
   /** QA passed, but the PR can't merge as it is: a developer fixes it, and QA re-tests if the code changed. */
-  private sendBack(repo: PersistedRepo, rec: QaRecord, reason: 'checks' | 'conflict', fixInstructions: string, needsHuman: boolean) {
+  private sendBack(repo: PersistedRepo, rec: QaRecord, reason: 'checks' | 'conflict' | 'dlp', fixInstructions: string, needsHuman: boolean) {
     if (needsHuman) {
       this.setQa(rec, { status: 'needs-human', mergeNote: null });
-      this.postMessage('office', `⚠️ PR #${rec.prNumber} on ${repo.fullName} still ${reason === 'conflict' ? `conflicts with ${repo.defaultBranch}` : 'fails its checks'} after ${MAX_MERGE_FIXES} fixes, so it needs you.`);
+      const desc = reason === 'conflict' ? `conflicts with ${repo.defaultBranch}` : reason === 'dlp' ? 'violates enterprise DLP policy' : 'fails its checks';
+      this.postMessage('office', `⚠️ PR #${rec.prNumber} on ${repo.fullName} still ${desc} after ${MAX_MERGE_FIXES} fixes, so it needs you.`);
       return false;
     }
     this.setQa(rec, { status: 'failed', fixReason: reason, fixInstructions, mergeFixes: rec.mergeFixes + 1, mergeNote: null, pendingSince: null });
@@ -1902,9 +1913,11 @@ export class Swarm {
         ? `\nQA passed it before, but since then the branch was updated with ${repo.defaultBranch} to resolve merge conflicts. Re-check everything, especially where this change meets the newly merged work.`
         : rec.fixReason === 'checks'
           ? '\nQA passed it before, but since then the developer changed the code to fix failing GitHub checks. Re-check everything.'
-          : rec.round > 1 && rec.summary
-            ? `\nThis is a re-test after fixes. Last round's findings:\n${rec.summary}\n${rec.fixInstructions ?? ''}\nCheck those first, then re-check everything else.`
-            : '',
+          : rec.fixReason === 'dlp'
+            ? '\nQA passed it before, but Enterprise DLP policy violations were detected before merge. Re-check connector configurations and endpoints.'
+            : rec.round > 1 && rec.summary
+              ? `\nThis is a re-test after fixes. Last round's findings:\n${rec.summary}\n${rec.fixInstructions ?? ''}\nCheck those first, then re-check everything else.`
+              : '',
       '',
       'PR description:',
       pr.body.trim() || '(empty)',
@@ -2027,7 +2040,13 @@ export class Swarm {
     this.beginTask(
       dev,
       { task: 'fix', issueNumber: rec.issueNumber, issueTitle: pull?.title ?? `PR #${rec.prNumber}`, branch: headRef, prNumber: rec.prNumber, prUrl: pull?.url ?? null },
-      rec.fixReason === 'conflict' ? `Resolving conflicts on PR #${rec.prNumber}` : rec.fixReason === 'checks' ? `Fixing checks on PR #${rec.prNumber}` : `Fixing PR #${rec.prNumber} after QA round ${rec.round}`,
+      rec.fixReason === 'conflict'
+        ? `Resolving conflicts on PR #${rec.prNumber}`
+        : rec.fixReason === 'checks'
+          ? `Fixing checks on PR #${rec.prNumber}`
+          : rec.fixReason === 'dlp'
+            ? `Remediating DLP policy violations on PR #${rec.prNumber}`
+            : `Fixing PR #${rec.prNumber} after QA round ${rec.round}`,
       `Checking out PR #${rec.prNumber}…`,
     );
     const cwd = await this.prepare(dev, repo, { pr: rec.prNumber }, headRef);
@@ -2054,7 +2073,15 @@ export class Swarm {
               `Read the logs with gh pr checks ${rec.prNumber} -R ${repo.fullName} (for GitHub Actions: gh run view <run id> -R ${repo.fullName} --log-failed). Fix the cause, run the same checks locally where you can, and ${push}`,
               `If a failure clearly has nothing to do with this change (a flaky test or a service outage), re-run it instead with gh run rerun <run id> -R ${repo.fullName} --failed, and say so.`,
             ]
-          : null;
+          : rec.fixReason === 'dlp'
+            ? [
+                `QA passed pull request #${rec.prNumber} (${pull?.url ?? ''}), but Enterprise Data Loss Prevention (DLP) policy violations were detected before merge.${takeover}`,
+                '',
+                `${rec.fixInstructions ?? ''}`,
+                '',
+                `Remediate these violations by removing or replacing blocked/unauthenticated connectors with approved enterprise connectors (Microsoft Dataverse, Azure OpenAI, Teams, SharePoint), and ${push}`,
+              ]
+            : null;
     const qaFix = [
       original
         ? `QA tester ${qaAgent?.name ?? 'QA'} tested your pull request #${rec.prNumber} and it FAILED (round ${rec.round}).`

@@ -18,6 +18,8 @@ import { Toys } from './toys';
 import { FluentIconMesh, MicrosoftWallBanner } from './FluentIcons';
 import { CopilotKiosk } from './CopilotKiosk';
 import { DlpSecurityKiosk } from './DlpSecurityKiosk';
+import { ProposalDesk } from './ProposalDesk';
+import { ReleaseApprovalStation } from './ReleaseApprovalStation';
 import { CoffeeSteam, HolographicSpire } from './ParticleFx';
 
 // Microsoft Fluent UI Inspired Palette: Fluent Electric Blue & Copilot Purple
@@ -656,6 +658,12 @@ export function Lobby() {
         <Cyl r={0.3} h={0.6} position={[0, 0.3, 0]} color="#1e2430" outline />
         <FluentIconMesh name="powerplatform" size={0.58} position={[0, 1.0, 0]} rotation={[0, Math.PI, 0]} showLabel />
       </group>
+
+      {/* Pre-Sales Commercial Proposal & SOW Generator Station */}
+      <ProposalDesk position={[-8.5, 0, 4.5]} rotationY={Math.PI / 4} />
+
+      {/* Multi-Environment ALM Release Gate & Approval Station */}
+      <ReleaseApprovalStation position={[-8.5, 0, 7.5]} rotationY={Math.PI / 4} />
 
       <CeoOffice />
       <WaitingRoom />
