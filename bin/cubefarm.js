@@ -91,7 +91,7 @@ function runCopilot(args, options = {}) {
 
 // ---------- checks ----------
 
-const sh = (cmd, cmdArgs, env) => spawnSync(cmd, cmdArgs, { encoding: 'utf8', windowsHide: true, timeout: 30_000, env });
+const sh = (cmd, cmdArgs, env) => spawnSync(cmd, cmdArgs, { encoding: 'utf8', windowsHide: true, timeout: 30_000, env, shell: process.platform === 'win32' });
 
 /** What the office needs: { name, ok, detail, fix, required }. */
 function checks() {
@@ -122,13 +122,14 @@ function checks() {
   out.push({ name: 'Chrome', ok: chrome, detail: chrome ? 'for browser testing' : 'not found', fix: 'install Google Chrome so agents can test in a browser' });
 
   // Microsoft Power Platform CLI (pac) for unpacking and packing solutions
-  const pac = sh('pac', ['--version']);
+  const pac = sh('pac', ['help']);
   const hasPac = pac.status === 0;
+  const pacVer = pac.stdout?.split(/\r?\n/).find((l) => l.startsWith('Version:'))?.replace('Version:', '').trim().split(' ')[0];
   out.push({
     name: 'pac CLI',
     ok: hasPac,
-    detail: hasPac ? (pac.stdout?.trim().split(/\r?\n/)[0] || 'installed') : 'optional (for Power Platform ALM)',
-    fix: 'install Microsoft Power Platform CLI: https://aka.ms/powerplatform-cli',
+    detail: hasPac ? (pacVer ? `v${pacVer}` : 'installed') : 'optional (for Power Platform ALM)',
+    fix: 'install Microsoft Power Platform CLI: https://aka.ms/PowerAppsCLI',
     required: false,
   });
 
