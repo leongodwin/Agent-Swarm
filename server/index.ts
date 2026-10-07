@@ -10,6 +10,25 @@ import { handleHook, handleMcp, setOfficeUrl } from './cliRunner.ts';
 import { createDemoBackend } from './demo.ts';
 import { underLauncher } from './officeUpdate.ts';
 import { HttpError, Swarm } from './swarm.ts';
+import { generateProposal } from './proposalAgent.ts';
+import { generateHld } from './hldAgent.ts';
+import { parseSolutionFolder } from '../shared/solutionParser.ts';
+import { scanDirectoryDlp } from './dlpScanner.ts';
+import { INITIAL_FLOW_RUNS } from '../shared/flowTelemetry.ts';
+import { buildTeamsCard, formatAdaptiveCardJson, type TeamsAdaptiveCard } from '../shared/teams.ts';
+import { almManager } from './almGate.ts';
+
+const recentTeamsMessages: TeamsAdaptiveCard[] = [
+  buildTeamsCard({
+    title: 'Adaptive Card Dispatched',
+    subtitle: 'Copilot Studio · Autonomous Routing',
+    summary: 'Customer incident #10492 triaged. Adaptive Card dispatched to supervisor channel.',
+    facts: [
+      { title: 'Severity', value: 'High' },
+      { title: 'Agent', value: 'Ada (Copilot Architect)' },
+    ],
+  }),
+];
 
 const swarm = new Swarm(DEMO ? createDemoBackend() : realBackend);
 // Sessions the office picks back up while it starts need the address their CLIs call back on before it listens.
@@ -101,6 +120,88 @@ app.post(
 );
 app.post('/api/repos/:repo/plan', route((req) => swarm.planFloor(repoId(req), typeof req.body?.mission === 'string' ? req.body.mission : undefined)));
 app.post('/api/repos/:repo/onboard', route((req) => swarm.onboardFloor(repoId(req))));
+
+// Strategic Pre-Sales & Architecture Generator Agents
+app.post('/api/proposals/generate', route((req) => generateProposal(req.body)));
+app.post('/api/hld/generate', route((req) => generateHld(req.body)));
+
+// Repo-Driven Solution Architecture Parser
+app.get('/api/repos/:repo/solution-architecture', route((req) => {
+  const repo = swarm.snapshot().repos.find((r) => r.id === repoId(req));
+  return parseSolutionFolder(repo?.checkoutPath ?? null);
+}));
+
+// Repo DLP Policy Scanner
+app.get('/api/repos/:repo/dlp-scan', route((req) => {
+  const repos = swarm.snapshot().repos;
+  const requestedId = repoId(req);
+  const repo = repos.find((r) => r.id === requestedId) ?? repos[0];
+  const checkoutPath = repo?.checkoutPath ?? null;
+  return scanDirectoryDlp(checkoutPath, repo?.fullName ?? 'demo/powerplatform-solution');
+}));
+
+// Power Automate Flow Telemetry & Execution Runs
+app.get('/api/repos/:repo/flow-runs', route(() => INITIAL_FLOW_RUNS));
+app.post('/api/repos/:repo/flow-runs/:runId/resubmit', route((req) => {
+  const runId = String(req.params.runId);
+  const found = INITIAL_FLOW_RUNS.find((r) => r.id === runId) ?? INITIAL_FLOW_RUNS[0];
+  const newRun = {
+    ...found,
+    id: `resubmit-${Date.now().toString().slice(-6)}`,
+    startedAt: 'Just now',
+    status: 'Succeeded' as const,
+  };
+  return { ok: true, resubmitted: newRun };
+}));
+
+// Microsoft Teams Webhook & Feed
+app.get('/api/teams/feed', route(() => recentTeamsMessages));
+app.post('/api/teams/notify', route((req) => {
+  const card = buildTeamsCard({
+    title: str(req.body.title) || 'Cubefarm Agent Notification',
+    subtitle: str(req.body.subtitle) || 'Swarm Activity',
+    summary: str(req.body.summary) || 'Agent activity event triggered.',
+    facts: Array.isArray(req.body.facts) ? req.body.facts : [],
+  });
+  recentTeamsMessages.unshift(card);
+  if (recentTeamsMessages.length > 20) recentTeamsMessages.pop();
+
+  const webhookUrl = process.env.TEAMS_INCOMING_WEBHOOK_URL;
+  if (webhookUrl) {
+    fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(formatAdaptiveCardJson(card)),
+    }).catch((err) => console.error('Failed to post to Teams webhook:', err));
+  }
+
+  return { ok: true, card };
+}));
+
+almManager.setNotifier((cardInput) => {
+  const card = buildTeamsCard({
+    title: cardInput.title,
+    subtitle: cardInput.subtitle || '',
+    summary: cardInput.summary || '',
+    facts: cardInput.facts,
+  });
+  recentTeamsMessages.unshift(card);
+  if (recentTeamsMessages.length > 20) recentTeamsMessages.pop();
+  const webhookUrl = process.env.TEAMS_INCOMING_WEBHOOK_URL;
+  if (webhookUrl) {
+    fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(formatAdaptiveCardJson(card)),
+    }).catch((err) => console.error('Failed to post to Teams webhook:', err));
+  }
+});
+
+// Application Lifecycle Management (ALM) Multi-Environment Release Gate
+app.get('/api/alm/pipeline', route(() => almManager.getPipeline()));
+app.post('/api/alm/approve', route((req) => almManager.approveRelease(str(req.body?.approver) || undefined)));
+app.post('/api/alm/rollback', route(() => almManager.rollbackRelease()));
+
 // The floor's app, for the preview monitor
 app.post(
   '/api/repos/:repo/preview',

@@ -1,166 +1,70 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Panel } from './Overlays';
+import { useStore } from '../store';
+import { api } from '../api';
+import { INITIAL_FLOW_RUNS, type FlowRun } from '../../../shared/flowTelemetry';
 
-interface FlowRun {
-  id: string;
-  triggerName: string;
-  triggerType: string;
-  status: 'Succeeded' | 'Failed' | 'Running';
-  startedAt: string;
-  duration: string;
-  flowId: string;
-  steps: {
-    num: number;
-    name: string;
-    type: string;
-    duration: string;
-    status: string;
-    color: string;
-    input: Record<string, unknown>;
-    output: Record<string, unknown>;
-  }[];
-}
+const DEMO_RUNS = INITIAL_FLOW_RUNS;
 
-const DEMO_RUNS: FlowRun[] = [
-  {
-    id: '20261003-0948-21',
-    triggerName: 'When a HTTP request is received (Copilot Studio Action)',
-    triggerType: 'Request Trigger',
-    status: 'Succeeded',
-    startedAt: 'Just now',
-    duration: '312 ms',
-    flowId: 'flw_dispatch_ticket_v2',
-    steps: [
-      {
-        num: 1,
-        name: 'When a HTTP request is received (Copilot Studio Action)',
-        type: 'Trigger · Request',
-        duration: '14 ms',
-        status: '200 OK',
-        color: '#38bdf8',
-        input: { method: 'POST', schema: 'ServiceRequestTicketSchema' },
-        output: { ticketId: 'CAS-10492-X9', urgency: 'High', customerEmail: 'alex.w@contoso.com' },
-      },
-      {
-        num: 2,
-        name: 'Microsoft Dataverse: Get row by ID (cr_ticket)',
-        type: 'Action · Dataverse Connector',
-        duration: '124 ms',
-        status: '200 OK',
-        color: '#c084fc',
-        input: { table: 'cr_tickets', rowId: '7f91a2bc-33d1-4e89-a1b2' },
-        output: { cr_ticketnumber: 'CAS-10492-X9', cr_slahours: 2, cr_owner: 'Fabrikam Support' },
-      },
-      {
-        num: 3,
-        name: 'Condition: Evaluate SLA Urgency & Routing Policy',
-        type: 'Control · Condition Branch',
-        duration: '2 ms',
-        status: 'TRUE',
-        color: '#facc15',
-        input: { expression: 'less(body("Dataverse")?["cr_slahours"], 4)' },
-        output: { branchTaken: 'EscalationTier2' },
-      },
-      {
-        num: 4,
-        name: 'Microsoft Teams: Post Adaptive Card to Tier 2 Escalations',
-        type: 'Action · Teams Connector v3',
-        duration: '168 ms',
-        status: '201 Created',
-        color: '#60a5fa',
-        input: { channelId: '19:support-escalations@thread.tacv2', cardVersion: '1.5' },
-        output: { messageId: 'msg_9941', status: 'Delivered', recipientCount: 8 },
-      },
-      {
-        num: 5,
-        name: 'Respond to Copilot Studio with Adaptive Card Payload',
-        type: 'Action · HTTP Response',
-        duration: '4 ms',
-        status: '200 OK',
-        color: '#4ade80',
-        input: { statusCode: 200, contentType: 'application/json' },
-        output: { escalationDispatched: true, ticketNumber: 'CAS-10492-X9', queueStatus: 'Assigned to Tier 2' },
-      },
-    ],
-  },
-  {
-    id: '20261003-0944-10',
-    triggerName: 'When a row is added or modified (Dataverse Webhook)',
-    triggerType: 'Dataverse Trigger',
-    status: 'Succeeded',
-    startedAt: '4m ago',
-    duration: '428 ms',
-    flowId: 'flw_dataverse_sync_audit',
-    steps: [
-      {
-        num: 1,
-        name: 'When a row is added or modified (Dataverse)',
-        type: 'Trigger · Dataverse',
-        duration: '18 ms',
-        status: '200 OK',
-        color: '#e879f9',
-        input: { entityName: 'cr_servicetickets', message: 'Update' },
-        output: { rowId: '5420-bba-112', modifiedBy: 'copilot-agent' },
-      },
-      {
-        num: 2,
-        name: 'Audit Trail Logger (Blob Storage)',
-        type: 'Action · Azure Blob',
-        duration: '410 ms',
-        status: '200 OK',
-        color: '#38bdf8',
-        input: { container: 'audit-logs-2026' },
-        output: { blobUrl: 'https://contosostorage.blob.core.windows.net/audit/20261003.json' },
-      },
-    ],
-  },
-  {
-    id: '20261003-0938-55',
-    triggerName: 'Adaptive Card Submit Action from Teams Mobile',
-    triggerType: 'Teams Webhook',
-    status: 'Succeeded',
-    startedAt: '9m ago',
-    duration: '184 ms',
-    flowId: 'flw_adaptive_card_response',
-    steps: [
-      {
-        num: 1,
-        name: 'When an Adaptive Card action is submitted',
-        type: 'Trigger · Teams',
-        duration: '12 ms',
-        status: '200 OK',
-        color: '#60a5fa',
-        input: { action: 'ApproveEscalation' },
-        output: { approvedBy: 'leon@contoso.com', notes: 'Approved for priority handling' },
-      },
-      {
-        num: 2,
-        name: 'Update Dataverse Row Status (Approved)',
-        type: 'Action · Dataverse',
-        duration: '172 ms',
-        status: '200 OK',
-        color: '#4ade80',
-        input: { statusCode: 100001 },
-        output: { updated: true },
-      },
-    ],
-  },
-];
-
-export function FlowRunHistoryView(_props: { repoId?: string }) {
-  const [selectedRunId, setSelectedRunId] = useState<string>(DEMO_RUNS[0].id);
+export function FlowRunHistoryView({ repoId }: { repoId?: string }) {
+  const [runs, setRuns] = useState<FlowRun[]>(INITIAL_FLOW_RUNS);
+  const [selectedRunId, setSelectedRunId] = useState<string>(INITIAL_FLOW_RUNS[0].id);
   const [selectedStepIdx, setSelectedStepIdx] = useState<number>(0);
-  const selectedRun = DEMO_RUNS.find((r) => r.id === selectedRunId) ?? DEMO_RUNS[0];
-  const selectedStep = selectedRun.steps[selectedStepIdx] ?? selectedRun.steps[0];
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const repos = useStore((s) => s.repos);
+  const pushToast = useStore((s) => s.pushToast);
+  const repo = repos.find((r) => r.id === repoId) ?? repos[0];
+
+  const fetchRuns = () => {
+    if (!repo?.id) return;
+    setIsRefreshing(true);
+    api.flowRuns(repo.id)
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setRuns(data);
+          if (!data.some((r) => r.id === selectedRunId)) {
+            setSelectedRunId(data[0].id);
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsRefreshing(false));
+  };
+
+  useEffect(() => {
+    fetchRuns();
+  }, [repo?.id]);
+
+  const selectedRun = runs.find((r) => r.id === selectedRunId) ?? runs[0] ?? DEMO_RUNS[0];
+  const selectedStep = selectedRun?.steps?.[selectedStepIdx] ?? selectedRun?.steps?.[0] ?? {
+    num: 1, name: 'Default Step', type: 'Action', duration: '0 ms', status: '200 OK', color: '#38bdf8', input: {}, output: {}
+  };
+
+  const handleResubmit = async () => {
+    try {
+      const res = await api.resubmitFlowRun(repo?.id || 'demo', selectedRun.id);
+      if (res?.resubmitted) {
+        setRuns((prev) => [res.resubmitted, ...prev]);
+        setSelectedRunId(res.resubmitted.id);
+        setSelectedStepIdx(0);
+        pushToast('success', `⚡ Resubmitted flow ${selectedRun.flowId} successfully (ID: ${res.resubmitted.id})`);
+      }
+    } catch {
+      pushToast('error', 'Failed to resubmit flow run');
+    }
+  };
 
   return (
     <Panel
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 22 }}>⚡</span>
-          <span>Power Automate · Cloud Flow Telemetry & Run Engine</span>
+          <span>Power Automate · Cloud Flow Telemetry & Run Engine {repo ? `(${repo.fullName})` : ''}</span>
           <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 999, background: '#0066FF', color: '#fff', fontWeight: 600 }}>
             FLOW: {selectedRun.flowId}
+          </span>
+          <span style={{ fontSize: 11, color: '#f59e0b', background: '#451a03', border: '1px solid #b45309', padding: '2px 8px', borderRadius: 6, fontWeight: 700, letterSpacing: '0.04em' }}>
+            ⚠️ SIMULATED TELEMETRY
           </span>
         </div>
       }
@@ -173,12 +77,27 @@ export function FlowRunHistoryView(_props: { repoId?: string }) {
         <div style={{ background: '#0f172a', borderRadius: 12, padding: 14, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1e293b', paddingBottom: 8 }}>
             <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 700 }}>RECENT RUN HISTORY</span>
-            <span style={{ fontSize: 11, color: '#38bdf8' }}>5 Succeeded</span>
+            <button
+              onClick={fetchRuns}
+              disabled={isRefreshing}
+              style={{
+                background: 'transparent',
+                border: '1px solid #334155',
+                color: '#38bdf8',
+                borderRadius: 4,
+                padding: '2px 6px',
+                fontSize: 11,
+                cursor: isRefreshing ? 'wait' : 'pointer',
+              }}
+            >
+              {isRefreshing ? '…' : '🔄 Refresh'}
+            </button>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' }}>
-            {DEMO_RUNS.map((r) => {
+            {runs.map((r) => {
               const active = r.id === selectedRunId;
+
               return (
                 <button
                   key={r.id}
@@ -325,7 +244,7 @@ export function FlowRunHistoryView(_props: { repoId?: string }) {
           </div>
 
           <button
-            onClick={() => alert(`Re-testing flow ${selectedRun.flowId} with payload from run ${selectedRun.id}`)}
+            onClick={handleResubmit}
             style={{
               background: '#0066FF',
               color: '#fff',

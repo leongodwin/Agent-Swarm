@@ -19,6 +19,10 @@ export type Overlay =
   | { kind: 'flow-runs'; repoId?: string }
   | { kind: 'visual-cv' }
   | { kind: 'war-room-ideator' }
+  | { kind: 'proposal'; ideaId?: string }
+  | { kind: 'hld'; repoId?: string }
+  | { kind: 'dlp-kiosk' }
+  | { kind: 'alm-kiosk' }
   | { kind: 'help' };
 
 export type ManagerTab = 'floors' | 'ceo' | 'team' | 'issues' | 'settings' | 'powerbi';
@@ -40,6 +44,120 @@ export interface Toast {
   level: 'info' | 'success' | 'error';
   text: string;
 }
+
+export interface TourWaypoint {
+  id: string;
+  title: string;
+  floor: number;
+  x: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  description: string;
+}
+
+export const TOUR_WAYPOINTS: TourWaypoint[] = [
+  {
+    id: 'lobby',
+    title: 'Digital Directory & Reception',
+    floor: 0,
+    x: 0,
+    z: 9.2,
+    yaw: Math.PI,
+    pitch: -0.05,
+    description: 'Ground Floor Lobby with live enterprise floor index & navigation elevator.',
+  },
+  {
+    id: 'war-room',
+    title: 'Agent Swarm War Room & Ideation Lab',
+    floor: 0,
+    x: -8.8,
+    z: -7.5,
+    yaw: 0.8,
+    pitch: -0.15,
+    description: 'Autonomous collaboration center where business challenges transform into architecture & backlog issues.',
+  },
+  {
+    id: 'copilot-kiosk',
+    title: 'Copilot Studio Interactive Kiosk',
+    floor: 0,
+    x: 7.2,
+    z: 4.2,
+    yaw: -Math.PI / 4,
+    pitch: -0.08,
+    description: 'Direct conversational test terminal with live topic graph visualization.',
+  },
+  {
+    id: 'ceo-office',
+    title: 'CEO & Principal Architect Suite',
+    floor: 0,
+    x: 9.8,
+    z: -9.5,
+    yaw: -2.35,
+    pitch: -0.1,
+    description: 'Executive management terminal synthesizing goals, proposals, and team briefs.',
+  },
+  {
+    id: 'solution-arch',
+    title: 'Power Platform Solution Architecture Canvas',
+    floor: 1,
+    x: 7.5,
+    z: 3.2,
+    yaw: -Math.PI / 2,
+    pitch: -0.05,
+    description: 'Live 4-tier solution component topology unpacked from Git repo.',
+  },
+  {
+    id: 'flow-telemetry',
+    title: 'Power Automate Flow Run Telemetry Wall',
+    floor: 1,
+    x: -7.5,
+    z: 0,
+    yaw: Math.PI / 2,
+    pitch: -0.05,
+    description: 'Real-time cloud flow invocation stream, trigger latency, and execution diagnostics.',
+  },
+  {
+    id: 'dataverse-erd',
+    title: 'Dataverse Schema & ERD Visualizer',
+    floor: 1,
+    x: 9.8,
+    z: -8.5,
+    yaw: 0,
+    pitch: -0.05,
+    description: 'Relational entity model, column-level security, and ALM migration tracker.',
+  },
+  {
+    id: 'qa-guardrails',
+    title: 'Copilot Evaluation & Guardrails Lab',
+    floor: 1,
+    x: 7.5,
+    z: -2.0,
+    yaw: -Math.PI / 2,
+    pitch: -0.05,
+    description: 'Continuous automated QA testing, browser validation, and DLP compliance gate.',
+  },
+  {
+    id: 'proposal-desk',
+    title: 'Pre-Sales Proposal & Commercial SOW Suite',
+    floor: 0,
+    x: -8.5,
+    z: 3.2,
+    yaw: Math.PI / 4,
+    pitch: -0.08,
+    description: 'Executive proposal generator calculating licensing BOM, ROI, and commercial Statements of Work.',
+  },
+  {
+    id: 'hld-station',
+    title: 'High-Level Design (HLD) Drafting Station',
+    floor: 1,
+    x: 8.5,
+    z: 6.2,
+    yaw: -Math.PI / 3,
+    pitch: -0.08,
+    description: 'Principal Architect workstation synthesizing Well-Architected Framework HLDs with embedded Mermaid schematics.',
+  },
+];
 
 interface State {
   connected: boolean;
@@ -64,6 +182,7 @@ interface State {
   officeUpdate?: OfficeUpdateView;
   usage: UsageView; // Claude's subscription usage: normal, pacing after a warning, or paused at the limit
   restarting: boolean; // the connection dropped because the office is restarting to update
+  lightMode: 'daylight' | 'keynote';
 
   floor: number; // 0 = lobby
   travel: { to: number; phase: 'closing' | 'opening' } | null;
@@ -75,11 +194,13 @@ interface State {
   held: Held | null;
   /** performance.now() when the player started charging a throw; null when they aren't. */
   chargeAt: number | null;
+  tourIndex: number | null;
 
   apply(ev: ServerEvent): void;
   setConnected(v: boolean): void;
   setRestarting(v: boolean): void;
   setOfficeUpdate(u: OfficeUpdateView): void;
+  toggleLightMode(): void;
   openOverlay(o: Overlay | null): void;
   setFocus(f: Focus | null): void;
   /** Pick something up (or swap), or let go of it with null. Always ends a charge. */
@@ -91,6 +212,10 @@ interface State {
   finishTravel(phase: 'arrived' | 'done'): void;
   pushToast(level: Toast['level'], text: string): void;
   dismissToast(id: number): void;
+  setTourIndex(idx: number | null): void;
+  nextTourWaypoint(): void;
+  prevTourWaypoint(): void;
+  toggleTour(): void;
 }
 
 let toastSeq = 1;
@@ -159,6 +284,7 @@ export const useStore = create<State>((set, get) => ({
   phoneReadAt: 0,
   usage: { state: 'normal', until: null },
   restarting: false,
+  lightMode: 'daylight',
 
   floor: loadView()?.floor ?? 0,
   travel: null,
@@ -316,6 +442,41 @@ export const useStore = create<State>((set, get) => ({
   setConnected: (connected) => set({ connected }),
   setRestarting: (restarting) => set({ restarting }),
   setOfficeUpdate: (officeUpdate) => set({ officeUpdate }),
+  tourIndex: null,
+  setTourIndex(tourIndex) {
+    if (tourIndex !== null) {
+      const wp = TOUR_WAYPOINTS[tourIndex];
+      if (wp && wp.floor !== get().floor) {
+        get().goToFloor(wp.floor);
+      }
+      if (typeof document !== 'undefined' && document.pointerLockElement) document.exitPointerLock();
+    }
+    set({ tourIndex, overlay: null });
+  },
+  nextTourWaypoint() {
+    const cur = get().tourIndex ?? -1;
+    const next = (cur + 1) % TOUR_WAYPOINTS.length;
+    get().setTourIndex(next);
+  },
+  prevTourWaypoint() {
+    const cur = get().tourIndex ?? 0;
+    const prev = (cur - 1 + TOUR_WAYPOINTS.length) % TOUR_WAYPOINTS.length;
+    get().setTourIndex(prev);
+  },
+  toggleTour() {
+    if (get().tourIndex !== null) {
+      get().setTourIndex(null);
+      get().pushToast('info', 'Exited Presenter Tour');
+    } else {
+      get().setTourIndex(0);
+      get().pushToast('info', '🎥 Presenter Tour Mode Active (Use ◀ / ▶ or Press T to toggle)');
+    }
+  },
+  toggleLightMode() {
+    const next = get().lightMode === 'daylight' ? 'keynote' : 'daylight';
+    set({ lightMode: next });
+    get().pushToast('info', next === 'keynote' ? '🌙 Cyber Keynote Lighting Active' : '☀️ Studio Daylight Active');
+  },
   openOverlay(overlay) {
     // Opening any panel drops whatever you're carrying, so nothing is left floating behind it.
     set(overlay ? { overlay, focus: null, held: null, chargeAt: null } : { overlay });

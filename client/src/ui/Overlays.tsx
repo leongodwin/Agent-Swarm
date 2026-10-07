@@ -1,19 +1,24 @@
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useSyncExternalStore, lazy, Suspense, type ReactNode } from 'react';
 import { useStore } from '../store';
 import { SENSITIVITY_MAX, SENSITIVITY_MIN, useLookPrefs } from '../world/look';
 import { CEO_ID } from '../../../shared/types';
 import { AppViewer } from './AppViewer';
 import { ElevatorPanel } from './ElevatorPanel';
 import { KanbanView } from './KanbanView';
-import { ManagerConsole } from './ManagerConsole';
 import { Phone } from './Phone';
 import { TerminalView } from './TerminalView';
-import { SolutionArchitectureView } from './SolutionArchitectureView';
-import { FlowRunHistoryView } from './FlowRunHistoryView';
-import { VisualCvView } from './VisualCvView';
-import { WarRoomIdeatorModal } from './WarRoomIdeatorModal';
-import { CopilotChatOverlay } from './CopilotChatOverlay';
 import { getAudioPrefs, setAudioPrefs, subscribeAudio } from './sfx';
+
+const ManagerConsole = lazy(() => import('./ManagerConsole').then((m) => ({ default: m.ManagerConsole })));
+const SolutionArchitectureView = lazy(() => import('./SolutionArchitectureView').then((m) => ({ default: m.SolutionArchitectureView })));
+const FlowRunHistoryView = lazy(() => import('./FlowRunHistoryView').then((m) => ({ default: m.FlowRunHistoryView })));
+const VisualCvView = lazy(() => import('./VisualCvView').then((m) => ({ default: m.VisualCvView })));
+const WarRoomIdeatorModal = lazy(() => import('./WarRoomIdeatorModal').then((m) => ({ default: m.WarRoomIdeatorModal })));
+const CopilotChatOverlay = lazy(() => import('./CopilotChatOverlay').then((m) => ({ default: m.CopilotChatOverlay })));
+const ProposalModal = lazy(() => import('./ProposalModal').then((m) => ({ default: m.ProposalModal })));
+const HldViewerModal = lazy(() => import('./HldViewerModal').then((m) => ({ default: m.HldViewerModal })));
+const DlpSecurityModal = lazy(() => import('./DlpSecurityModal').then((m) => ({ default: m.DlpSecurityModal })));
+const ReleasePipelineModal = lazy(() => import('./ReleasePipelineModal').then((m) => ({ default: m.ReleasePipelineModal })));
 
 // Closing a panel grabs the mouse again right away (world/lookLock.ts; "Grab the mouse when panels
 // close" in help turns that off), and mouse presses are swallowed for a moment so a double click on
@@ -172,30 +177,43 @@ function Help() {
 export function Overlays() {
   const overlay = useStore((s) => s.overlay);
   if (!overlay) return null;
-  switch (overlay.kind) {
-    case 'terminal':
-      return overlay.agentId === CEO_ID ? <ManagerConsole initialTab="ceo" /> : <TerminalView agentId={overlay.agentId} />;
-    case 'phone':
-      return <Phone tab={overlay.tab} requestId={overlay.requestId} />;
-    case 'kanban':
-      return <KanbanView repoId={overlay.repoId} />;
-    case 'solution-architecture':
-      return <SolutionArchitectureView repoId={overlay.repoId} />;
-    case 'flow-runs':
-      return <FlowRunHistoryView repoId={overlay.repoId} />;
-    case 'visual-cv':
-      return <VisualCvView />;
-    case 'war-room-ideator':
-      return <WarRoomIdeatorModal />;
-    case 'app':
-      return <AppViewer repoId={overlay.repoId} />;
-    case 'elevator':
-      return <ElevatorPanel />;
-    case 'manager':
-      return <ManagerConsole initialTab={overlay.tab} initialRepo={overlay.repoId} />;
-    case 'copilot':
-      return <CopilotChatOverlay onClose={() => closeOverlay()} />;
-    case 'help':
-      return <Help />;
-  }
+
+  const renderContent = () => {
+    switch (overlay.kind) {
+      case 'terminal':
+        return overlay.agentId === CEO_ID ? <ManagerConsole initialTab="ceo" /> : <TerminalView agentId={overlay.agentId} />;
+      case 'phone':
+        return <Phone tab={overlay.tab} requestId={overlay.requestId} />;
+      case 'kanban':
+        return <KanbanView repoId={overlay.repoId} />;
+      case 'solution-architecture':
+        return <SolutionArchitectureView repoId={overlay.repoId} />;
+      case 'flow-runs':
+        return <FlowRunHistoryView repoId={overlay.repoId} />;
+      case 'visual-cv':
+        return <VisualCvView />;
+      case 'war-room-ideator':
+        return <WarRoomIdeatorModal />;
+      case 'app':
+        return <AppViewer repoId={overlay.repoId} />;
+      case 'elevator':
+        return <ElevatorPanel />;
+      case 'manager':
+        return <ManagerConsole initialTab={overlay.tab} initialRepo={overlay.repoId} />;
+      case 'copilot':
+        return <CopilotChatOverlay onClose={() => closeOverlay()} />;
+      case 'proposal':
+        return <ProposalModal ideaId={overlay.ideaId} />;
+      case 'hld':
+        return <HldViewerModal repoId={overlay.repoId} />;
+      case 'dlp-kiosk':
+        return <DlpSecurityModal />;
+      case 'alm-kiosk':
+        return <ReleasePipelineModal onClose={() => closeOverlay()} />;
+      case 'help':
+        return <Help />;
+    }
+  };
+
+  return <Suspense fallback={null}>{renderContent()}</Suspense>;
 }

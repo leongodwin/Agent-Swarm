@@ -1,24 +1,12 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Panel } from './Overlays';
 import { useStore } from '../store';
+import { api } from '../api';
+import type { SolutionComponentNode } from '../../../shared/solutionTypes';
 
-interface NodeDetail {
-  id: string;
-  category: string;
-  name: string;
-  badge: string;
-  badgeBg: string;
-  summary: string;
-  techStack: string[];
-  telemetry: {
-    invocations: string;
-    avgLatency: string;
-    successRate: string;
-  };
-  details: string;
-}
+export type { SolutionComponentNode };
 
-const ARCH_NODES: Record<string, NodeDetail> = {
+const ARCH_NODES: Record<string, SolutionComponentNode> = {
   teams: {
     id: 'teams',
     category: '1. Engagement Channel',
@@ -165,10 +153,38 @@ const ARCH_NODES: Record<string, NodeDetail> = {
 };
 
 export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
+  const [nodes, setNodes] = useState<Record<string, SolutionComponentNode>>(ARCH_NODES);
+  const [isUnpacked, setIsUnpacked] = useState(false);
   const [selectedId, setSelectedId] = useState<string>('copilot_engine');
-  const selectedNode = ARCH_NODES[selectedId] ?? ARCH_NODES.copilot_engine;
   const repos = useStore((s) => s.repos);
   const repo = repos.find((r) => r.id === repoId) ?? repos[0];
+
+  useEffect(() => {
+    if (!repo?.id) return;
+    let active = true;
+    api.solutionArchitecture(repo.id)
+      .then((data) => {
+        if (active && data?.components && Object.keys(data.components).length > 0) {
+          setNodes(data.components);
+          setIsUnpacked(Boolean(data.isUnpacked));
+          if (!data.components[selectedId]) {
+            const first = Object.keys(data.components)[0];
+            if (first) setSelectedId(first);
+          }
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [repo?.id]);
+
+  const selectedNode: SolutionComponentNode = nodes[selectedId] ?? Object.values(nodes)[0] ?? ARCH_NODES.copilot_engine;
+
+  const tier1 = Object.values(nodes).filter((n) => n.category.includes('1.') || n.category.toLowerCase().includes('channel') || n.category.toLowerCase().includes('engagement'));
+  const tier2 = Object.values(nodes).filter((n) => n.category.includes('2.') || n.category.toLowerCase().includes('copilot'));
+  const tier3 = Object.values(nodes).filter((n) => n.category.includes('3.') || n.category.toLowerCase().includes('automate') || n.category.toLowerCase().includes('logic') || n.category.toLowerCase().includes('flow'));
+  const tier4 = Object.values(nodes).filter((n) => n.category.includes('4.') || n.category.toLowerCase().includes('dataverse') || n.category.toLowerCase().includes('storage') || n.category.toLowerCase().includes('data'));
 
   return (
     <Panel
@@ -192,23 +208,33 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
             <span style={{ color: '#94a3b8', fontSize: 13, fontWeight: 500 }}>
               Showing solution components for <strong>{repo ? repo.fullName : 'contoso/copilot-customer-service'}</strong>
             </span>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {isUnpacked ? (
+                <span style={{ fontSize: 11, color: '#34d399', background: '#064e3b', border: '1px solid #059669', padding: '3px 8px', borderRadius: 6, fontWeight: 700, letterSpacing: '0.04em' }}>
+                  ● REPO UNPACKED SOLUTION
+                </span>
+              ) : (
+                <span style={{ fontSize: 11, color: '#f59e0b', background: '#451a03', border: '1px solid #b45309', padding: '3px 8px', borderRadius: 6, fontWeight: 700, letterSpacing: '0.04em' }}>
+                  ⚠️ SIMULATED ARCHITECTURE
+                </span>
+              )}
               <span style={{ fontSize: 12, color: '#38bdf8', background: '#082f49', padding: '3px 8px', borderRadius: 6 }}>● PAC CLI Connected</span>
-              <span style={{ fontSize: 12, color: '#4ade80', background: '#052e16', padding: '3px 8px', borderRadius: 6 }}>● Dataverse Solution: Unmanaged</span>
+              <span style={{ fontSize: 12, color: '#4ade80', background: '#052e16', padding: '3px 8px', borderRadius: 6 }}>
+                ● Dataverse Solution: {isUnpacked ? 'Unpacked Repo' : 'Unmanaged'}
+              </span>
             </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, flex: 1 }}>
             {/* Tier 1: Channels */}
-            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: 12, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: 12, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 480, overflowY: 'auto' }}>
               <div style={{ color: '#38bdf8', fontSize: 12, fontWeight: 700, borderBottom: '1px solid #1e293b', paddingBottom: 6 }}>1. ENGAGEMENT</div>
-              {(['teams', 'pages', 'pcf', 'voice'] as const).map((id) => {
-                const n = ARCH_NODES[id];
-                const active = selectedId === id;
+              {tier1.map((n) => {
+                const active = selectedId === n.id;
                 return (
                   <button
-                    key={id}
-                    onClick={() => setSelectedId(id)}
+                    key={n.id}
+                    onClick={() => setSelectedId(n.id)}
                     style={{
                       textAlign: 'left',
                       background: active ? '#1e293b' : '#0f172a',
@@ -221,9 +247,11 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                       boxShadow: active ? '0 0 12px rgba(56, 189, 248, 0.25)' : 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{n.name.split(' ')[0]}</span>
-                      <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{n.badge}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+                        <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>{n.badge}</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3 }}>{n.summary.slice(0, 50)}…</div>
                   </button>
@@ -232,15 +260,14 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
             </div>
 
             {/* Tier 2: Copilot Studio Core */}
-            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: 12, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: 12, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 480, overflowY: 'auto' }}>
               <div style={{ color: '#c084fc', fontSize: 12, fontWeight: 700, borderBottom: '1px solid #1e293b', paddingBottom: 6 }}>2. COPILOT STUDIO</div>
-              {(['copilot_engine', 'azure_openai', 'guardrails'] as const).map((id) => {
-                const n = ARCH_NODES[id];
-                const active = selectedId === id;
+              {tier2.map((n) => {
+                const active = selectedId === n.id;
                 return (
                   <button
-                    key={id}
-                    onClick={() => setSelectedId(id)}
+                    key={n.id}
+                    onClick={() => setSelectedId(n.id)}
                     style={{
                       textAlign: 'left',
                       background: active ? '#1e293b' : '#0f172a',
@@ -253,9 +280,11 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                       boxShadow: active ? '0 0 12px rgba(192, 132, 252, 0.25)' : 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{n.name.split(' ')[0]}</span>
-                      <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{n.badge}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+                        <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>{n.badge}</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3 }}>{n.summary.slice(0, 50)}…</div>
                   </button>
@@ -264,15 +293,14 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
             </div>
 
             {/* Tier 3: Power Automate */}
-            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: 12, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: 12, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 480, overflowY: 'auto' }}>
               <div style={{ color: '#60a5fa', fontSize: 12, fontWeight: 700, borderBottom: '1px solid #1e293b', paddingBottom: 6 }}>3. POWER AUTOMATE</div>
-              {(['flow_instant', 'flow_approval', 'custom_connector'] as const).map((id) => {
-                const n = ARCH_NODES[id];
-                const active = selectedId === id;
+              {tier3.map((n) => {
+                const active = selectedId === n.id;
                 return (
                   <button
-                    key={id}
-                    onClick={() => setSelectedId(id)}
+                    key={n.id}
+                    onClick={() => setSelectedId(n.id)}
                     style={{
                       textAlign: 'left',
                       background: active ? '#1e293b' : '#0f172a',
@@ -285,9 +313,11 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                       boxShadow: active ? '0 0 12px rgba(96, 165, 250, 0.25)' : 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{n.name.split(' ')[0]}</span>
-                      <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{n.badge}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+                        <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>{n.badge}</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3 }}>{n.summary.slice(0, 50)}…</div>
                   </button>
@@ -296,15 +326,14 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
             </div>
 
             {/* Tier 4: Dataverse & Enterprise Data */}
-            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: 12, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ background: '#0a0f1d', borderRadius: 12, padding: 12, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 480, overflowY: 'auto' }}>
               <div style={{ color: '#f472b6', fontSize: 12, fontWeight: 700, borderBottom: '1px solid #1e293b', paddingBottom: 6 }}>4. DATAVERSE & DATA</div>
-              {(['dataverse', 'graph_api', 'power_bi'] as const).map((id) => {
-                const n = ARCH_NODES[id];
-                const active = selectedId === id;
+              {tier4.map((n) => {
+                const active = selectedId === n.id;
                 return (
                   <button
-                    key={id}
-                    onClick={() => setSelectedId(id)}
+                    key={n.id}
+                    onClick={() => setSelectedId(n.id)}
                     style={{
                       textAlign: 'left',
                       background: active ? '#1e293b' : '#0f172a',
@@ -317,9 +346,11 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                       boxShadow: active ? '0 0 12px rgba(244, 114, 182, 0.25)' : 'none',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>{n.name.split(' ')[0]}</span>
-                      <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{n.badge}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+                        <span style={{ fontSize: 9, background: n.badgeBg, color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>{n.badge}</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3 }}>{n.summary.slice(0, 50)}…</div>
                   </button>
@@ -340,6 +371,15 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
             <h3 style={{ margin: '0 0 6px 0', fontSize: 18, color: '#f8fafc' }}>{selectedNode.name}</h3>
             <p style={{ margin: 0, fontSize: 13, color: '#94a3b8', lineHeight: 1.4 }}>{selectedNode.summary}</p>
           </div>
+
+          {selectedNode.sourceFile && (
+            <div style={{ background: '#064e3b', border: '1px solid #059669', borderRadius: 8, padding: '8px 12px' }}>
+              <div style={{ fontSize: 10, color: '#34d399', fontWeight: 700, textTransform: 'uppercase' }}>Source File in Repository</div>
+              <div style={{ fontSize: 11, color: '#a7f3d0', fontFamily: 'monospace', wordBreak: 'break-all', marginTop: 2 }}>
+                📄 {selectedNode.sourceFile}
+              </div>
+            </div>
+          )}
 
           <div style={{ background: '#1e293b', borderRadius: 10, padding: 12 }}>
             <div style={{ fontSize: 11, color: '#38bdf8', fontWeight: 700, marginBottom: 8, textTransform: 'uppercase' }}>Live Telemetry</div>
@@ -362,7 +402,7 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
           <div>
             <div style={{ fontSize: 11, color: '#c084fc', fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>Tech Stack & Protocols</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {selectedNode.techStack.map((tech) => (
+              {selectedNode.techStack.map((tech: string) => (
                 <span key={tech} style={{ fontSize: 11, background: '#1e293b', color: '#e2e8f0', padding: '3px 8px', borderRadius: 6, border: '1px solid #334155' }}>
                   {tech}
                 </span>
@@ -401,3 +441,4 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
     </Panel>
   );
 }
+

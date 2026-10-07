@@ -1,10 +1,100 @@
 import { useMemo } from 'react';
-import { repoOnFloor, usePhoneBadge, useStore } from '../store';
+import { repoOnFloor, usePhoneBadge, useStore, TOUR_WAYPOINTS } from '../store';
 import { CEO_ID } from '../../../shared/types';
 import { HeldHint } from './HeldHint';
 import { WorkersPanel } from './WorkersPanel';
 import { officeUpdateChip } from '../officeUpdate';
 import { TeamsToastFeed } from './TeamsToastFeed';
+
+function PresenterTourBar() {
+  const tourIndex = useStore((s) => s.tourIndex);
+  if (tourIndex == null) return null;
+  const waypoint = TOUR_WAYPOINTS[tourIndex];
+  if (!waypoint) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        bottom: 24,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: 'rgba(15, 23, 42, 0.94)',
+        backdropFilter: 'blur(12px)',
+        border: '1.5px solid #38bdf8',
+        borderRadius: 14,
+        padding: '12px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 18,
+        boxShadow: '0 10px 35px rgba(0,0,0,0.6), 0 0 20px rgba(56, 189, 248, 0.25)',
+        zIndex: 99,
+        color: '#fff',
+        maxWidth: '90vw',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontSize: 24 }}>🎥</span>
+        <div>
+          <div style={{ fontSize: 11, color: '#38bdf8', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Station {tourIndex + 1} of {TOUR_WAYPOINTS.length} · {waypoint.floor === 0 ? 'Lobby' : `Floor ${waypoint.floor}`}
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#ffffff' }}>{waypoint.title}</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', maxWidth: 460 }}>{waypoint.description}</div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          onClick={() => useStore.getState().prevTourWaypoint()}
+          style={{
+            background: '#1e293b',
+            color: '#fff',
+            border: '1px solid #334155',
+            padding: '7px 12px',
+            borderRadius: 8,
+            cursor: 'pointer',
+            fontWeight: 600,
+            fontSize: 12,
+          }}
+          title="Previous Station (ArrowLeft or B)"
+        >
+          ◀ Prev
+        </button>
+        <button
+          onClick={() => useStore.getState().nextTourWaypoint()}
+          style={{
+            background: '#0284c7',
+            color: '#fff',
+            border: 'none',
+            padding: '7px 16px',
+            borderRadius: 8,
+            cursor: 'pointer',
+            fontWeight: 700,
+            fontSize: 12,
+          }}
+          title="Next Station (ArrowRight or N)"
+        >
+          Next ▶
+        </button>
+        <button
+          onClick={() => useStore.getState().setTourIndex(null)}
+          style={{
+            background: 'transparent',
+            color: '#94a3b8',
+            border: '1px solid #475569',
+            padding: '7px 10px',
+            borderRadius: 8,
+            cursor: 'pointer',
+            fontSize: 12,
+          }}
+          title="Exit Tour (T or WASD)"
+        >
+          ✕ Exit
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /** While the office is on its way to updating itself (or restarting to do it); opens the console's Office row. */
 function OfficeUpdateChip() {
@@ -82,11 +172,35 @@ export function HUD() {
       <div className="hud-status">
         {demo && <span className="pill pill-demo">DEMO</span>}
         <span className={`pill ${connected ? 'pill-ok' : restarting ? 'pill-demo' : 'pill-bad'}`}>{connected ? '● live' : restarting ? '○ restarting' : '○ reconnecting'}</span>
+        <button
+          className="pill"
+          onClick={() => useStore.getState().toggleLightMode()}
+          style={{ cursor: 'pointer', background: 'rgba(255, 255, 255, 0.12)', border: '1px solid rgba(255, 255, 255, 0.2)' }}
+          title="Toggle Daylight / Keynote Lighting (or press K)"
+        >
+          {useStore((s) => s.lightMode === 'keynote' ? '🌙 Keynote' : '☀️ Daylight')} <kbd style={{ marginLeft: 4, fontSize: '0.7em' }}>K</kbd>
+        </button>
+        <button
+          className="pill"
+          onClick={() => useStore.getState().toggleTour()}
+          style={{
+            cursor: 'pointer',
+            background: useStore((s) => s.tourIndex !== null) ? '#0284c7' : 'rgba(255, 255, 255, 0.12)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            color: '#fff',
+            fontWeight: 600,
+          }}
+          title="Presenter Tour Mode (or press T)"
+        >
+          🎥 Tour <kbd style={{ marginLeft: 4, fontSize: '0.7em' }}>T</kbd>
+        </button>
         <span className="pill">
           ⚙️ {settings.sessionLimit ? `${running}/${settings.sessionLimit}` : running} sessions
         </span>
         {user && <span className="pill">🐙 {user}</span>}
       </div>
+
+      <PresenterTourBar />
 
       <WorkersPanel />
       <OfficeUpdateChip />
@@ -104,7 +218,7 @@ export function HUD() {
       {started && !overlay && !locked && !travel && <div className="hud-resume">Click to look around</div>}
       {started && !(settings.setupDone && settings.tutorialStep >= 0) && (
         <div className="hud-help">
-          <kbd>WASD</kbd> move · <kbd>Shift</kbd> run · <kbd>E</kbd> / <kbd>Click</kbd> interact · <kbd>P</kbd> phone · <kbd>Tab</kbd> workers · <kbd>H</kbd> help · <kbd>Esc</kbd> free mouse
+          <kbd>WASD</kbd> move · <kbd>Shift</kbd> run · <kbd>E</kbd> / <kbd>Click</kbd> interact · <kbd>K</kbd> lighting · <kbd>P</kbd> phone · <kbd>Tab</kbd> workers · <kbd>H</kbd> help · <kbd>Esc</kbd> free mouse
         </div>
       )}
 
