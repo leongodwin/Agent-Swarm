@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { loadView, pendingRequests, saveView, unreadMessages, useStore, type Focus } from '../store';
+import { loadView, pendingRequests, saveView, unreadMessages, useStore, TOUR_WAYPOINTS, type Focus } from '../store';
 import { api } from '../api';
 import { EYE_HEIGHT, SPAWN, collide, type Rect } from './layout';
 import { interactables } from './interact';
@@ -180,6 +180,19 @@ export function Player({ colliders, floor }: { colliders: Rect[]; floor: number 
       if (e.code === 'KeyF' && !e.repeat && !s.travel) startCharge();
       if (e.code === 'KeyG' && !e.repeat) dropHeld();
       if (e.code === 'KeyR' && !e.repeat && !s.travel) reloadHeld();
+      if (e.code === 'KeyK' && !e.repeat && !isConfirmOpen()) {
+        s.toggleLightMode();
+      }
+      if (e.code === 'KeyT' && !e.repeat && !isConfirmOpen()) {
+        s.toggleTour();
+      }
+      if (s.tourIndex !== null) {
+        if (e.code === 'ArrowRight' || e.code === 'KeyN') {
+          s.nextTourWaypoint();
+        } else if (e.code === 'ArrowLeft' || e.code === 'KeyB') {
+          s.prevTourWaypoint();
+        }
+      }
       if (e.code === 'KeyH') s.openOverlay({ kind: 'help' });
       if (e.code === 'KeyP') {
         e.preventDefault(); // don't type the "p" into the phone's message box
@@ -244,6 +257,24 @@ export function Player({ colliders, floor }: { colliders: Rect[]; floor: number 
       camera.position.x = p.x;
       camera.position.z = p.z;
       moving = true;
+    }
+
+    if (s.tourIndex !== null && !s.travel) {
+      const wp = TOUR_WAYPOINTS[s.tourIndex];
+      if (wp && wp.floor === s.floor) {
+        if (fwd || strafe) {
+          s.setTourIndex(null);
+        } else {
+          const lerpSpeed = Math.min(dt * 3.2, 1);
+          camera.position.x += (wp.x - camera.position.x) * lerpSpeed;
+          camera.position.z += (wp.z - camera.position.z) * lerpSpeed;
+          let dyaw = wp.yaw - look.current.yaw;
+          while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+          while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+          look.current.yaw += dyaw * lerpSpeed;
+          look.current.pitch += (wp.pitch - look.current.pitch) * lerpSpeed;
+        }
+      }
     }
     bob.current += moving ? dt * speed * 2.2 : 0;
     camera.position.y = EYE_HEIGHT + (moving ? Math.sin(bob.current) * 0.035 : 0);

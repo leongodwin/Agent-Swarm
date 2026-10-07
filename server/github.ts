@@ -226,6 +226,10 @@ export async function prDetails(fullName: string, number: number): Promise<PrDet
   };
 }
 
+export async function prDiff(fullName: string, number: number): Promise<string> {
+  return gh(['pr', 'diff', String(number), '-R', fullName]).catch(() => '');
+}
+
 export async function issueDetails(fullName: string, number: number): Promise<{ title: string; body: string }> {
   const raw = await ghJson<{ title: string; body: string }>(['issue', 'view', String(number), '-R', fullName, '--json', 'title,body']);
   return { title: raw.title, body: raw.body ?? '' };

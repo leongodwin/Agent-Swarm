@@ -99,13 +99,18 @@ Shared (`shared/`, imported by both sides):
 - `types.ts`: the REST/websocket contract (`WorldSnapshot`, `ServerEvent`, views, settings).
 - `issues.ts`: issue conventions (`swarm:<specialty>` labels, `Depends on #N`, hold-up ranking).
 
-Client (`client/`, Vite root; React 19, R3F, drei, zustand):
+Client (`client/`, Vite root; React 19, R3F, drei, zustand, @react-three/postprocessing):
 - `src/world/`: the 3D building: floors, desks, characters (`appearance.ts`, `characterParts.ts`), elevator,
-  whiteboard, player movement and collisions (`layout.ts`), canvas textures (`draw.ts`), `toys/` (Rapier physics).
+  whiteboard, player movement and collisions (`layout.ts`), canvas textures (`draw.ts`), `toys/` (Rapier physics),
+  PBR materials & textures (`materials.ts`), Copilot Kiosks (`CopilotKiosk.tsx`), Solution Architecture boards (`SolutionArchitectureBoard.tsx`),
+  Flow Run History boards (`FlowRunHistoryBoard.tsx`), Dataverse schema monitor (`DataverseSchemaMonitor.tsx`),
+  DLP Security kiosk (`DlpSecurityKiosk.tsx`), and procedural Fluent 3D icons (`FluentIcons.tsx`).
 - `src/ui/`: HTML overlays: HUD, terminal (`LiveTerminal.tsx`: xterm.js on `/ws/term`), Kanban, manager's console,
   phone (with its mini-games in `games/`: pure logic in `tetris.ts` / `snake.ts` / `pet.ts`), elevator panel, app
-  viewer, sounds (`sfx.ts`).
-- `src/store.ts`: the zustand store; `apply(ServerEvent)` folds websocket events into UI state.
+  viewer, Copilot Chat test overlay (`CopilotChatOverlay.tsx`), Solution Architecture visualizer (`SolutionArchitectureView.tsx`),
+  Flow Run History telemetry viewer (`FlowRunHistoryView.tsx`), Swarm War Room Ideator (`WarRoomIdeatorModal.tsx`),
+  Teams toast feed (`TeamsToastFeed.tsx`), Visual CV portfolio (`VisualCvView.tsx`), sounds (`sfx.ts`).
+- `src/store.ts`: the zustand store; `apply(ServerEvent)` folds websocket events into UI state; light mode & bloom toggles.
 - `src/api.ts`: REST calls; errors become toasts.
 - `src/net.ts`: the websocket connection with reconnect. `src/perf.tsx`: render pausing, adaptive DPR, `?stats`.
 

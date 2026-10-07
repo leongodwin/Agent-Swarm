@@ -1,5 +1,20 @@
 import { useStore } from './store';
 import type { AgentCli, GhRepoSummary, OfficeUpdateView, PreviewView, ProjectFolderView, RepoView, SwarmSettings } from '../../shared/types';
+import type { ParsedSolution } from '../../shared/solutionTypes';
+import type { FlowRun } from '../../shared/flowTelemetry';
+import type { TeamsAdaptiveCard } from '../../shared/teams';
+import type { AlmPipeline } from '../../shared/alm';
+import type { DlpPolicyViolation } from '../../shared/dlp';
+
+export interface DlpScanReport {
+  repoFullName: string;
+  checkoutPath: string | null;
+  scannedFiles: number;
+  scannedPaths: string[];
+  violations: DlpPolicyViolation[];
+  timestamp: string;
+  isRealScan: boolean;
+}
 
 async function call<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -82,4 +97,16 @@ export const api = {
   phoneRead: (at: number) => call('POST', '/api/phone/read', { at }),
   approveRequest: (id: string, overrides: { name?: string; model?: string; effort?: string } = {}) => call('POST', `/api/requests/${id}/approve`, overrides),
   rejectRequest: (id: string, note?: string) => call('POST', `/api/requests/${id}/reject`, { note }),
+  generateProposal: <T = unknown>(body: unknown) => call<T>('POST', '/api/proposals/generate', body),
+  generateHld: <T = unknown>(body: unknown) => call<T>('POST', '/api/hld/generate', body),
+  solutionArchitecture: (repoId: string) => call<ParsedSolution>('GET', `/api/repos/${encodeURIComponent(repoId)}/solution-architecture`),
+  flowRuns: (repoId: string) => call<FlowRun[]>('GET', `/api/repos/${encodeURIComponent(repoId)}/flow-runs`),
+  resubmitFlowRun: (repoId: string, runId: string) => call<{ ok: boolean; resubmitted: FlowRun }>('POST', `/api/repos/${encodeURIComponent(repoId)}/flow-runs/${encodeURIComponent(runId)}/resubmit`),
+  teamsFeed: () => call<TeamsAdaptiveCard[]>('GET', '/api/teams/feed'),
+  almPipeline: () => call<AlmPipeline>('GET', '/api/alm/pipeline'),
+  almApprove: (data: { approver?: string } = {}) => call<AlmPipeline>('POST', '/api/alm/approve', data),
+  almRollback: () => call<AlmPipeline>('POST', '/api/alm/rollback'),
+  dlpScan: (repoId?: string) => call<DlpScanReport>('GET', `/api/repos/${encodeURIComponent(repoId || 'default')}/dlp-scan`),
 };
+
+

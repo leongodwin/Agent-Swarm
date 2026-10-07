@@ -9,15 +9,18 @@ import { drawCandidateTag, drawSign, roundRect, SANS } from './draw';
 import { Elevator } from './Elevator';
 import { useCanvasTexture, useInteractable } from './interact';
 import { CEO_DESK, CEO_ROOM, HALF_D, HALF_W, MANAGER_DESK, MANAGER_ROOM, RECEPTION, WAITING, WAITING_ROTATION } from './layout';
-import { glow, shade } from './materials';
+import { acousticFabric, brushedMetal, cyberGlow, glow, pbrWood, shade } from './materials';
 import { WallSign } from './OfficeFloor';
-import { Couch, CoffeeTable, GlassWall, Plant, Rug, WallClock } from './Props';
+import { Couch, CoffeeTable, GlassWall, LivingMossWall, Plant, Rug, WallClock } from './Props';
 import { Shell } from './Shell';
 import { Ball, Box, Cyl } from './Toon';
 import { Toys } from './toys';
 import { FluentIconMesh, MicrosoftWallBanner } from './FluentIcons';
 import { CopilotKiosk } from './CopilotKiosk';
 import { DlpSecurityKiosk } from './DlpSecurityKiosk';
+import { ProposalDesk } from './ProposalDesk';
+import { ReleaseApprovalStation } from './ReleaseApprovalStation';
+import { CoffeeSteam, HolographicSpire } from './ParticleFx';
 
 // Microsoft Fluent UI Inspired Palette: Fluent Electric Blue & Copilot Purple
 const ACCENT = '#0078D4'; // Fluent Accent Blue
@@ -112,6 +115,7 @@ function ManagerComputer() {
       </mesh>
       <Box size={[0.5, 0.025, 0.16]} position={[0, 0.815, 0.25]} color="#f4f4f8" outline />
       <Cyl r={0.05} h={0.11} position={[0.9, 0.855, 0.1]} color="#ffd166" outline />
+      <CoffeeSteam position={[0.9, 0.93, 0.1]} />
       <Box size={[0.3, 0.2, 0.03]} position={[-0.95, 0.9, -0.1]} rotation={[-0.3, 0.3, 0]} color="#e9c46a" outline />
       {/* manager chair (yours) */}
       <group position={[0, 0, -1.1]}>
@@ -154,7 +158,7 @@ function ManagerVisualCv({ position, rotationY = Math.PI / 2 }: { position: [num
   );
 }
 
-/** Interactive Boardroom Swarm Ideation Table */
+/** Interactive Boardroom Swarm Ideation Table with Stadium Curvature & Holographic Studio */
 function WarRoomTable() {
   const ref = useInteractable<THREE.Group>(
     {
@@ -167,21 +171,45 @@ function WarRoomTable() {
 
   return (
     <group ref={ref}>
-      {/* Boardroom Conference Table */}
-      <Box size={[3.4, 0.08, 1.6]} position={[0, 0.74, 0]} color="#334155" outline />
-      <Cyl r={0.16} h={0.7} position={[-1.1, 0.35, 0]} color="#64748b" />
-      <Cyl r={0.16} h={0.7} position={[1.1, 0.35, 0]} color="#64748b" />
+      {/* Organic Stadium Curved Executive Boardroom Table */}
+      {/* Central rectangular core */}
+      <mesh position={[0, 0.74, 0]} material={pbrWood('#1e293b', 0.28)}>
+        <boxGeometry args={[2.4, 0.08, 1.4]} />
+      </mesh>
+      {/* Rounded half-cylinder endcaps giving a luxurious stadium/racetrack table silhouette */}
+      {[-1.2, 1.2].map((x, i) => (
+        <mesh key={i} position={[x, 0.74, 0]} rotation={[0, 0, 0]} material={pbrWood('#1e293b', 0.28)}>
+          <cylinderGeometry args={[0.7, 0.7, 0.08, 24, 1, false, i === 0 ? Math.PI / 2 : -Math.PI / 2, Math.PI]} />
+        </mesh>
+      ))}
 
-      {/* Central Holographic Multi-Agent Projector */}
-      <Cyl r={0.34} h={0.06} position={[0, 0.81, 0]} color="#0078d4" />
-      <mesh position={[0, 0.98, 0]} material={glow('#38bdf8')}>
-        <octahedronGeometry args={[0.15]} />
+      {/* Perimeter Brushed Champagne Brass Accent Edge */}
+      <mesh position={[0, 0.71, 0]} material={brushedMetal('#d4af37', 0.2)}>
+        <boxGeometry args={[2.42, 0.02, 1.42]} />
       </mesh>
-      {/* Glowing Energy Ring */}
-      <mesh position={[0, 0.85, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.42, 0.48, 32]} />
-        <meshBasicMaterial color="#38bdf8" transparent opacity={0.75} side={THREE.DoubleSide} />
+
+      {/* Sculptural Twin Fluted Pedestal Bases */}
+      {[-1.0, 1.0].map((x, i) => (
+        <group key={i} position={[x, 0, 0]}>
+          <mesh position={[0, 0.35, 0]} material={brushedMetal('#334155', 0.3)}>
+            <cylinderGeometry args={[0.28, 0.36, 0.7, 24]} />
+          </mesh>
+          <mesh position={[0, 0.02, 0]} material={brushedMetal('#d4af37', 0.2)}>
+            <cylinderGeometry args={[0.38, 0.38, 0.04, 24]} />
+          </mesh>
+        </group>
+      ))}
+
+      {/* Central Holographic Multi-Agent Projector Base */}
+      <mesh position={[0, 0.79, 0]} material={brushedMetal('#0f172a')}>
+        <cylinderGeometry args={[0.36, 0.4, 0.04, 28]} />
       </mesh>
+      <mesh position={[0, 0.81, 0]} material={cyberGlow('#0078d4', 3.0)}>
+        <ringGeometry args={[0.3, 0.35, 32]} />
+      </mesh>
+
+      {/* Dynamic Holographic Spire with orbiting data rings & floating particle dust */}
+      <HolographicSpire position={[0, 0, 0]} />
     </group>
   );
 }
@@ -471,8 +499,18 @@ export function Lobby() {
       {demo && <ManagerVisualCv position={[-HALF_W + 0.05, 0, -8]} rotationY={Math.PI / 2} />}
       <Plant position={[m.maxX - 0.6, 0, m.minZ + 0.6]} scale={1.1} pot="#0078d4" />
       <Plant position={[m.minX + 0.6, 0, m.maxZ - 0.6]} scale={0.9} />
+      {/* Modern Acoustic Vertical Oak Slat Feature Wall behind Manager Desk */}
+      <group position={[MANAGER_DESK.x, 1.8, -HALF_D + 0.02]}>
+        {/* Dark acoustic felt backing */}
+        <Box size={[4.2, 3.2, 0.02]} position={[0, 0, 0]} color="#1e293b" shadow={false} />
+        {/* Vertical natural oak architectural slats */}
+        {Array.from({ length: 26 }, (_, i) => (
+          <Box key={i} size={[0.07, 3.2, 0.04]} position={[-1.9 + i * 0.15, 0, 0.02]} color="#d4a373" shadow={false} />
+        ))}
+      </group>
+
       <WallSign
-        position={[MANAGER_DESK.x, 2.3, -HALF_D + 0.03]}
+        position={[MANAGER_DESK.x, 2.3, -HALF_D + 0.06]}
         rotationY={0}
         size={[2.5, 1.25]}
         px={[640, 320]}
@@ -521,10 +559,10 @@ export function Lobby() {
       </group>
 
       {/* Main Microsoft AI & Copilot Studio Feature Wall Banner above main north wall */}
-      <MicrosoftWallBanner position={[3.2, 2.25, -HALF_D + 0.03]} rotationY={0} width={6.8} height={1.7} />
+      <MicrosoftWallBanner position={[2.5, 2.25, -HALF_D + 0.03]} rotationY={0} width={6.2} height={1.6} />
 
       {/* Fluent UI Icon Gallery Display on the North Lobby Wall (Office apps & Power Platform icons) */}
-      <group position={[8.8, 2.2, -HALF_D + 0.03]}>
+      <group position={[8.4, 2.2, -HALF_D + 0.03]}>
         <FluentIconMesh name="powerapps" size={0.52} position={[-1.2, 0.42, 0]} showLabel />
         <FluentIconMesh name="powerautomate" size={0.52} position={[0, 0.42, 0]} showLabel />
         <FluentIconMesh name="powerbi" size={0.52} position={[1.2, 0.42, 0]} showLabel />
@@ -558,13 +596,39 @@ export function Lobby() {
         {/* Interactive Boardroom Table with Swarm Ideator */}
         {demo && <WarRoomTable />}
 
-        {/* Conference Ergonomic Swarm Chairs */}
-        {[-0.9, 0.9].map((x) => (
+        {/* Executive Conference Swarm Chairs */}
+        {[-0.9, 0, 0.9].map((x) => (
           <group key={x}>
-            <Box size={[0.48, 0.08, 0.46]} position={[x, 0.44, 0.95]} color="#475569" outline />
-            <Box size={[0.48, 0.42, 0.06]} position={[x, 0.69, 1.15]} color="#475569" outline />
-            <Box size={[0.48, 0.08, 0.46]} position={[x, 0.44, -0.95]} color="#475569" outline />
-            <Box size={[0.48, 0.42, 0.06]} position={[x, 0.69, -1.15]} color="#475569" outline />
+            {/* North side chairs */}
+            <group position={[x, 0, 0.95]}>
+              <mesh position={[0, 0.44, 0]} material={acousticFabric('#334155')}>
+                <boxGeometry args={[0.48, 0.08, 0.46]} />
+              </mesh>
+              <mesh position={[0, 0.72, 0.22]} rotation={[-0.08, 0, 0]} material={acousticFabric('#1e293b')}>
+                <boxGeometry args={[0.44, 0.46, 0.05]} />
+              </mesh>
+              <mesh position={[0, 0.22, 0]} material={brushedMetal('#475569')}>
+                <cylinderGeometry args={[0.03, 0.035, 0.36, 12]} />
+              </mesh>
+              <mesh position={[0, 0.03, 0]} material={brushedMetal('#1e293b')}>
+                <cylinderGeometry args={[0.22, 0.24, 0.04, 16]} />
+              </mesh>
+            </group>
+            {/* South side chairs */}
+            <group position={[x, 0, -0.95]} rotation={[0, Math.PI, 0]}>
+              <mesh position={[0, 0.44, 0]} material={acousticFabric('#334155')}>
+                <boxGeometry args={[0.48, 0.08, 0.46]} />
+              </mesh>
+              <mesh position={[0, 0.72, 0.22]} rotation={[-0.08, 0, 0]} material={acousticFabric('#1e293b')}>
+                <boxGeometry args={[0.44, 0.46, 0.05]} />
+              </mesh>
+              <mesh position={[0, 0.22, 0]} material={brushedMetal('#475569')}>
+                <cylinderGeometry args={[0.03, 0.035, 0.36, 12]} />
+              </mesh>
+              <mesh position={[0, 0.03, 0]} material={brushedMetal('#1e293b')}>
+                <cylinderGeometry args={[0.22, 0.24, 0.04, 16]} />
+              </mesh>
+            </group>
           </group>
         ))}
 
@@ -574,10 +638,21 @@ export function Lobby() {
           rotationY={0}
           size={[3.8, 0.5]}
           px={[912, 120]}
-          draw={(ctx) => drawSign(ctx, 912, 120, [{ text: '🤝 AGENT SWARM WAR ROOM · Low-Code + Pro-Code Fusion', size: 40 }], '#0284c7')}
+          draw={(ctx) => drawSign(ctx, 912, 120, [{ text: '🤝 AGENT SWARM WAR ROOM', size: 40 }], '#0284c7')}
           deps={[]}
         />
       </group>
+
+      {/* Biophilic Living Moss Feature Wall behind Reception / Waiting Wall */}
+      <LivingMossWall position={[HALF_W - 0.04, 1.3, -4.5]} rotationY={-Math.PI / 2} width={5.2} height={2.8} />
+
+      {/* Cyber-Fluent Glowing Architecture Floor Bus Pipe connecting War Room to Elevator */}
+      <mesh position={[-1.5, 0.015, 6.2]} rotation={[0, 0, 0]} material={cyberGlow('#0078d4', 2.2)}>
+        <boxGeometry args={[0.06, 0.015, 6.8]} />
+      </mesh>
+      <mesh position={[1.5, 0.015, 6.2]} rotation={[0, 0, 0]} material={cyberGlow('#38bdf8', 2.0)}>
+        <boxGeometry args={[0.04, 0.015, 6.8]} />
+      </mesh>
 
       {/* 3D Acrylic Power Platform icon monument near entrance / elevator */}
       <group position={[-2.4, 0, HALF_D - 1.2]}>
@@ -585,13 +660,19 @@ export function Lobby() {
         <FluentIconMesh name="powerplatform" size={0.58} position={[0, 1.0, 0]} rotation={[0, Math.PI, 0]} showLabel />
       </group>
 
+      {/* Pre-Sales Commercial Proposal & SOW Generator Station */}
+      <ProposalDesk position={[-8.5, 0, 4.5]} rotationY={Math.PI / 4} />
+
+      {/* Multi-Environment ALM Release Gate & Approval Station */}
+      <ReleaseApprovalStation position={[-8.5, 0, 7.5]} rotationY={Math.PI / 4} />
+
       <CeoOffice />
       <WaitingRoom />
       <Elevator floorLabel="▲ G · Lobby" accent={ACCENT} />
       <Toys floor="lobby" />
       <Directory />
       <TrophyCabinet />
-      <WallClock position={[6.6, 2.8, -HALF_D + 0.05]} />
+      <WallClock position={[11.2, 2.85, -HALF_D + 0.05]} />
       <Couch position={[11.5, 0, 4]} rotationY={Math.PI} color="#5C2D91" />
       <CoffeeTable position={[11.5, 0, 6.2]} />
       <Plant position={[HALF_W - 0.7, 0, HALF_D - 0.7]} scale={1.2} />

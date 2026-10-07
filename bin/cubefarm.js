@@ -120,6 +120,18 @@ function checks() {
   // Agents test in a browser through Playwright, which drives Google Chrome by default.
   const chrome = chromePaths().some((p) => fs.existsSync(p));
   out.push({ name: 'Chrome', ok: chrome, detail: chrome ? 'for browser testing' : 'not found', fix: 'install Google Chrome so agents can test in a browser' });
+
+  // Microsoft Power Platform CLI (pac) for unpacking and packing solutions
+  const pac = sh('pac', ['--version']);
+  const hasPac = pac.status === 0;
+  out.push({
+    name: 'pac CLI',
+    ok: hasPac,
+    detail: hasPac ? (pac.stdout?.trim().split(/\r?\n/)[0] || 'installed') : 'optional (for Power Platform ALM)',
+    fix: 'install Microsoft Power Platform CLI: https://aka.ms/powerplatform-cli',
+    required: false,
+  });
+
   return out;
 }
 

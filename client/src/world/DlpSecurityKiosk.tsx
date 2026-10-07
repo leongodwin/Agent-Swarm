@@ -20,7 +20,7 @@ export function DlpSecurityKiosk({
     {
       id: 'dlp-security-kiosk',
       label: 'Inspect Microsoft Entra ID & DLP Tenant Boundary',
-      action: { kind: 'help' }, // opens environment & governance guidelines
+      action: { kind: 'dlp-kiosk' },
     },
     3.2,
   );
@@ -55,9 +55,9 @@ export function DlpSecurityKiosk({
       ctx.fillText('🛡️ MICROSOFT ENTRA ID & POWER PLATFORM DLP POLICY', 36, 46);
 
       ctx.textAlign = 'right';
-      ctx.font = `600 16px ${SANS}`;
-      ctx.fillStyle = '#bae6fd';
-      ctx.fillText('TENANT: contoso.onmicrosoft.com · SECURE', texW - 36, 46);
+      ctx.font = `700 16px ${SANS}`;
+      ctx.fillStyle = '#fde047';
+      ctx.fillText('TENANT: contoso.onmicrosoft.com · [SIMULATED POLICY]', texW - 36, 46);
       ctx.textAlign = 'left';
 
       // Allowed Business Connectors Card

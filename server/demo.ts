@@ -374,6 +374,11 @@ function fakeUsageWarning(cb: SessionCallbacks) {
   }, 3000);
 }
 
+const demoDiffs = new Map<string, string>();
+export function setDemoPrDiff(fullName: string, number: number, diff: string) {
+  demoDiffs.set(`${fullName}#${number}`, diff);
+}
+
 export function createDemoBackend(): Backend {
   // Tie each fake session back to its repo via the desk directory name.
   const deskRepo = new Map<string, string>();
@@ -477,6 +482,7 @@ export function createDemoBackend(): Backend {
         mergeState: pr.mergeState,
       };
     },
+    prDiff: async (fullName, number) => demoDiffs.get(`${fullName}#${number}`) ?? '',
     issueDetails: async (fullName, number) => {
       const i = repos.get(fullName)?.issues.find((x) => x.number === number);
       return { title: i?.title ?? `Issue #${number}`, body: i?.body ?? '' };

@@ -1,4 +1,7 @@
 import type { PullInfo } from '../shared/types.ts';
+import type { DlpPolicyViolation } from '../shared/dlp.ts';
+
+export type { DlpPolicyViolation };
 
 // Auto-merge: fixes for failing checks or conflicts before a PR needs the manager, how long checks may run before
 // the manager hears about it, and how long to wait before retrying a merge GitHub refused.
@@ -18,14 +21,16 @@ export interface MergeRecord {
 /** Bookkeeping the caller writes onto the record as it is (it doesn't count as a change to the record). */
 export type MergeBookkeeping = Partial<Pick<MergeRecord, 'passedSha' | 'pendingSince' | 'alerted'>>;
 
-export type MergePull = Pick<PullInfo, 'isDraft' | 'mergeable' | 'mergeState' | 'headSha' | 'checks' | 'failedChecks' | 'pendingChecks'>;
+export type MergePull = Pick<PullInfo, 'isDraft' | 'mergeable' | 'mergeState' | 'headSha' | 'checks' | 'failedChecks' | 'pendingChecks'> & {
+  dlpViolations?: DlpPolicyViolation[];
+};
 
 /** What auto-merge does next with a QA-passed PR. */
 export type MergeStep = { set: MergeBookkeeping } & (
   | { do: 'wait'; note?: string; alert?: boolean } // no note: leave the card as it is; alert: tell the manager checks are slow
   | { do: 'details' } // GitHub hasn't worked out mergeability: ask about the PR itself, then decide again with `detailed`
   | { do: 'requeue' } // commits arrived after QA's sign-off: QA tests them too
-  | { do: 'send-back'; reason: 'checks' | 'conflict'; instructions: string; needsHuman: boolean } // needsHuman: the fix budget ran out
+  | { do: 'send-back'; reason: 'checks' | 'conflict' | 'dlp'; instructions: string; needsHuman: boolean } // needsHuman: the fix budget ran out
   | { do: 'update-branch' } // the repo only merges up-to-date branches
   | { do: 'merge' }
 );
@@ -41,6 +46,10 @@ export function mergeStep(pr: MergePull, rec: MergeRecord, now: number, opts: { 
   if (rec.passedSha == null) set.passedSha = pr.headSha; // signed off before the office tracked commits
   if (pr.headSha !== (set.passedSha ?? rec.passedSha)) return { do: 'requeue', set };
   const needsHuman = rec.mergeFixes >= MAX_MERGE_FIXES;
+  if (pr.dlpViolations && pr.dlpViolations.length > 0) {
+    const instructions = `DLP Policy Violations detected:\n` + pr.dlpViolations.map((v) => `- [${v.category}] ${v.connectorName} in ${v.resourceFile}: ${v.remediation}`).join('\n');
+    return { do: 'send-back', reason: 'dlp', instructions, needsHuman, set };
+  }
   if (pr.mergeable === 'CONFLICTING' || pr.mergeState === 'DIRTY') {
     return { do: 'send-back', reason: 'conflict', instructions: `It conflicts with ${opts.base}.`, needsHuman, set };
   }

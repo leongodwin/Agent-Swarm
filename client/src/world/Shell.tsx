@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
+import { useStore } from '../store';
 import { ELEVATOR, HALF_D, HALF_W, WALL_H } from './layout';
 import { drawSky } from './draw';
 import { useCanvasTexture } from './interact';
@@ -60,42 +61,56 @@ export function Shell({
     return out;
   }, []);
   const floorTex = useMemo(() => {
-    // cartoon wood planks
+    // High-resolution Scandinavian herringbone architectural oak floor
     const c = document.createElement('canvas');
-    c.width = c.height = 512;
+    c.width = c.height = 1024;
     const ctx = c.getContext('2d')!;
-    const plankH = 64;
-    for (let row = 0; row < 512 / plankH; row++) {
-      const offset = (row * 173) % 512;
-      for (let x = -offset; x < 512; x += 256) {
-        const v = ((row * 7 + Math.floor((x + offset) / 256) * 3) % 5) * 0.012 - 0.024;
-        ctx.fillStyle = shade(floorColor, v);
-        ctx.fillRect(x, row * plankH, 256, plankH);
-        ctx.fillStyle = shade(floorColor, -0.1);
-        ctx.fillRect(x, row * plankH, 3, plankH);
-        ctx.fillStyle = shade(floorColor, v - 0.035);
-        for (let g = 0; g < 3; g++) ctx.fillRect(x + 30 + g * 70, row * plankH + 18 + g * 12, 60, 2);
+
+    // Base background warm tone
+    ctx.fillStyle = floorColor;
+    ctx.fillRect(0, 0, 1024, 1024);
+
+    const plankW = 128;
+    const plankH = 32;
+
+    // Herringbone zigzag pattern
+    for (let y = 0; y < 1024; y += plankH) {
+      for (let x = 0; x < 1024; x += plankW) {
+        const alt = Math.floor(y / plankH) % 2 === 0;
+        const toneVar = ((x * 13 + y * 7) % 11) * 0.008 - 0.04;
+        ctx.fillStyle = shade(floorColor, toneVar);
+        ctx.fillRect(x + (alt ? plankW / 2 : 0), y, plankW, plankH);
+
+        // Subtle realistic wood grain streaks
+        ctx.fillStyle = shade(floorColor, toneVar - 0.025);
+        for (let g = 0; g < 3; g++) {
+          ctx.fillRect(x + (alt ? plankW / 2 : 0) + 12 + g * 35, y + 8 + g * 7, 45, 1.5);
+        }
+
+        // Crisp architectural micro-bevel gap
+        ctx.fillStyle = 'rgba(0,0,0,0.07)';
+        ctx.fillRect(x + (alt ? plankW / 2 : 0), y + plankH - 1.5, plankW, 1.5);
+        ctx.fillRect(x + (alt ? plankW / 2 : 0) + plankW - 1.5, y, 1.5, plankH);
       }
-      ctx.fillStyle = shade(floorColor, -0.12);
-      ctx.fillRect(0, row * plankH, 512, 3);
     }
+
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(8, 6);
-    tex.anisotropy = 8;
+    tex.repeat.set(6, 4.5);
+    tex.anisotropy = 16;
     return tex;
   }, [floorColor]);
 
   const southSeg = HALF_W - doorHalf;
   return (
     <group>
-      {/* floor + ceiling */}
+      {/* floor + ceiling with architectural PBR surface */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <planeGeometry args={[HALF_W * 2, HALF_D * 2]} />
-        <meshToonMaterial map={floorTex} />
+        <meshStandardMaterial map={floorTex} roughness={0.34} metalness={0.03} />
       </mesh>
-      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, WALL_H, 0]} material={toon('#f3efe6')}>
+      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, WALL_H, 0]} material={toon('#f8fafc')}>
         <planeGeometry args={[HALF_W * 2, HALF_D * 2]} />
       </mesh>
       {lights.map((p) => (
@@ -150,13 +165,18 @@ export function Shell({
 }
 
 export function Lights() {
+  const lightMode = useStore((s) => s.lightMode);
+  const keynote = lightMode === 'keynote';
+
   return (
     <>
-      <hemisphereLight args={['#fffaf0', '#a48a6a', 0.95]} />
-      <ambientLight intensity={0.18} />
+      <hemisphereLight args={keynote ? ['#1e1b4b', '#0f172a', 0.45] : ['#ffffff', '#cbd5e1', 0.85]} />
+      <ambientLight intensity={keynote ? 0.15 : 0.25} />
+      {/* Warm natural sun through windows or moody keynote spotlight */}
       <directionalLight
-        position={[9, 14, 7]}
-        intensity={1.55}
+        position={[10, 15, 8]}
+        intensity={keynote ? 0.6 : 1.75}
+        color={keynote ? '#818cf8' : '#fffbf2'}
         castShadow
         shadow-mapSize={[2048, 2048]}
         shadow-camera-left={-18}
@@ -164,9 +184,16 @@ export function Lights() {
         shadow-camera-top={14}
         shadow-camera-bottom={-14}
         shadow-camera-near={1}
-        shadow-camera-far={40}
-        shadow-bias={-0.0006}
-        shadow-normalBias={0.03}
+        shadow-camera-far={42}
+        shadow-bias={-0.0004}
+        shadow-normalBias={0.02}
+        shadow-radius={3.5}
+      />
+      {/* Soft blue / purple ambient fill */}
+      <directionalLight
+        position={[-12, 10, -6]}
+        intensity={keynote ? 0.85 : 0.4}
+        color={keynote ? '#c084fc' : '#38bdf8'}
       />
     </>
   );

@@ -1,12 +1,14 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Outlines } from '@react-three/drei';
+import { Outlines, Billboard } from '@react-three/drei';
 import type { Agent } from '../store';
 import { ACCENTS, appearanceFor } from './appearance';
 import { PARTS } from './characterParts';
 import { mix, shade, toon } from './materials';
 import { useHitReaction } from './useHitReaction';
+import { useCanvasTexture } from './interact';
+import { SANS } from './draw';
 
 // A seated cartoon developer. Origin is the floor under the chair; they face -Z (toward the desk).
 
@@ -44,7 +46,7 @@ export function Character({ agent }: { agent: Agent }) {
   const hit = useHitReaction(agent.id, root);
   if (agent.currentTool) lastTool.current = { name: agent.currentTool, at: performance.now() };
 
-  useFrame((_, dt) => {
+  useFrame((state, dt) => {
     const now = performance.now();
     const t = now / 1000 + seed.current;
     const busy = agent.status === 'working' || agent.status === 'preparing';
@@ -96,16 +98,38 @@ export function Character({ agent }: { agent: Agent }) {
       armL.current.rotation.set(c.l.pitch + reach + tapL + jolt, -(c.l.yaw + driftL) + wave, 0);
       armR.current.rotation.set(c.r.pitch + reach + tapR - click + jolt, c.r.yaw + driftR * (1 - c.mouse) + glide - wave, 0);
     }
+    // 1. Subtle breathing micro-animation
+    const breath = Math.sin(t * 2.2) * 0.008;
+
+    // 2. Proximity-aware head tracking: when player approaches within 4.5m behind the agent, turn head slightly back to acknowledge
+    let playerGazeYaw = 0;
+    let playerGazePitch = 0;
+    if (root.current) {
+      const cam = state.camera.position;
+      const agentPos = root.current.position;
+      const dx = cam.x - agentPos.x;
+      const dz = cam.z - agentPos.z;
+      const distSq = dx * dx + dz * dz;
+      // If player is within 4.5 meters
+      if (distSq < 20.25 && distSq > 0.5) {
+        // Compute angle relative to agent facing (-Z)
+        const angle = Math.atan2(dx, dz);
+        // Constrain neck rotation to safe comfortable angle (±45 deg)
+        playerGazeYaw = THREE.MathUtils.clamp(-angle * 0.4, -0.65, 0.65);
+        playerGazePitch = THREE.MathUtils.clamp((cam.y - (agentPos.y + 1.2)) * 0.2, -0.3, 0.3);
+      }
+    }
+
     if (torso.current) {
-      torso.current.rotation.x = -c.lean + Math.sin(t * 1.6) * 0.015 + (busy ? Math.sin(t * 9) * 0.006 * burst : 0) + h.flinch * 0.2;
+      torso.current.rotation.x = -c.lean + Math.sin(t * 1.6) * 0.015 + breath + (busy ? Math.sin(t * 9) * 0.006 * burst : 0) + h.flinch * 0.2;
       torso.current.rotation.y = h.twist * h.w;
     }
     if (head.current) {
       // Every few seconds, glance down at the keyboard; while setting up, look around.
       const glance = busy && Math.sin(t * 0.55 + 2) > 0.92 ? -0.22 : 0;
       const gaze = agent.status === 'preparing' ? Math.sin(t * 1.3) * 0.5 : Math.sin(t * 0.4) * 0.08;
-      const pitch = c.headPitch + glance + (busy ? Math.sin(t * 4.5) * 0.02 * burst : 0);
-      const yaw = gaze + c.headYaw;
+      const pitch = c.headPitch + glance + breath + playerGazePitch + (busy ? Math.sin(t * 4.5) * 0.02 * burst : 0);
+      const yaw = gaze + c.headYaw + playerGazeYaw;
       head.current.rotation.set(pitch + (h.headPitch - pitch) * h.w, yaw + (h.headYaw - yaw) * h.w, (name === 'thinking' ? 0.12 : 0) * (1 - h.w));
     }
   });
@@ -228,6 +252,105 @@ export function Character({ agent }: { agent: Agent }) {
           {busy && phones}
         </group>
       </group>
+      {/* Holographic 3D Status Thought Bubble floating above agent head */}
+      <AgentThoughtBubble agent={agent} />
     </group>
+  );
+}
+
+function getAgentThoughtLabel(agent: Agent): string {
+  const busy = agent.status === 'working' || agent.status === 'preparing';
+  const cheering = agent.status === 'done' && agent.endedAt != null && Date.now() - agent.endedAt < 7000;
+  const isError = agent.status === 'error';
+
+  if (!busy) {
+    if (isError) return '❗ Needs Attention';
+    if (cheering) return '🎉 Solution Merged!';
+    if (agent.role === 'qa') return '🛡️ Guardrails Ready';
+    return '✨ Standby';
+  }
+
+  if (agent.status === 'preparing') {
+    return '📦 Solution Init';
+  }
+
+  if (agent.currentTool?.startsWith('mcp__playwright')) {
+    return '🌐 QA Browser Test';
+  }
+
+  if (agent.currentTool === 'Bash' || agent.currentTool === 'PowerShell') {
+    return '⚡ PAC CLI';
+  }
+
+  const spec = (agent.specialty || '').toLowerCase();
+  const title = (agent.title || '').toLowerCase();
+  const issue = (agent.issueTitle || '').toLowerCase();
+
+  if (spec.includes('copilot') || title.includes('copilot') || issue.includes('copilot') || issue.includes('topic')) {
+    return '🤖 Copilot Topic';
+  }
+  if (spec.includes('flow') || title.includes('flow') || issue.includes('flow') || issue.includes('automate')) {
+    return '⚡ Cloud Flow';
+  }
+  if (spec.includes('dataverse') || title.includes('dataverse') || issue.includes('table') || issue.includes('schema') || issue.includes('entity')) {
+    return '💾 Dataverse Schema';
+  }
+  if (spec.includes('pcf') || title.includes('pcf') || issue.includes('pcf') || issue.includes('fluent')) {
+    return '🧩 PCF React Control';
+  }
+  if (spec.includes('security') || spec.includes('dlp') || issue.includes('dlp') || issue.includes('entra')) {
+    return '🛡️ DLP Policy Check';
+  }
+  if (spec.includes('architect') || title.includes('architect') || issue.includes('hld') || issue.includes('architecture')) {
+    return '📐 Solution Design';
+  }
+
+  if (agent.role === 'qa') {
+    return '🧪 QA Evaluation';
+  }
+
+  if (agent.currentTool === 'Edit' || agent.currentTool === 'Write') {
+    return '📝 Solution Code';
+  }
+
+  return '💻 Pro-Code Task';
+}
+
+function AgentThoughtBubble({ agent }: { agent: Agent }) {
+  const busy = agent.status === 'working' || agent.status === 'preparing';
+  const cheering = agent.status === 'done' && agent.endedAt != null && Date.now() - agent.endedAt < 7000;
+  const isError = agent.status === 'error';
+  const icon = getAgentThoughtLabel(agent);
+
+  const tex = useCanvasTexture(
+    256,
+    64,
+    (ctx) => {
+      ctx.clearRect(0, 0, 256, 64);
+      // Soft glowing rounded pill
+      ctx.fillStyle = busy ? 'rgba(30, 41, 59, 0.92)' : 'rgba(15, 23, 42, 0.85)';
+      ctx.beginPath();
+      ctx.roundRect(4, 4, 248, 56, 28);
+      ctx.fill();
+      ctx.strokeStyle = busy ? '#38bdf8' : cheering ? '#4ade80' : isError ? '#ef4444' : 'rgba(255, 255, 255, 0.2)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      ctx.font = `700 22px ${SANS}`;
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(icon, 128, 33);
+    },
+    [icon, busy, cheering, isError],
+  );
+
+  return (
+    <Billboard position={[0, 1.82, -0.05]}>
+      <mesh>
+        <planeGeometry args={[0.75, 0.187]} />
+        <meshBasicMaterial map={tex} transparent toneMapped={false} depthWrite={false} />
+      </mesh>
+    </Billboard>
   );
 }

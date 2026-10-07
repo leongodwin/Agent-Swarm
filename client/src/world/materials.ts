@@ -47,15 +47,82 @@ export function glow(color: string) {
   return m;
 }
 
+/** High-end architectural frosted glass with transmission & refractive blur */
 export const glass = new THREE.MeshPhysicalMaterial({
-  color: '#bfe8ff',
+  color: '#e0f2fe',
   transparent: true,
-  opacity: 0.22,
-  roughness: 0.05,
-  metalness: 0,
+  opacity: 0.35,
+  roughness: 0.18,
+  metalness: 0.05,
+  transmission: 0.75,
+  ior: 1.48,
+  thickness: 0.08,
   depthWrite: false,
   side: THREE.DoubleSide,
 });
+
+/** Polished architectural wood / laminate for modern surfaces */
+export function pbrWood(color: string, roughness = 0.32) {
+  const key = `pbrWood|${color}|${roughness}`;
+  let m = cache.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({
+      color,
+      roughness,
+      metalness: 0.02,
+    });
+    cache.set(key, m);
+  }
+  return m;
+}
+
+/** Brushed aluminum & metal finishes for modern hardware */
+export function brushedMetal(color = '#64748b', roughness = 0.28) {
+  const key = `metal|${color}|${roughness}`;
+  let m = cache.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({
+      color,
+      roughness,
+      metalness: 0.82,
+    });
+    cache.set(key, m);
+  }
+  return m;
+}
+
+/** Cyber fluorescent neon material for pipelines, holographic boundaries, and emissive trims */
+export function cyberGlow(color: string, intensity = 2.4) {
+  const key = `cyberglow|${color}|${intensity}`;
+  let m = cache.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: intensity,
+      roughness: 0.2,
+      metalness: 0.1,
+      toneMapped: false,
+    });
+    cache.set(key, m);
+  }
+  return m;
+}
+
+/** Acoustic felt / boucle / velvet fabric material for designer seating & partitions */
+export function acousticFabric(color: string, roughness = 0.88) {
+  const key = `fabric|${color}|${roughness}`;
+  let m = cache.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({
+      color,
+      roughness,
+      metalness: 0.0,
+    });
+    cache.set(key, m);
+  }
+  return m;
+}
 
 /** Lighten (amt > 0) or darken (amt < 0) a hex colour. */
 export function shade(hex: string, amt: number) {
