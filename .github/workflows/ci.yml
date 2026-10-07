@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to the same PR or branch cancels the run it replaces.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows and macOS too: people run the office on both (paths, child processes, terminals, git worktrees).
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      # Never let anything in CI look at a real office's state or ports.
+      SWARM_HOME: ${{ github.workspace }}/.ci-swarm-home
+      SWARM_PORT: '0'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # The npm package as users get it: packed, installed into an empty folder and booted in demo mode.
+      - run: node scripts/smoke-package.mjs
+
+  # The built app in a real browser: a demo office boots, renders, and its panels open (e2e/, Playwright).
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      # With the browser cached this only installs its system libraries.
+      - run: npx playwright install --with-deps chromium
+
+      # playwright.config.ts builds the app and boots a demo office on a test port with a temp SWARM_HOME.
+      - run: npm run test:e2e
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
