@@ -11,7 +11,7 @@ import { useCanvasTexture, useInteractable } from './interact';
 import { CEO_DESK, CEO_ROOM, HALF_D, HALF_W, MANAGER_DESK, MANAGER_ROOM, RECEPTION, WAITING, WAITING_ROTATION } from './layout';
 import { glow, shade } from './materials';
 import { WallSign } from './OfficeFloor';
-import { Bookshelf, Couch, CoffeeTable, GlassWall, Plant, Rug, WallClock } from './Props';
+import { Couch, CoffeeTable, GlassWall, Plant, Rug, WallClock } from './Props';
 import { Shell } from './Shell';
 import { Ball, Box, Cyl } from './Toon';
 import { Toys } from './toys';
@@ -445,7 +445,7 @@ export function Lobby() {
   const m = MANAGER_ROOM;
   const user = useStore((s) => s.user);
   const managerName = useStore((s) => s.settings.managerName);
-  const company = useStore((s) => s.settings.companyName);
+  const demo = useStore((s) => s.demo);
   const boss = managerName || user;
   return (
     <group>
@@ -468,7 +468,7 @@ export function Lobby() {
       />
       <ManagerComputer />
       {/* Leon's Visual CV on the manager's office wall */}
-      <ManagerVisualCv position={[-HALF_W + 0.05, 0, -8]} rotationY={Math.PI / 2} />
+      {demo && <ManagerVisualCv position={[-HALF_W + 0.05, 0, -8]} rotationY={Math.PI / 2} />}
       <Plant position={[m.maxX - 0.6, 0, m.minZ + 0.6]} scale={1.1} pot="#0078d4" />
       <Plant position={[m.minX + 0.6, 0, m.maxZ - 0.6]} scale={0.9} />
       <WallSign
@@ -541,7 +541,7 @@ export function Lobby() {
       </group>
 
       {/* Interactive Copilot Studio Test Kiosk in Lobby */}
-      <CopilotKiosk position={[8.8, 0, 5.5]} rotationY={-Math.PI / 4} />
+      {demo && <CopilotKiosk position={[8.8, 0, 5.5]} rotationY={-Math.PI / 4} />}
 
       {/* Microsoft Entra ID & DLP Policy Security Kiosk */}
       <DlpSecurityKiosk position={[-6.8, 0, 8.5]} rotationY={Math.PI / 5} />
@@ -556,7 +556,7 @@ export function Lobby() {
         <Rug position={[0, 0.005, 0]} size={[5.4, 3.4]} color="#1e293b" />
 
         {/* Interactive Boardroom Table with Swarm Ideator */}
-        <WarRoomTable />
+        {demo && <WarRoomTable />}
 
         {/* Conference Ergonomic Swarm Chairs */}
         {[-0.9, 0.9].map((x) => (

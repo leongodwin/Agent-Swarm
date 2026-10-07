@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Panel } from './Overlays';
-import { useStore } from '../store';
 
 interface FlowRun {
   id: string;
@@ -148,13 +147,11 @@ const DEMO_RUNS: FlowRun[] = [
   },
 ];
 
-export function FlowRunHistoryView({ repoId }: { repoId?: string }) {
+export function FlowRunHistoryView(_props: { repoId?: string }) {
   const [selectedRunId, setSelectedRunId] = useState<string>(DEMO_RUNS[0].id);
   const [selectedStepIdx, setSelectedStepIdx] = useState<number>(0);
   const selectedRun = DEMO_RUNS.find((r) => r.id === selectedRunId) ?? DEMO_RUNS[0];
   const selectedStep = selectedRun.steps[selectedStepIdx] ?? selectedRun.steps[0];
-  const repos = useStore((s) => s.repos);
-  const repo = repos.find((r) => r.id === repoId) ?? repos[0];
 
   return (
     <Panel

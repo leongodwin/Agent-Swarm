@@ -693,8 +693,8 @@ function SettingsTab() {
         </label>
         <p className="muted small">
           {terminal
-            ? 'Each worker can use their own coding agent, model and effort (Team tab); the CEO always runs Claude Code. Claude Code reports every step; Codex and OpenCode are experimental: the office sees their task rather than each step.'
-            : 'The Agent SDK runs Claude Code. Each worker can use their own model and effort (Team tab).'}
+            ? 'Each worker can use their own coding agent, model and effort (Team tab); the CEO always runs GitHub Copilot CLI. Claude Code reports every step; other agents report their final response.'
+            : 'Workers use Claude Code through the Agent SDK; the CEO always runs GitHub Copilot CLI. Each worker can use their own model and effort (Team tab).'}
         </p>
         <label className="field">
           <span>Session limit</span>

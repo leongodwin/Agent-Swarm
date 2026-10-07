@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { lostConversation, resumableSession } from './cliRunner.ts';
+import { copilotResponse, lostConversation, resumableSession } from './cliRunner.ts';
+
+describe('copilotResponse', () => {
+  it('returns plain text without terminal styling', () => {
+    expect(copilotResponse('\u001b[32mDone\u001b[0m\r\nCreated the pull request.\r\n')).toBe('Done\nCreated the pull request.');
+  });
+});
 
 describe('resumableSession', () => {
   const onDisk = (files: string[]) => (file: string) => files.includes(file);

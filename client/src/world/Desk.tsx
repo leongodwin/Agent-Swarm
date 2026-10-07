@@ -84,7 +84,7 @@ function useTerminalTexture(agent: Agent, anchor: React.RefObject<THREE.Object3D
     const recentShot = a.screenshotAt != null && Date.now() - a.screenshotAt < 120_000;
     const showBrowser = a.hasScreenshot && a.status !== 'idle' && (a.currentTool?.startsWith('mcp__playwright') || recentShot || a.status === 'done');
     const s = useStore.getState().settings;
-    const program = a.role !== 'ceo' && s.runtime === 'terminal' ? a.cli || s.defaultCli : 'claude';
+    const program = a.role === 'ceo' ? 'copilot' : s.runtime === 'terminal' ? a.cli || s.defaultCli : 'claude';
     drawTerminal(canvas.getContext('2d')!, SCREEN.px, SCREEN.py, a, logs, shot.current, !!showBrowser, now, program);
     tex.needsUpdate = true;
   });

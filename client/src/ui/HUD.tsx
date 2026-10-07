@@ -113,7 +113,7 @@ export function HUD() {
       </div>
 
       <PhoneButton />
-      <TeamsToastFeed />
+      {demo && <TeamsToastFeed />}
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className={`toast toast-${t.level}`} onClick={() => dismiss(t.id)}>

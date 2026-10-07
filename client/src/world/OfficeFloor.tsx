@@ -44,6 +44,7 @@ export function WallSign({
 
 export function OfficeFloor({ repo }: { repo: RepoView }) {
   const allAgents = useStore((s) => s.agents);
+  const demo = useStore((s) => s.demo);
   const agents = useMemo(() => agentsOnRepo(allAgents, repo.id), [allAgents, repo.id]);
   const devBySlot = useMemo(() => new Map(agents.filter((a) => a.role === 'dev').map((a) => [a.desk, a])), [agents]);
   const qaBySlot = useMemo(() => new Map(agents.filter((a) => a.role === 'qa').map((a) => [a.desk, a])), [agents]);
@@ -85,16 +86,16 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
       <KanbanBoard repo={repo} agents={agents} />
 
       {/* Live Power Platform Solution Architecture Board (East Wall, visible alongside Kanban) */}
-      <SolutionArchitectureBoard position={[HALF_W - 0.05, 0.45, 3.2]} rotationY={-Math.PI / 2} width={5.6} height={2.8} repoId={repo.id} />
+      {demo && <SolutionArchitectureBoard position={[HALF_W - 0.05, 0.45, 3.2]} rotationY={-Math.PI / 2} width={5.6} height={2.8} repoId={repo.id} />}
 
       {/* Live Power Automate Flow Run History Telemetry Board (West Wall) */}
-      <FlowRunHistoryBoard position={[-HALF_W + 0.05, 0.45, 0]} rotationY={Math.PI / 2} width={5.2} height={2.6} repoId={repo.id} />
+      {demo && <FlowRunHistoryBoard position={[-HALF_W + 0.05, 0.45, 0]} rotationY={Math.PI / 2} width={5.2} height={2.6} repoId={repo.id} />}
 
       {/* Dataverse Schema & ERD Screen (North Wall, East of Kanban) */}
-      <DataverseSchemaMonitor position={[9.8, 2.25, -HALF_D + 0.04]} rotationY={0} width={3.4} height={1.8} />
+      {demo && <DataverseSchemaMonitor position={[9.8, 2.25, -HALF_D + 0.04]} rotationY={0} width={3.4} height={1.8} />}
 
       {/* Interactive Copilot Studio Test Kiosk on the office floor */}
-      <CopilotKiosk position={[-9.2, 0, 7.8]} rotationY={Math.PI / 3} />
+      {demo && <CopilotKiosk position={[-9.2, 0, 7.8]} rotationY={Math.PI / 3} />}
 
       <AppMonitor repo={repo} agents={agents} />
       <Elevator floorLabel={`▲ ${repo.floor} · ${name}`} accent={repo.color} />

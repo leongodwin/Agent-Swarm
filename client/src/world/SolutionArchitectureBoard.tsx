@@ -1,7 +1,6 @@
-import { useMemo } from 'react';
 import * as THREE from 'three';
 import { roundRect, SANS } from './draw';
-import { Box, Cyl } from './Toon';
+import { Box } from './Toon';
 import { FLUENT_ICONS } from './FluentIcons';
 import { useCanvasTexture, useInteractable } from './interact';
 

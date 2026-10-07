@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { blockers, holdUps, setDependsOn } from '../shared/issues.ts';
 import type { CeoJobKind } from '../shared/types.ts';
 
-// The CEO: a Claude Code session in the lobby that runs the company instead of writing code.
+// The CEO: a coding-agent session in the lobby that runs the company instead of writing code.
 // It studies each floor's repo, shapes the team (hire / let-go proposals the manager approves),
 // plans work as GitHub issues, and writes each floor's QA brief. Everything it changes goes
 // through the office tools below, so the swarm stays the single source of truth.

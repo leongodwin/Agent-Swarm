@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from 'react';
-import { useStore } from '../store';
 import { Panel } from './Overlays';
 import { copilotChime } from './sfx';
 
