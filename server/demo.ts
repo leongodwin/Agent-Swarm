@@ -308,7 +308,7 @@ const ANSI: Record<LogEntry['kind'], (text: string) => string> = {
 function inTerminal(opts: SessionOptions, cb: SessionCallbacks, start: (cb: SessionCallbacks) => SessionHandle): SessionHandle {
   const term = opts.terminal;
   if (!term) return start(cb);
-  const name = CLIS.find((c) => c.id === (opts.cli ?? 'claude'))?.label ?? 'Claude Code';
+  const name = CLIS.find((c) => c.id === (opts.cli ?? 'copilot'))?.label ?? 'GitHub Copilot CLI';
   term.note(`── ${name}${opts.label ? ` · ${opts.label}` : ''} ──`);
   term.write(
     [
@@ -544,7 +544,7 @@ const demoOffice: OfficeHost = {
 
 // ---------- the demo preview ----------
 
-function placeholderPage(title: string, hue: number) {
+function placeholderPage(title: string, _hue: number) {
   const safe = title.replace(/[<>&"]/g, '');
   const isCopilot = safe.toLowerCase().includes('copilot') || safe.toLowerCase().includes('customer');
   return `<!doctype html>
@@ -1007,7 +1007,7 @@ function ceoSession(opts: SessionOptions, cb: SessionCallbacks): SessionHandle {
         'SWARM_HOME=/tmp/cubefarm-demo SWARM_PORT=5260 node --import tsx server/index.ts --demo',
         '```',
         '',
-        `> I'm the demo CEO, so I can't act on "${short(text)}", but the real one would. See the [Claude Code docs](https://docs.claude.com/en/docs/claude-code/overview).`,
+        `> I'm the demo CEO, so I can't act on "${short(text)}", but the real one would. See the [GitHub Copilot CLI docs](https://github.com/github/copilot-cli).`,
       ].join('\n');
     },
   };
@@ -1032,7 +1032,7 @@ function ceoSession(opts: SessionOptions, cb: SessionCallbacks): SessionHandle {
   timers.push(
     setTimeout(async () => {
       try {
-        cb.log([{ kind: 'system', text: `✻ Claude Code (demo) · ${opts.model} · ${opts.effort} effort · CEO` }]);
+        cb.log([{ kind: 'system', text: `✻ GitHub Copilot CLI (demo) · ${opts.model || 'default model'} · ${opts.effort} effort · CEO` }]);
         const reply = await run();
         cb.log([{ kind: 'text', text: `● ${reply}` }]);
         cb.turn?.(reply);

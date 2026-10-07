@@ -427,8 +427,13 @@ export function drawSign(ctx: CanvasRenderingContext2D, w: number, h: number, li
   for (const l of lines) {
     y += (l.size * 1.25) / 2;
     ctx.fillStyle = l.color ?? fg;
-    ctx.font = `${l.weight ?? 700} ${l.size}px ${SANS}`;
+    let size = l.size;
+    ctx.font = `${l.weight ?? 700} ${size}px ${SANS}`;
     let text = l.text;
+    while (size > l.size * 0.6 && ctx.measureText(text).width > w - 40) {
+      size -= 2;
+      ctx.font = `${l.weight ?? 700} ${size}px ${SANS}`;
+    }
     while (text.length > 3 && ctx.measureText(text).width > w - 40) text = `${text.slice(0, -2)}…`;
     ctx.fillText(text, w / 2, y);
     y += (l.size * 1.25) / 2;

@@ -133,10 +133,10 @@ export const useStore = create<State>((set, get) => ({
   // Until the server's snapshot arrives; setupDone stays true so the wizard doesn't flash while loading.
   settings: {
     sessionLimit: 0,
-    defaultModel: 'claude-opus-5-5',
+    defaultModel: '',
     defaultEffort: 'medium',
     runtime: 'terminal',
-    defaultCli: 'claude',
+    defaultCli: 'copilot',
     hiring: 'approve',
     teamCap: 6,
     ceoHeartbeatMin: 60,

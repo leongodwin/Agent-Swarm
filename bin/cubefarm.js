@@ -2,7 +2,6 @@
 // `npx cubefarm`: checks this machine is ready, starts the office and opens it in the browser.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,7 +17,7 @@ const HELP = `
 
   Usage
     npx cubefarm            start the office and open it in your browser
-    npx cubefarm login      sign in to Claude Code, the built-in coding agent
+    npx cubefarm login      sign in to GitHub Copilot CLI
     npx cubefarm doctor     check that this machine is ready
 
   Options
@@ -70,36 +69,24 @@ if (values.version) {
   process.exit(0);
 }
 
-// ---------- Claude Code ----------
+// ---------- GitHub Copilot CLI ----------
 
-// The Agent SDK ships Claude Code as a per-platform package. The office runs its agents on it, so logging in with it
-// is logging the agents in. Same lookup as the SDK's own.
-function claudeBinary() {
-  let sdk;
-  try {
-    sdk = createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk');
-  } catch {
-    return null;
-  }
-  const { platform, arch } = process;
-  const musl = platform === 'linux' && !process.report?.getReport?.()?.header?.glibcVersionRuntime;
-  const targets = platform === 'linux' ? (musl ? [`linux-${arch}-musl`, `linux-${arch}`] : [`linux-${arch}`, `linux-${arch}-musl`]) : [`${platform}-${arch}`];
-  const fromSdk = createRequire(sdk);
-  for (const target of targets) {
-    try {
-      return fromSdk.resolve(`@anthropic-ai/claude-agent-sdk-${target}/claude${platform === 'win32' ? '.exe' : ''}`);
-    } catch {
-      // not installed for this target
-    }
-  }
-  return null;
+function copilotBinary() {
+  const finder = process.platform === 'win32' ? 'where.exe' : 'which';
+  const found = spawnSync(finder, ['copilot'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+  return found.status === 0 ? found.stdout.trim().split(/\r?\n/)[0] || null : null;
 }
 
-// Like the agents: no API keys or settings inherited from a Claude Code session this was started from.
-function claudeEnv() {
-  const env = {};
-  for (const [k, v] of Object.entries(process.env)) if (!/^(ANTHROPIC_|CLAUDE)/i.test(k) || k === 'CLAUDE_CONFIG_DIR') env[k] = v;
-  return env;
+function runCopilot(args, options = {}) {
+  const binary = copilotBinary();
+  if (!binary) return { status: 1, stdout: '', stderr: 'GitHub Copilot CLI is not installed.' };
+  return spawnSync(binary, args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    ...(args[0] === '--version' ? { timeout: 30_000 } : {}),
+    shell: process.platform === 'win32',
+    ...options,
+  });
 }
 
 // ---------- checks ----------
@@ -120,19 +107,15 @@ function checks() {
     out.push({ name: 'GitHub CLI', ok, detail: ok ? 'signed in' : 'not signed in', fix: 'run: gh auth login' });
   }
 
-  const claude = claudeBinary();
-  if (!claude) {
-    out.push({ name: 'Claude Code', ok: false, fix: `reinstall cubefarm: Claude Code for ${process.platform}-${process.arch} is missing` });
-  } else {
-    let status = null;
-    try {
-      status = JSON.parse(sh(claude, ['auth', 'status', '--json'], claudeEnv()).stdout);
-    } catch {
-      // unreadable: treated as signed out
-    }
-    const ok = status?.loggedIn === true;
-    out.push({ name: 'Claude', ok, detail: ok ? `signed in${status.subscriptionType ? ` (${status.subscriptionType})` : ''}` : 'not signed in', fix: 'run: npx cubefarm login' });
-  }
+  const copilot = copilotBinary();
+  const version = copilot ? runCopilot(['--version']) : null;
+  out.push({
+    name: 'Copilot CLI',
+    ok: !!copilot,
+    detail: version?.status === 0 ? version.stdout.trim().split(/\r?\n/)[0] : copilot ? 'installed' : 'not found',
+    fix: 'install GitHub Copilot CLI: https://github.com/github/copilot-cli, then run: npx cubefarm login',
+    required: true,
+  });
 
   // Agents test in a browser through Playwright, which drives Google Chrome by default.
   const chrome = chromePaths().some((p) => fs.existsSync(p));
@@ -224,10 +207,9 @@ if (command === 'doctor') {
 }
 
 if (command === 'login') {
-  const claude = claudeBinary();
-  if (!claude) fail(`Claude Code for ${process.platform}-${process.arch} is missing. Reinstall cubefarm.`);
-  console.log('\n  Signing in to Claude. Your agents use this login and your subscription.\n');
-  const res = spawnSync(claude, ['auth', 'login'], { stdio: 'inherit', env: claudeEnv() });
+  if (!copilotBinary()) fail('GitHub Copilot CLI is not installed. Install it from https://github.com/github/copilot-cli.');
+  console.log('\n  Signing in to GitHub Copilot.\n');
+  const res = runCopilot(['login'], { stdio: 'inherit' });
   process.exit(res.status ?? 1);
 }
 

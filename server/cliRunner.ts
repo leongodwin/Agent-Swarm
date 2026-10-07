@@ -32,7 +32,8 @@ import type { AgentCli } from '../shared/types.ts';
 // Claude Code reports through HTTP hooks passed with --settings: every tool call (PreToolUse also approves it, so the
 // CLI never stops to ask), each finished turn (Stop, with the final text), failures (StopFailure) and, through its
 // status line, cost and usage limits. Codex says when a turn ends (notify) and, once the manager trusts the office's
-// hooks in its /hooks, reports its steps through them too. OpenCode's plugin only says when a turn ends.
+// hooks in its /hooks, reports its steps through them too. OpenCode's plugin only says when a turn ends. GitHub
+// Copilot CLI runs one-shot (-p): its terminal output is the result, and the process exiting ends the session.
 //
 // The CLIs run in the office's terminal keeper (ptyClient.ts) and call their hooks there, so an office restart doesn't
 // stop them: the office picks them up again when it's back (reconnectClis).
@@ -49,6 +50,13 @@ const BOOT_MS = 60_000;
 const USAGE_WARN_PCT = 90;
 /** Prompts longer than this go in a file: Windows caps a command line at 32K characters. */
 const INLINE_PROMPT_MAX = 8000;
+const COPILOT_OUTPUT_LIMIT = 1_000_000;
+const ANSI = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
+
+/** Plain text returned by `copilot --prompt`, without terminal styling. */
+export function copilotResponse(output: string): string {
+  return output.replace(ANSI, '').replace(/\r/g, '').trim();
+}
 
 // ---------- routing the CLIs' calls back to their sessions ----------
 
@@ -169,6 +177,7 @@ interface LiveCli {
   dir: string;
   resumeId: string | null; // the session a follow-up resumes
   statusLine: string;
+  output: string;
   /** Browser screenshots already passed on (Codex and OpenCode: collected from the browser's output folder). */
   shots: Set<string>;
   /** The office session driving it; null while it waits at its prompt. */
@@ -230,7 +239,13 @@ function wire(l: LiveCli, office?: OfficeTools) {
   routes.set(l.token, { hook: (b) => (l.session ? l.session.hook(b) : idleHook(l, b)), office });
   l.term.bind({ write: (d) => quietly(() => p.write(d)), resize: (c, r) => quietly(() => p.resize(c, r)) });
   p.onData((data) => {
-    if (lives.get(l.term) === l) l.term.write(data);
+    if (lives.get(l.term) === l) {
+      l.term.write(data);
+      if (l.cli === 'copilot') {
+        l.output += data;
+        if (l.output.length > COPILOT_OUTPUT_LIMIT) l.output = l.output.slice(-COPILOT_OUTPUT_LIMIT);
+      }
+    }
   });
   p.onExit((code) => {
     l.proc = null;
@@ -268,12 +283,13 @@ export async function reconnectClis(terminalFor: (agentId: string) => AgentTermi
   for (const h of held) {
     const meta = (h.meta ?? {}) as Partial<CliMeta>;
     const term = meta.agentId ? terminalFor(meta.agentId) : null;
-    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || !meta.token || !meta.dir || !meta.agentId) {
+    // Copilot runs one-shot with its result in the terminal output, which a restart loses: resume its session instead.
+    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || !meta.token || !meta.dir || !meta.agentId) {
       discardPty(h);
       if (meta.cli === 'codex' && meta.resumeId) void codexThread('archive', meta.resumeId, h.exit === null ? new Promise((r) => setTimeout(r, 5000)) : undefined);
       continue;
     }
-    const l: LiveCli = { agentId: meta.agentId, cli: meta.cli, term, proc: adoptPty(h), token: meta.token, dir: meta.dir, resumeId: meta.resumeId ?? null, statusLine: '🏢 cubefarm', shots: new Set(), session: null };
+    const l: LiveCli = { agentId: meta.agentId, cli: meta.cli, term, proc: adoptPty(h), token: meta.token, dir: meta.dir, resumeId: meta.resumeId ?? null, statusLine: '🏢 cubefarm', output: '', shots: new Set(), session: null };
     wire(l);
     waitAtPrompt(l);
     // Resizing makes the CLI draw its whole screen again, over whatever the saved copy of the terminal missed.
@@ -574,6 +590,21 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
 
   /** The CLI quit on its own: /exit typed in the terminal, a crash, or it couldn't start (not signed in, bad flag…). */
   const exited = (exitCode: number) => {
+    if (cli === 'copilot') {
+      const text = copilotResponse(live?.output ?? '');
+      if (text) {
+        lastText = text;
+        turns += 1;
+        log(assistantLines(text));
+        cb.turn?.(text);
+      }
+      finish({
+        ok: exitCode === 0 && !!text,
+        text,
+        errors: exitCode === 0 && text ? [] : [`${label} ${exitCode ? `exited with code ${exitCode}` : 'finished without a response'}.${text ? ` ${clip(text, 240)}` : ''}`],
+      });
+      return;
+    }
     if (cli === 'claude' && opts.resumeSessionId && !begun && lostConversation(term.screen())) {
       cb.sessionId(null);
       finish({ ok: false, text: '', errors: [`${label} couldn't find the conversation it was resuming, so the next session starts a new one.`] });
@@ -633,7 +664,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const keeper = keeperHookUrl();
   const hookUrl = `${keeper ?? officeUrl}/api/hooks/${token}`;
   const browser = opts.browserTesting ? playwrightServer(path.join(dir, 'browser')) : null;
-  let prompt = opts.prompt;
+  let prompt = cli === 'copilot' ? `${opts.systemAppend}\n\n${opts.prompt}` : opts.prompt;
   if (opts.outputSchema) {
     prompt += `\n\nWhen you are done, end your final message with your report as one JSON object in a \`\`\`json block, matching this JSON schema:\n${JSON.stringify(opts.outputSchema)}`;
   }
@@ -692,10 +723,10 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   }
   Object.assign(env, { TERM: 'xterm-256color', COLORTERM: 'truecolor' }, launch.env);
 
-  if (cli === 'claude' && opts.resumeSessionId) cb.sessionId(sessionId);
+  if (cli === 'claude' || cli === 'copilot') cb.sessionId(sessionId);
   term.note(`── ${label}${opts.label ? ` · ${opts.label}` : ''} ──`);
-  const resumeId = cli === 'claude' ? sessionId : (opts.resumeSessionId ?? null);
-  const l: LiveCli = { agentId: opts.agentId ?? '', cli, term, proc: null, token, dir, resumeId, statusLine, shots: new Set(), session: { hook, exited } };
+  const resumeId = cli === 'claude' || cli === 'copilot' ? sessionId : (opts.resumeSessionId ?? null);
+  const l: LiveCli = { agentId: opts.agentId ?? '', cli, term, proc: null, token, dir, resumeId, statusLine, output: '', shots: new Set(), session: { hook, exited } };
   const begin = () => {
     if (done) return; // stopped while its thread was being unarchived
     let p: Pty;

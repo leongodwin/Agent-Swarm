@@ -15,7 +15,7 @@ That's it. cubefarm checks your machine, starts the office and opens it in your 
 - **Node.js 22 or newer**: [nodejs.org](https://nodejs.org)
 - **git**
 - **The GitHub CLI**, signed in: install it from [cli.github.com](https://cli.github.com), then run `gh auth login`
-- **A coding agent subscription**: cubefarm brings Claude Code, the default agent and the one your CEO runs: sign in once with `npx cubefarm login`. You don't need to install it. Agents can also run Codex or OpenCode, if you have them installed and signed in.
+- **GitHub Copilot CLI**: install it from [github.com/github/copilot-cli](https://github.com/github/copilot-cli), then sign in with `npx cubefarm login`. It's the default for the CEO, developers and QA testers. Claude Code, Codex and OpenCode are also available if you have them installed and signed in.
 - **Google Chrome**, for agents that test your app in a browser.
 
 It runs on Windows, macOS and Linux. Not sure you're ready? `npx cubefarm doctor` checks all of it.
@@ -60,7 +60,7 @@ Demo mode fakes GitHub and the agents, so it costs nothing and changes nothing.
 | Command | What it does |
 | --- | --- |
 | `npx cubefarm` | start the office and open it in your browser |
-| `npx cubefarm login` | sign in to Claude Code, the built-in coding agent |
+| `npx cubefarm login` | sign in to GitHub Copilot CLI |
 | `npx cubefarm doctor` | check that your machine is ready |
 | `npx cubefarm --demo` | fake GitHub and fake agents |
 | `npx cubefarm --port 4400` | use another port (the default is 4317) |

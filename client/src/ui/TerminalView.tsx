@@ -77,7 +77,7 @@ export function TerminalView({ agentId }: { agentId: string }) {
     }
   };
   const working = isBusy(agent);
-  const cli = agent.role === 'ceo' ? 'claude' : agent.cli || settings.defaultCli;
+  const cli = agent.role === 'ceo' ? 'copilot' : agent.cli || settings.defaultCli;
   const cliName = clis.find((c) => c.id === cli)?.label ?? cli;
   const issueUrl = agent.issueNumber ? `https://github.com/${repo.fullName}/issues/${agent.issueNumber}` : null;
   const canMessage = working || (!isQa && !!agent.branch && agent.status !== 'idle');

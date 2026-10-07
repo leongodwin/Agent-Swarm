@@ -134,8 +134,8 @@ export type AgentTask = 'issue' | 'qa' | 'fix';
  */
 export type AgentRuntime = 'terminal' | 'sdk';
 
-/** The coding-agent CLI an agent runs in its terminal. The CEO is always Claude Code. */
-export type AgentCli = 'claude' | 'codex' | 'opencode';
+/** The coding-agent CLI an agent runs in its terminal. */
+export type AgentCli = 'claude' | 'codex' | 'opencode' | 'copilot';
 
 /** A coding-agent CLI the office knows how to run, and whether it's installed on this machine. */
 export interface CliView {
@@ -225,11 +225,11 @@ export interface QaView {
 }
 
 export interface SwarmSettings {
-  sessionLimit: number; // most Claude Code sessions running at once; 0 = no limit
+  sessionLimit: number; // most concurrent sessions running at once; 0 = no limit
   defaultModel: string;
   defaultEffort: EffortLevel;
   runtime: AgentRuntime;
-  defaultCli: AgentCli; // what developers and QA testers run in their terminals unless they have their own
+  defaultCli: AgentCli; // what developers and QA testers run unless they have their own
   hiring: 'approve' | 'auto'; // CEO proposals wait for the manager, or go through while the floor is under teamCap
   teamCap: number; // most agents per floor the CEO may reach without the manager's approval (auto mode)
   ceoHeartbeatMin: number; // minutes between the CEO's periodic reviews; 0 = off
@@ -242,7 +242,7 @@ export interface SwarmSettings {
   pacingSessions: number; // after Claude warns about usage, new issues start only while fewer sessions than this run
 }
 
-/** Claude's subscription usage: normal, pacing new work after a usage warning, or paused at the limit until `until`. */
+/** Claude's subscription usage (Claude Code only): normal, pacing new work after a usage warning, or paused at the limit until `until`. */
 export interface UsageView {
   state: 'normal' | 'pacing' | 'paused';
   until: number | null;

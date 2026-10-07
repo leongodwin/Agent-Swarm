@@ -165,7 +165,7 @@ export function SetupWizard() {
                     <button key={c} type="button" className={`swatch ${c === ceoColor ? 'swatch-on' : ''}`} style={{ background: c }} onClick={() => setCeoColor(c)} title="Tie colour" />
                   ))}
                 </div>
-                <div className="muted small">Claude Opus 5.5 at xhigh effort: the thinking-hardest person in the building.</div>
+                <div className="muted small">Runs GitHub Copilot CLI: the thinking-hardest person in the building.</div>
               </div>
             </div>
             <p className="start-tag" style={{ margin: '12px 0 6px' }}>

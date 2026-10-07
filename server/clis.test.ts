@@ -137,6 +137,34 @@ describe('launchArgs', () => {
     for (const role of ['dev', 'qa'] as const) expect(config({ role }).permission).toEqual({ edit: 'allow', bash: 'allow', webfetch: 'allow' });
     expect(config({}).autoupdate).toBe(false);
   });
+
+  it('runs Copilot non-interactively, resumes by session id, and adds the CEO office MCP server', () => {
+    const context = ctx({
+      model: 'gpt-5',
+      effort: 'high',
+      files: { settings: 'settings.json', mcp: 'mcp.json', system: 'instructions.md' },
+    });
+    const fresh = launchArgs('copilot', context);
+    expect(fresh.args).toEqual([
+      '--no-auto-update',
+      '--allow-all',
+      '--silent',
+      '--model',
+      'gpt-5',
+      '--effort',
+      'high',
+      '--session-id',
+      context.sessionId,
+      '--additional-mcp-config',
+      '@mcp.json',
+      '-p',
+      context.prompt,
+    ]);
+    expect(fresh.env).toEqual({});
+
+    const resumed = launchArgs('copilot', ctx({ resumeId: 'session-1' })).args;
+    expect(resumed.slice(resumed.indexOf('--resume=session-1'), resumed.indexOf('-p'))).toEqual(['--resume=session-1']);
+  });
 });
 
 describe('oneAtATime', () => {

@@ -130,6 +130,7 @@ interface CeoState {
 }
 
 interface Persisted {
+  version: number;
   settings: SwarmSettings;
   repos: PersistedRepo[];
   agents: PersistedAgent[];
@@ -209,11 +210,11 @@ const lookFor = (name: string): AgentLook => (FEMININE_NAMES.has(name.trim().spl
 const LOOKS: AgentLook[] = ['feminine', 'masculine'];
 const MAX_DESKS: Record<AgentRole, number> = { dev: 12, qa: 3, ceo: 1 };
 const MAX_QA_ROUNDS = 3;
-// Every agent runs Claude Opus 5.5 at medium effort unless the manager overrides it.
+// Claude Code keeps its own default model when the office runs in SDK mode.
 const DEFAULT_MODEL = 'claude-opus-5-5';
 const EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-// The CEO thinks harder than the staff: Opus 5.5 at xhigh effort unless the manager changes it.
-const CEO_MODEL = 'claude-opus-5-5';
+// The CEO uses the selected CLI's default model unless the manager overrides it.
+const CEO_MODEL = '';
 const CEO_EFFORT: EffortLevel = 'xhigh';
 const CEO_NAME = 'Satya';
 // The CEO's own folder: its notes about the company live here. Repos are read through their clones.
@@ -345,12 +346,13 @@ export { HttpError };
 
 export class Swarm {
   private state: Persisted = {
+    version: 2,
     settings: {
       sessionLimit: 0,
-      defaultModel: DEFAULT_MODEL,
+      defaultModel: '',
       defaultEffort: 'medium',
       runtime: 'terminal',
-      defaultCli: 'claude',
+      defaultCli: 'copilot',
       hiring: 'approve',
       teamCap: 6,
       ceoHeartbeatMin: 60,
@@ -429,6 +431,7 @@ export class Swarm {
       const raw = await fs.readFile(STATE_FILE, 'utf8');
       const loaded = JSON.parse(raw) as Partial<Persisted>;
       this.state = {
+        version: loaded.version ?? 0,
         settings: { ...this.state.settings, ...loaded.settings },
         repos: (loaded.repos ?? []).map((r) => ({
           ...r,
@@ -473,7 +476,16 @@ export class Swarm {
       for (const m of this.state.messages) this.messageSeq = Math.max(this.messageSeq, m.id + 1);
       if (!EFFORTS.includes(this.state.settings.defaultEffort)) this.state.settings.defaultEffort = 'medium';
       if (this.state.settings.runtime !== 'sdk') this.state.settings.runtime = 'terminal';
-      if (!isCli(this.state.settings.defaultCli)) this.state.settings.defaultCli = 'claude';
+      if (!isCli(this.state.settings.defaultCli)) this.state.settings.defaultCli = 'copilot';
+      if (this.state.version < 2) {
+        if (this.state.settings.defaultCli === 'claude') {
+          this.state.settings.defaultCli = 'copilot';
+          this.state.settings.defaultModel = '';
+        }
+        const ceo = this.state.agents.find((a) => a.id === CEO_ID);
+        if (ceo?.model === 'claude-opus-5-5') ceo.model = CEO_MODEL;
+        this.state.version = 2;
+      }
       if (!this.state.settings.defaultModel && this.state.settings.defaultCli === 'claude') this.state.settings.defaultModel = DEFAULT_MODEL;
       // "Max concurrent sessions" (default 4) became an optional session limit. The old default goes; a limit the manager chose stays.
       const old = this.state.settings as SwarmSettings & { maxConcurrent?: number; permissionMode?: string };
@@ -573,7 +585,7 @@ export class Swarm {
     setTimeout(() => this.schedule(), 1000);
   }
 
-  /** Agents cut off by a server restart pick their Claude Code session back up (QA and demo agents start over). */
+  /** Agents cut off by a server restart pick their coding-agent session back up (QA and demo agents start over). */
   private recover(agents: PersistedAgent[]) {
     for (const a of agents) {
       if (a.task === 'qa' || this.backend.demo || !a.sessionId || !a.branch) {
@@ -1455,14 +1467,15 @@ export class Swarm {
   }
 
   /**
-   * How an agent's next session runs: the CLI in their terminal (the terminal runtime), or Claude Code through the
-   * SDK. A session can only be resumed by the CLI that made it, so a follow-up stays with that CLI.
+   * The CEO always uses Copilot CLI; workers use the terminal runtime or Claude Code through the SDK. A session can
+   * only be resumed by the CLI that made it, so a follow-up stays with that CLI.
    */
   private sessionRuntime(a: PersistedAgent, resume?: string): { terminal?: AgentTerminal; cli?: AgentCli; label?: string; resumeSessionId?: string } {
-    const inTerminal = this.state.settings.runtime === 'terminal' && this.backend.terminals;
-    let cli: AgentCli = a.role === 'ceo' ? 'claude' : a.cli || this.state.settings.defaultCli;
+    const inTerminal = a.role === 'ceo' || (this.state.settings.runtime === 'terminal' && this.backend.terminals);
+    let cli: AgentCli = a.role === 'ceo' ? 'copilot' : a.cli || this.state.settings.defaultCli;
     if (resume && a.sessionCli && a.sessionCli !== cli) {
-      if (inTerminal) cli = a.sessionCli;
+      if (a.role === 'ceo') resume = undefined;
+      else if (inTerminal) cli = a.sessionCli;
       else if (a.sessionCli !== 'claude') resume = undefined;
     }
     if (!inTerminal) return { resumeSessionId: resume };
@@ -2110,6 +2123,9 @@ export class Swarm {
     if (!text.trim()) throw new HttpError(400, 'Empty message');
     const rt = this.agentRt.get(id)!;
     if (rt.session) {
+      if (!typed && a.sessionCli === 'copilot') {
+        throw new HttpError(409, `${a.name} is running a non-interactive Copilot task; send a follow-up after it finishes.`);
+      }
       this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${text}` }]);
       if (!typed) rt.session.send(text);
       return;
@@ -2524,7 +2540,7 @@ export class Swarm {
         skin: pick(SKIN),
         model: CEO_MODEL,
         effort: CEO_EFFORT,
-        cli: 'claude',
+        cli: 'copilot',
         status: 'idle',
         issueNumber: null,
         issueTitle: null,
@@ -2677,7 +2693,7 @@ export class Swarm {
         },
         sessionId: (id) => {
           a.sessionId = id;
-          a.sessionCli = id ? 'claude' : null;
+          a.sessionCli = id ? (how.cli ?? 'copilot') : null;
         },
         browserUrl: () => undefined,
         screenshot: () => undefined,
@@ -2729,6 +2745,10 @@ export class Swarm {
     const rt = this.agentRt.get(a.id)!;
     if (rt.session) {
       this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${t}` }]);
+      if (a.sessionCli === 'copilot') {
+        this.enqueueCeo({ kind: 'chat', text: t, at: Date.now() });
+        return;
+      }
       this.ceoIssues.managerMessage(); // a new request: the issue cap counts from here
       rt.session.send(`Message from the manager (they read your reply on their phone, so keep it short):\n${t}`);
       return;
@@ -3004,8 +3024,8 @@ export class Swarm {
         doing: this.agentDoing(a),
         issue: a.issueNumber ? { number: a.issueNumber, title: a.issueTitle } : null,
         pullRequest: a.prNumber ? { number: a.prNumber, url: a.prUrl } : null,
-        codingAgent: ceo ? 'claude' : a.cli || this.state.settings.defaultCli,
-        model: ceo ? a.model || CEO_MODEL : this.modelFor(a, a.cli || this.state.settings.defaultCli) || 'the coding agent default',
+        codingAgent: ceo ? 'copilot' : a.cli || this.state.settings.defaultCli,
+        model: ceo ? a.model || 'the coding agent default' : this.modelFor(a, a.cli || this.state.settings.defaultCli) || 'the coding agent default',
         effort: a.effort || (ceo ? CEO_EFFORT : this.state.settings.defaultEffort),
         hiredBy: a.hiredBy,
         jobDescription: a.brief || null,

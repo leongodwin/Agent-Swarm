@@ -6,8 +6,7 @@ import type { AgentCli, CliView, EffortLevel } from '../shared/types.ts';
 
 // The coding-agent CLIs an agent can run in its terminal, how to find them on this machine, and how to start one on
 // a task. Claude Code is fully wired in: its hooks report every tool call to the office.
-// The others start on the same prompt and report only when a turn ends (Codex's notify program, an OpenCode plugin);
-// the office shows their task instead of their tool calls.
+// Other CLIs run the same prompt and report when a turn ends; the office shows their task instead of each tool call.
 
 export interface CliDef {
   id: AgentCli;
@@ -20,6 +19,7 @@ export const CLIS: CliDef[] = [
   { id: 'claude', label: 'Claude Code', command: 'claude', integrated: true },
   { id: 'codex', label: 'Codex', command: 'codex', integrated: false },
   { id: 'opencode', label: 'OpenCode', command: 'opencode', integrated: false },
+  { id: 'copilot', label: 'GitHub Copilot CLI', command: 'copilot', integrated: false },
 ];
 
 export const isCli = (v: unknown): v is AgentCli => CLIS.some((c) => c.id === v);
@@ -234,6 +234,20 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         ctx.prompt,
       ];
       return { args, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config), CUBEFARM_NOTIFY_URL: ctx.notify.url } };
+    }
+    case 'copilot': {
+      const args = [
+        '--no-auto-update',
+        '--allow-all',
+        '--silent',
+        ...(ctx.model ? ['--model', ctx.model] : []),
+        ...(ctx.effort ? ['--effort', ctx.effort] : []),
+        ...(ctx.resumeId ? [`--resume=${ctx.resumeId}`] : ['--session-id', ctx.sessionId]),
+        ...(ctx.files.mcp ? ['--additional-mcp-config', `@${ctx.files.mcp}`] : []),
+        '-p',
+        ctx.prompt,
+      ];
+      return { args, env: {} };
     }
   }
 }
