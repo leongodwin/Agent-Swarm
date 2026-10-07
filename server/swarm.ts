@@ -585,7 +585,7 @@ export class Swarm {
     setTimeout(() => this.schedule(), 1000);
   }
 
-  /** Agents cut off by a server restart pick their Claude Code session back up (QA and demo agents start over). */
+  /** Agents cut off by a server restart pick their coding-agent session back up (QA and demo agents start over). */
   private recover(agents: PersistedAgent[]) {
     for (const a of agents) {
       if (a.task === 'qa' || this.backend.demo || !a.sessionId || !a.branch) {

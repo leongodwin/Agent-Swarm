@@ -283,7 +283,8 @@ export async function reconnectClis(terminalFor: (agentId: string) => AgentTermi
   for (const h of held) {
     const meta = (h.meta ?? {}) as Partial<CliMeta>;
     const term = meta.agentId ? terminalFor(meta.agentId) : null;
-    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || !meta.token || !meta.dir || !meta.agentId) {
+    // Copilot runs one-shot with its result in the terminal output, which a restart loses: resume its session instead.
+    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || !meta.token || !meta.dir || !meta.agentId) {
       discardPty(h);
       if (meta.cli === 'codex' && meta.resumeId) void codexThread('archive', meta.resumeId, h.exit === null ? new Promise((r) => setTimeout(r, 5000)) : undefined);
       continue;
