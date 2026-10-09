@@ -1,55 +1,39 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Panel } from './Overlays';
 import { api } from '../api';
 import type { AlmPipeline, AlmEnvironmentStatus, AlmGateCheck } from '../../../shared/alm';
 import { INITIAL_ALM_PIPELINE } from '../../../shared/alm';
 import { cue } from './sfx';
+import { useResource } from '../useResource';
+import { useStore, repoOnFloor } from '../store';
 
 export function ReleasePipelineModal({ onClose }: { onClose?: () => void }) {
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [pipeline, setPipeline] = useState<AlmPipeline>(INITIAL_ALM_PIPELINE);
   const [activeTab, setActiveTab] = useState<'pipeline' | 'matrix' | 'yaml'>('pipeline');
   const [isDeploying, setIsDeploying] = useState(false);
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.almPipeline()
-      .then((data) => {
-        if (data && data.solutionUniqueName) setPipeline(data);
-      })
-      .catch(() => {});
-  }, []);
-
+  const repo = useStore((s) => repoOnFloor(s.repos, s.floor));
+  const managerName = useStore((s) => s.settings.managerName);
+  const resource = useResource(repo?.id ?? 'office', () => api.almPipeline(repo?.id));
+  useEffect(() => { if (resource.value) setPipeline(resource.value); setSuccessBanner(null); }, [resource.value, repo?.id]);
   const handleApprove = async () => {
     setIsDeploying(true);
-    cue('merged');
     try {
-      const updated = await api.almApprove({ approver: 'Leon van Zyl' });
-      setPipeline(updated);
-      setSuccessBanner(`Solution v${updated.currentProdVersion} successfully deployed to Production! Managed package imported.`);
-    } catch {
-      // Fallback update in case of local simulation
-      setPipeline((prev: AlmPipeline): AlmPipeline => ({
-        ...prev,
-        approvalStatus: 'deployed',
-        currentProdVersion: prev.targetVersion,
-        approvedBy: 'Leon van Zyl',
-        approvedAt: new Date().toISOString(),
-      }));
-      setSuccessBanner('Solution successfully promoted to Production!');
-    } finally {
-      setIsDeploying(false);
-    }
+      const updated = await api.almApprove({ approver: managerName || 'Manager' }, repo?.id);
+      if (!mounted.current) return;
+      setPipeline(updated); cue('merged');
+      setSuccessBanner(`Simulated release v${updated.currentProdVersion} approved. No production deployment occurred.`);
+    } catch { if (mounted.current) setSuccessBanner('Approval failed; the simulated release was not deployed.'); }
+    finally { if (mounted.current) setIsDeploying(false); }
   };
-
   const handleRollback = async () => {
-    try {
-      const rolled = await api.almRollback();
-      setPipeline(rolled);
-      setSuccessBanner('Rolled back pipeline to pre-release state.');
-    } catch {
-      setPipeline(INITIAL_ALM_PIPELINE);
-    }
+    try { const updated = await api.almRollback(repo?.id); if (!mounted.current) return; setPipeline(updated); setSuccessBanner('Restored the previous simulated release.'); }
+    catch { if (mounted.current) setSuccessBanner('Rollback failed; the previous state is unchanged.'); }
   };
+  if (resource.loading || resource.error) return <Panel title="Simulated release pipeline"><p>{resource.error || 'Loading pipeline…'}</p></Panel>;
 
   const envs: AlmEnvironmentStatus[] = [
     pipeline.environments.dev,
@@ -105,7 +89,7 @@ export function ReleasePipelineModal({ onClose }: { onClose?: () => void }) {
           <div>
             <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Production Version</div>
             <div style={{ fontSize: 16, fontWeight: 800, color: '#4ade80', marginTop: 2 }}>v{pipeline.currentProdVersion}</div>
-            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Current live build</div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Current simulated build</div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Release Target</div>
@@ -356,7 +340,7 @@ export function ReleasePipelineModal({ onClose }: { onClose?: () => void }) {
                               {isDeploying ? '🚀 Deploying Solution...' : '🚀 Signoff & Ship to Production (Simulated)'}
                             </button>
                             <div style={{ fontSize: 10, color: '#f59e0b', textAlign: 'center', marginTop: 4 }}>
-                              ⚠️ Simulated gate (updates in-memory state &amp; dispatches Teams Adaptive Card)
+                              ⚠️ Simulated gate (persists local history; does not deploy or post to Teams)
                             </div>
                           </>
                         ) : (

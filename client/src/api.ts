@@ -5,6 +5,8 @@ import type { FlowRun } from '../../shared/flowTelemetry';
 import type { TeamsAdaptiveCard } from '../../shared/teams';
 import type { AlmPipeline } from '../../shared/alm';
 import type { DlpPolicyViolation } from '../../shared/dlp';
+import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../../shared/tenancy';
+import { ensureSession } from './session';
 
 export interface DlpScanReport {
   repoFullName: string;
@@ -17,11 +19,14 @@ export interface DlpScanReport {
 }
 
 async function call<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  await ensureSession();
+  const options = {
     method,
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  };
+  let res = await fetch(url, options);
+  if (res.status === 401) { await ensureSession(); res = await fetch(url, options); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const message = (data as { error?: string }).error ?? `${res.status} ${res.statusText}`;
@@ -32,6 +37,7 @@ async function call<T = unknown>(method: string, url: string, body?: unknown): P
 }
 
 const r = (repoId: string) => `/api/repos/${encodeURIComponent(repoId)}`;
+const scope = (repoId?: string) => repoId ? `?repo=${encodeURIComponent(repoId)}` : '';
 
 /** Choices made when a project moves in: a brief for the CEO, and whether work starts on its own. */
 export interface FloorOptions {
@@ -102,29 +108,14 @@ export const api = {
   solutionArchitecture: (repoId: string) => call<ParsedSolution>('GET', `/api/repos/${encodeURIComponent(repoId)}/solution-architecture`),
   flowRuns: (repoId: string) => call<FlowRun[]>('GET', `/api/repos/${encodeURIComponent(repoId)}/flow-runs`),
   resubmitFlowRun: (repoId: string, runId: string) => call<{ ok: boolean; resubmitted: FlowRun }>('POST', `/api/repos/${encodeURIComponent(repoId)}/flow-runs/${encodeURIComponent(runId)}/resubmit`),
-  teamsFeed: () => call<TeamsAdaptiveCard[]>('GET', '/api/teams/feed'),
-  almPipeline: () => call<AlmPipeline>('GET', '/api/alm/pipeline'),
-  almApprove: (data: { approver?: string } = {}) => call<AlmPipeline>('POST', '/api/alm/approve', data),
-  almRollback: () => call<AlmPipeline>('POST', '/api/alm/rollback'),
-  dlpScan: (repoId?: string) => call<DlpScanReport>('GET', `/api/repos/${encodeURIComponent(repoId || 'default')}/dlp-scan`),
-  tenancy: () =>
-    call<{
-      tenantName: string;
-      tenantDomain: string;
-      tenantId: string;
-      user: string;
-      environments: Array<{ index?: number; name: string; url: string; user: string; active: boolean }>;
-      isReal: boolean;
-    }>('GET', '/api/tenancy'),
+  teamsFeed: (repoId?: string) => call<TeamsAdaptiveCard[]>('GET', `/api/teams/feed${scope(repoId)}`),
+  almPipeline: (repoId?: string) => call<AlmPipeline>('GET', `/api/alm/pipeline${scope(repoId)}`),
+  almApprove: (data: { approver?: string } = {}, repoId?: string) => call<AlmPipeline>('POST', `/api/alm/approve${scope(repoId)}`, data),
+  almRollback: (repoId?: string) => call<AlmPipeline>('POST', `/api/alm/rollback${scope(repoId)}`),
+  dlpScan: (repoId: string) => call<DlpScanReport>('GET', `${r(repoId)}/dlp-scan`),
+  tenancy: () => call<TenancyInfo>('GET', '/api/tenancy'),
   selectTenancyEnvironment: (index: number) => call<{ ok: boolean; message: string }>('POST', '/api/tenancy/select', { index }),
-  loginTenancy: (data: {
-    environmentUrl?: string;
-    tenantId?: string;
-    applicationId?: string;
-    clientSecret?: string;
-    name?: string;
-    interactive?: boolean;
-  }) => call<{ ok: boolean; message: string }>('POST', '/api/tenancy/login', data),
+  loginTenancy: (data: TenancyLoginInput) => call<TenancyLogin>('POST', '/api/tenancy/login', data),
+  tenancyLoginStatus: (id: string) => call<TenancyLogin>('GET', `/api/tenancy/login/${encodeURIComponent(id)}`),
+  cancelTenancyLogin: (id: string) => call('DELETE', `/api/tenancy/login/${encodeURIComponent(id)}`),
 };
-
-

@@ -16,6 +16,8 @@ export interface SolutionComponentNode {
 }
 
 export interface ParsedSolution {
+  simulated?: boolean;
+  warnings?: string[];
   solutionName: string;
   isUnpacked: boolean;
   totalComponents: number;

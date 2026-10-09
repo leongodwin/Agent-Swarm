@@ -14,24 +14,15 @@ import { generateProposal } from './proposalAgent.ts';
 import { generateHld } from './hldAgent.ts';
 import { parseSolutionFolder } from '../shared/solutionParser.ts';
 import { scanDirectoryDlp } from './dlpScanner.ts';
-import { INITIAL_FLOW_RUNS } from '../shared/flowTelemetry.ts';
-import { buildTeamsCard, formatAdaptiveCardJson, type TeamsAdaptiveCard } from '../shared/teams.ts';
-import { almManager } from './almGate.ts';
-import { getTenancyInfo, selectEnvironment, loginTenancy } from './tenancy.ts';
+import { FeatureStore } from './features.ts';
+import { HOME_DIR } from './config.ts';
+import { createBrowserAuth } from './browserAuth.ts';
+import { parseBody, proposalSchema, hldSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
-const recentTeamsMessages: TeamsAdaptiveCard[] = [
-  buildTeamsCard({
-    title: 'Adaptive Card Dispatched',
-    subtitle: 'Copilot Studio · Autonomous Routing',
-    summary: 'Customer incident #10492 triaged. Adaptive Card dispatched to supervisor channel.',
-    facts: [
-      { title: 'Severity', value: 'High' },
-      { title: 'Agent', value: 'Ada (Copilot Architect)' },
-    ],
-  }),
-];
-
-const swarm = new Swarm(DEMO ? createDemoBackend() : realBackend);
+const backend = DEMO ? createDemoBackend() : realBackend;
+const swarm = new Swarm(backend);
+const features = new FeatureStore(path.join(HOME_DIR, backend.demo ? 'demo-features.json' : 'features.json'), backend.demo, process.env.TEAMS_INCOMING_WEBHOOK_URL);
+await features.init();
 // Sessions the office picks back up while it starts need the address their CLIs call back on before it listens.
 if (PORT) setOfficeUrl(`http://127.0.0.1:${PORT}`);
 await swarm.init();
@@ -42,6 +33,8 @@ const app = express();
 app.post('/api/hooks/:token', express.json({ limit: '64mb' }), (req, res) => void res.json(handleHook(String(req.params.token), req.body)));
 app.post('/api/mcp/:token', express.json({ limit: '4mb' }), (req, res, next) => void handleMcp(String(req.params.token), req, res).catch(next));
 app.all('/api/mcp/:token', (_req, res) => void res.status(405).set('Allow', 'POST').end());
+const browserAuth = createBrowserAuth();
+browserAuth.install(app);
 app.use(express.json({ limit: '1mb' }));
 
 type Handler = (req: Request, res: Response) => Promise<unknown> | unknown;
@@ -60,7 +53,18 @@ const num = (v: unknown) => {
 };
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 // Repo ids contain a slash ("owner/name"), so they travel URL-encoded as a single segment.
-const repoId = (req: Request) => decodeURIComponent(String(req.params.repo));
+const repoId = (req: Request) => String(req.params.repo);
+const connectedRepo = (id: string) => {
+  const repo = swarm.snapshot().repos.find((repo) => repo.id === id);
+  if (!repo) throw new HttpError(404, 'Repository is not connected');
+  return repo;
+};
+const featureScope = async (req: Request, repo?: string) => {
+  const id = repo ?? str(req.query.repo);
+  if (id) connectedRepo(id);
+  const active = (await backend.tenancy.info()).environments.find((env) => env.active);
+  return JSON.stringify([id || 'office', active?.url || 'disconnected']);
+};
 
 app.get('/api/state', route(() => swarm.snapshot()));
 
@@ -122,104 +126,45 @@ app.post(
 app.post('/api/repos/:repo/plan', route((req) => swarm.planFloor(repoId(req), typeof req.body?.mission === 'string' ? req.body.mission : undefined)));
 app.post('/api/repos/:repo/onboard', route((req) => swarm.onboardFloor(repoId(req))));
 
-// Strategic Pre-Sales & Architecture Generator Agents
-app.post('/api/proposals/generate', route((req) => generateProposal(req.body)));
-app.post('/api/hld/generate', route((req) => generateHld(req.body)));
-
-// Repo-Driven Solution Architecture Parser
+// Validated document generation; filesystem targets come from the connected repo.
+app.post('/api/proposals/generate', route((req) => generateProposal(parseBody(proposalSchema, req.body))));
+app.post('/api/hld/generate', route((req) => {
+  const { repoId: id, ...input } = parseBody(hldSchema, req.body);
+  const repo = id ? connectedRepo(id) : undefined;
+  if (repo && DEMO) throw new HttpError(409, 'Demo mode does not write project files');
+  return generateHld({ ...input, repoPath: repo?.checkoutPath || undefined });
+}));
 app.get('/api/repos/:repo/solution-architecture', route((req) => {
-  const repo = swarm.snapshot().repos.find((r) => r.id === repoId(req));
-  return parseSolutionFolder(repo?.checkoutPath ?? null);
+  const repo = connectedRepo(repoId(req));
+  return parseSolutionFolder(repo.checkoutPath ?? null, DEMO);
 }));
-
-// Repo DLP Policy Scanner
 app.get('/api/repos/:repo/dlp-scan', route((req) => {
-  const repos = swarm.snapshot().repos;
-  const requestedId = repoId(req);
-  const repo = repos.find((r) => r.id === requestedId) ?? repos[0];
-  const checkoutPath = repo?.checkoutPath ?? null;
-  return scanDirectoryDlp(checkoutPath, repo?.fullName ?? 'demo/powerplatform-solution');
+  const repo = connectedRepo(repoId(req));
+  return scanDirectoryDlp(DEMO ? null : repo.checkoutPath ?? null, repo.fullName);
 }));
-
-// Power Automate Flow Telemetry & Execution Runs
-app.get('/api/repos/:repo/flow-runs', route(() => INITIAL_FLOW_RUNS));
-app.post('/api/repos/:repo/flow-runs/:runId/resubmit', route((req) => {
-  const runId = String(req.params.runId);
-  const found = INITIAL_FLOW_RUNS.find((r) => r.id === runId) ?? INITIAL_FLOW_RUNS[0];
-  const newRun = {
-    ...found,
-    id: `resubmit-${Date.now().toString().slice(-6)}`,
-    startedAt: 'Just now',
-    status: 'Succeeded' as const,
-  };
-  return { ok: true, resubmitted: newRun };
+app.get('/api/repos/:repo/flow-runs', route(async (req) => {
+  connectedRepo(repoId(req));
+  const key = await featureScope(req, repoId(req));
+  return features.runs(key);
 }));
-
-// Microsoft Teams Webhook & Feed
-app.get('/api/teams/feed', route(() => recentTeamsMessages));
-app.post('/api/teams/notify', route((req) => {
-  const card = buildTeamsCard({
-    title: str(req.body.title) || 'Cubefarm Agent Notification',
-    subtitle: str(req.body.subtitle) || 'Swarm Activity',
-    summary: str(req.body.summary) || 'Agent activity event triggered.',
-    facts: Array.isArray(req.body.facts) ? req.body.facts : [],
-  });
-  recentTeamsMessages.unshift(card);
-  if (recentTeamsMessages.length > 20) recentTeamsMessages.pop();
-
-  const webhookUrl = process.env.TEAMS_INCOMING_WEBHOOK_URL;
-  if (webhookUrl) {
-    fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formatAdaptiveCardJson(card)),
-    }).catch((err) => console.error('Failed to post to Teams webhook:', err));
-  }
-
-  return { ok: true, card };
+app.post('/api/repos/:repo/flow-runs/:runId/resubmit', route(async (req) => {
+  connectedRepo(repoId(req));
+  const key = await featureScope(req, repoId(req));
+  return features.resubmit(key, String(req.params.runId));
 }));
-
-almManager.setNotifier((cardInput) => {
-  const card = buildTeamsCard({
-    title: cardInput.title,
-    subtitle: cardInput.subtitle || '',
-    summary: cardInput.summary || '',
-    facts: cardInput.facts,
-  });
-  recentTeamsMessages.unshift(card);
-  if (recentTeamsMessages.length > 20) recentTeamsMessages.pop();
-  const webhookUrl = process.env.TEAMS_INCOMING_WEBHOOK_URL;
-  if (webhookUrl) {
-    fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formatAdaptiveCardJson(card)),
-    }).catch((err) => console.error('Failed to post to Teams webhook:', err));
-  }
-});
-
-// Application Lifecycle Management (ALM) Multi-Environment Release Gate
-app.get('/api/alm/pipeline', route(() => almManager.getPipeline()));
-app.post('/api/alm/approve', route((req) => almManager.approveRelease(str(req.body?.approver) || undefined)));
-app.post('/api/alm/rollback', route(() => almManager.rollbackRelease()));
-
-// Live Microsoft Entra ID & Power Platform Tenancy Status & Authentication
-app.get('/api/tenancy', route(() => getTenancyInfo()));
-app.post('/api/tenancy/select', route((req) => {
-  const index = Number(req.body?.index);
-  if (isNaN(index) || index <= 0) throw new HttpError(400, 'Valid environment profile index is required');
-  return selectEnvironment(index);
+app.get('/api/teams/feed', route(async (req) => features.feed(await featureScope(req))));
+app.post('/api/teams/notify', route(async (req) => features.notify(await featureScope(req), parseBody(notifySchema, req.body))));
+app.get('/api/alm/pipeline', route(async (req) => features.pipeline(await featureScope(req))));
+app.post('/api/alm/approve', route(async (req) => {
+  const input = parseBody(approveSchema, req.body ?? {});
+  return features.release(await featureScope(req), 'approve', input.approver);
 }));
-app.post('/api/tenancy/login', route(async (req) => {
-  return await loginTenancy({
-    environmentUrl: typeof req.body?.environmentUrl === 'string' ? req.body.environmentUrl.trim() : undefined,
-    tenantId: typeof req.body?.tenantId === 'string' ? req.body.tenantId.trim() : undefined,
-    applicationId: typeof req.body?.applicationId === 'string' ? req.body.applicationId.trim() : undefined,
-    clientSecret: typeof req.body?.clientSecret === 'string' ? req.body.clientSecret.trim() : undefined,
-    name: typeof req.body?.name === 'string' ? req.body.name.trim() : undefined,
-    interactive: Boolean(req.body?.interactive),
-  });
-}));
+app.post('/api/alm/rollback', route(async (req) => features.release(await featureScope(req), 'rollback')));
+app.get('/api/tenancy', route(() => backend.tenancy.info()));
+app.post('/api/tenancy/select', route((req) => backend.tenancy.select(parseBody(selectSchema, req.body).index)));
+app.post('/api/tenancy/login', route((req) => backend.tenancy.login(parseBody(loginSchema, req.body))));
+app.get('/api/tenancy/login/:id', route((req) => backend.tenancy.loginStatus(String(req.params.id))));
+app.delete('/api/tenancy/login/:id', route((req) => backend.tenancy.cancelLogin(String(req.params.id))));
 
 // The floor's app, for the preview monitor
 app.post(
@@ -301,6 +246,7 @@ const terms = new WebSocketServer({ noServer: true });
 wss.on('connection', (ws) => swarm.addClient(ws));
 terms.on('connection', (ws, req) => swarm.attachTerminal(new URL(req.url ?? '', 'http://localhost').searchParams.get('agent') ?? '', ws));
 server.on('upgrade', (req, socket, head) => {
+  if (!browserAuth.websocket(req)) { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return void socket.destroy(); }
   const { pathname } = new URL(req.url ?? '', 'http://localhost');
   const target = pathname === '/ws' ? wss : pathname === '/ws/term' ? terms : null;
   if (!target) return void socket.destroy();
@@ -320,6 +266,7 @@ let closing = false;
 const shutdown = (signal: string) => {
   if (closing) return;
   closing = true;
+  backend.tenancy.close();
   console.log(`\n  ${signal}: stopping floor previews…`);
   const force = setTimeout(() => process.exit(0), 15_000);
   void swarm

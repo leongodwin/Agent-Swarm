@@ -9,7 +9,7 @@ import { defaultProjectsDir, HOME_DIR, LOG_BUFFER, SCHEDULER_INTERVAL_MS, STATE_
 import { ceoJobPrompt, ceoSystemPrompt, createOfficeTools, IssueCap, jobLabel, planRoute, specialtyLabel, specialtySlug, type CeoJob, type OfficeTools } from './ceo.ts';
 import { HttpError } from './httpError.ts';
 import { CHECKS_ALERT_MS, MAX_MERGE_FIXES, MERGE_RETRY_MS, mergeStep } from './mergeGate.ts';
-import { auditPrDiff, type DlpPolicyViolation } from '../shared/dlp.ts';
+import { auditDlpCompliance, type DlpPolicyViolation } from '../shared/dlp.ts';
 import { DEFAULT_PREVIEW, Previews, parsePreviewPatch } from './previews.ts';
 import { drainDecision, lastUpdateMessage, POSTPONE_MS, type DrainInput, type LastUpdate } from './officeUpdate.ts';
 import { clampPacingSessions, DEFAULT_PACING_SESSIONS, mayStart, PACING_MS, pacingMessage, usageLabel, usageView, type UsageWarning, type WorkKind } from './pacing.ts';
@@ -45,7 +45,9 @@ import type {
   WorldSnapshot,
 } from '../shared/types.ts';
 
-import { getActiveEnvironment } from './tenancy.ts';
+import { activeEnvironment } from './tenancy.ts';
+import { fixDeskBranch } from './workspace.ts';
+import { atomicWrite, SerialWriter } from './atomicFile.ts';
 
 // ---------- persisted shape ----------
 
@@ -407,6 +409,7 @@ export class Swarm {
   private user: string | null = null;
   private ghError: string | undefined;
   private saveTimer: NodeJS.Timeout | null = null;
+  private stateWriter = new SerialWriter();
   private flushTimer: NodeJS.Timeout | null = null;
   private logSeq = 1;
   private previews: Previews;
@@ -803,11 +806,10 @@ export class Swarm {
   private async writeState() {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
-    for (const a of this.state.agents) a.logTail = (this.agentRt.get(a.id)?.log ?? []).slice(-200);
-    await fs.mkdir(path.dirname(STATE_FILE), { recursive: true });
-    const tmp = `${STATE_FILE}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(this.state, null, 2));
-    await fs.rename(tmp, STATE_FILE);
+    await this.stateWriter.write(async () => {
+      for (const a of this.state.agents) a.logTail = (this.agentRt.get(a.id)?.log ?? []).slice(-200);
+      await atomicWrite(STATE_FILE, JSON.stringify(this.state, null, 2));
+    });
   }
 
   // ---------- lookups ----------
@@ -876,7 +878,7 @@ export class Swarm {
       summary: '',
       qaBrief: '',
       preview: { ...DEFAULT_PREVIEW, env: {} },
-      targetTenancy: getActiveEnvironment(),
+      targetTenancy: activeEnvironment(await this.backend.tenancy.info()),
       addedAt: Date.now(),
     };
     this.backend.setLocalPath(repo.fullName, folder);
@@ -1032,12 +1034,11 @@ export class Swarm {
   private async advanceMerge(repo: PersistedRepo, rec: QaRecord, pr: PullInfo): Promise<boolean> {
     let dlpViolations: DlpPolicyViolation[] = [];
     try {
-      const diff = await this.backend.prDiff(repo.fullName, pr.number);
-      if (diff) {
-        dlpViolations = auditPrDiff(diff);
-      }
+      const files = await this.backend.prFiles(repo.fullName, pr.number, pr.headSha);
+      dlpViolations = files.flatMap((file) => auditDlpCompliance(file.content, file.file));
     } catch (err) {
       console.warn(`DLP scan failed for ${repo.fullName}#${pr.number}`, err);
+      return this.mergeNote(rec, 'DLP scan unavailable; waiting to retry before merging');
     }
     let step = mergeStep({ ...pr, dlpViolations }, rec, Date.now(), { base: repo.defaultBranch });
     if (step.do === 'details') {
@@ -1064,8 +1065,9 @@ export class Swarm {
       // The repo only merges up-to-date branches. GitHub merges the base in cleanly (or refuses); CI checks the result.
       this.mergeNote(rec, `updating the branch with ${repo.defaultBranch}`);
       await this.backend.updateBranch(repo.fullName, pr.number);
-      const details = await this.backend.prDetails(repo.fullName, pr.number);
-      this.setQa(rec, { passedSha: details.headSha });
+      this.setQa(rec, { status: 'queued', passedSha: null, testedSha: null, round: rec.round + 1, retests: rec.retests + 1,
+        mergeNote: 'Branch updated; QA must test the new head', pendingSince: null });
+      setTimeout(() => this.schedule(), 200);
       return false;
     }
     if (step.do !== 'merge') return false;
@@ -2153,12 +2155,13 @@ export class Swarm {
   private async runFix(dev: PersistedAgent, repo: PersistedRepo, rec: QaRecord) {
     const original = rec.devAgentId === dev.id;
     const pull = this.repoRt.get(repo.id)?.pulls.find((p) => p.number === rec.prNumber);
-    const headRef = pull?.headRefName ?? dev.branch ?? `pr-${rec.prNumber}`;
+    const headRef = pull?.headRefName ?? (await this.backend.prDetails(repo.fullName, rec.prNumber)).headRefName;
+    const branch = fixDeskBranch(rec.prNumber, this.agentSlug(dev));
     const qaAgent = rec.qaAgentId ? this.state.agents.find((x) => x.id === rec.qaAgentId) : null;
     this.setQa(rec, { status: 'fixing', devAgentId: dev.id });
     this.beginTask(
       dev,
-      { task: 'fix', issueNumber: rec.issueNumber, issueTitle: pull?.title ?? `PR #${rec.prNumber}`, branch: headRef, prNumber: rec.prNumber, prUrl: pull?.url ?? null },
+      { task: 'fix', issueNumber: rec.issueNumber, issueTitle: pull?.title ?? `PR #${rec.prNumber}`, branch, prNumber: rec.prNumber, prUrl: pull?.url ?? null },
       rec.fixReason === 'conflict'
         ? `Resolving conflicts on PR #${rec.prNumber}`
         : rec.fixReason === 'checks'
@@ -2168,7 +2171,7 @@ export class Swarm {
             : `Fixing PR #${rec.prNumber} after QA round ${rec.round}`,
       `Checking out PR #${rec.prNumber}…`,
     );
-    const cwd = await this.prepare(dev, repo, { pr: rec.prNumber }, headRef);
+    const cwd = await this.prepare(dev, repo, { pr: rec.prNumber }, branch);
     if (!cwd) {
       if (rec.status === 'fixing') this.setQa(rec, { status: 'failed' });
       return;
@@ -2217,7 +2220,7 @@ export class Swarm {
     const mergeEnd = 'Then reply with a short summary of what you did. Do not open a new pull request; the office merges it once the checks pass, after another QA round if the code changed.';
     const prompt = (mergeFix ? [...mergeFix, '', mergeEnd] : qaFix).filter((l) => l !== '').join('\n');
     const resume = original && rec.devSessionId ? rec.devSessionId : undefined;
-    this.startAgentSession(dev, repo, cwd, prompt, this.buildSystemAppend(dev, repo, cwd, headRef, { pr: rec.prNumber, headRef }), resume);
+    this.startAgentSession(dev, repo, cwd, prompt, this.buildSystemAppend(dev, repo, cwd, branch, { pr: rec.prNumber, headRef }), resume);
   }
 
   private onFixFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult) {

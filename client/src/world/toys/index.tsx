@@ -1,6 +1,7 @@
 import { Component, lazy, memo, Suspense, type ComponentType, type ReactNode } from 'react';
 import type { ToyFloor } from './balls';
 import './probe';
+import { useVisualPrefs } from '../../visualPrefs';
 
 // The physics engine is a WASM module, so the toys live in their own chunk behind their own Suspense:
 // the floor renders straight away and the toys drop in once Rapier is ready. If it can't load, toys stay off; an
@@ -41,7 +42,8 @@ class ToyGuard extends Component<{ children: ReactNode }, { failed: boolean }> {
 
 /** Physics toys for one floor. Remounting (a floor change) builds a fresh world with every toy back at its start. */
 export const Toys = memo(function Toys({ floor }: { floor: ToyFloor }) {
-  if (broken) return null;
+  const low = useVisualPrefs((state) => state.quality === 'low');
+  if (broken || low) return null;
   return (
     <ToyGuard>
       <Suspense fallback={null}>

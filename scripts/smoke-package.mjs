@@ -30,10 +30,13 @@ try {
     stdio: ['ignore', 'inherit', 'inherit'],
   });
   let state = null;
+  let cookie = '';
   for (let i = 0; i < 120 && !state; i++) {
     await new Promise((r) => setTimeout(r, 500));
     if (server.exitCode !== null) throw new Error(`the office exited with code ${server.exitCode}`);
-    state = await fetch(`http://127.0.0.1:${PORT}/api/state`)
+    const session = await fetch(`http://127.0.0.1:${PORT}/api/session`).catch(() => null);
+    cookie = session?.headers.get('set-cookie')?.split(';')[0] ?? '';
+    state = await fetch(`http://127.0.0.1:${PORT}/api/state`, { headers: { Cookie: cookie } })
       .then((r) => r.json())
       .catch(() => null);
   }

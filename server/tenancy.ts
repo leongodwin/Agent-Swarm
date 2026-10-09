@@ -1,233 +1,165 @@
-import { exec, execSync } from 'child_process';
+import { execFile, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { resolveCommand, unwrapCmdShim } from './clis.ts';
+import { HttpError } from './httpError.ts';
+import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../shared/tenancy.ts';
+export type { TenancyInfo, TenancyEnvironment } from '../shared/tenancy.ts';
 
-export interface TenancyEnvironment {
-  index?: number;
-  name: string;
-  url: string;
-  user: string;
-  active: boolean;
-}
-
-export interface TenancyInfo {
-  tenantName: string;
-  tenantDomain: string;
-  tenantId: string;
-  user: string;
-  environments: TenancyEnvironment[];
-  isReal: boolean;
-}
-
-let cachedTenancy: TenancyInfo | null = null;
-let lastCheck = 0;
-
-export function invalidateTenancyCache() {
-  cachedTenancy = null;
-  lastCheck = 0;
-}
-
-function getPacCommand(): { cmd: string; shell: string } {
-  const cmd = process.platform === 'win32'
-    ? `${process.env.LOCALAPPDATA || ''}\\Microsoft\\PowerAppsCLI\\pac.cmd`
-    : 'pac';
-  const shell = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh';
-  return { cmd, shell };
-}
-
-export function getTenancyInfo(): TenancyInfo {
-  const now = Date.now();
-  if (cachedTenancy && now - lastCheck < 20_000) {
-    return cachedTenancy;
+/** Resolve CLI shims to programs so values never pass through a shell. */
+export function resolveTenancyCommand(name: string): { file: string; args: string[] } {
+  const installed = name === 'pac' && process.platform === 'win32'
+    ? path.join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'PowerAppsCLI', 'pac.launcher.exe') : '';
+  if (installed && fs.existsSync(installed)) return { file: installed, args: [] };
+  const file = resolveCommand(name);
+  if (!file) throw new HttpError(503, `${name} CLI is not installed`);
+  if (/\.(cmd|bat)$/i.test(file)) {
+    const text = fs.readFileSync(file, 'utf8');
+    const native = text.match(/"%~dp0([^"\r\n]+\.exe)"/i)?.[1];
+    if (native) return { file: path.resolve(path.dirname(file), native), args: [] };
+    const unwrapped = unwrapCmdShim(file, text);
+    if (unwrapped) return unwrapped;
+    throw new HttpError(503, `Cannot safely resolve the ${name} CLI shim; install its executable on PATH`);
   }
+  return { file, args: [] };
+}
 
-  if (process.env.VITEST) {
-    cachedTenancy = {
-      tenantName: 'GraspAI',
-      tenantDomain: 'graspai.co.uk',
-      tenantId: '5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c',
-      user: 'leon@graspai.co.uk',
-      environments: [
-        {
-          index: 1,
-          name: "Leon Godwin's Environment",
-          url: 'https://org07f9d658.crm11.dynamics.com',
-          user: 'leon@graspai.co.uk',
-          active: true,
-        },
-      ],
-      isReal: true,
-    };
-    lastCheck = now;
-    return cachedTenancy;
+export interface TenancyRunner {
+  run(name: string, args: string[]): Promise<string>;
+  start(args: string[], output: (text: string) => void, ended: (error?: string) => void): () => void;
+}
+const realRunner: TenancyRunner = {
+  run(name, args) {
+    return new Promise((resolve, reject) => {
+      try {
+        const cmd = resolveTenancyCommand(name);
+        execFile(cmd.file, [...cmd.args, ...args], { encoding: 'utf8', windowsHide: true, timeout: 8000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+          if (err) reject(new Error(`${name} CLI request failed`)); else resolve(stdout);
+        });
+      } catch (err) { reject(err); }
+    });
+  },
+  start(args, output, ended) {
+    const cmd = resolveTenancyCommand('pac');
+    const child = spawn(cmd.file, [...cmd.args, ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let done = false;
+    const finish = (error?: string) => { if (!done) { done = true; ended(error); } };
+    child.stdout.on('data', (data: Buffer) => output(data.toString()));
+    child.stderr.on('data', (data: Buffer) => output(data.toString()));
+    child.once('error', () => finish('PAC could not start'));
+    child.once('close', (code) => finish(code === 0 ? undefined : 'PAC authentication failed'));
+    return () => { child.kill(); };
+  },
+};
+const disconnected = (): TenancyInfo => ({ tenantName: '', tenantDomain: '', tenantId: '', user: '', environments: [], isReal: false, status: 'disconnected' });
+
+/** PAC profiles are the authority; an unrelated Azure account is never substituted. */
+export function parsePacProfiles(output: string): TenancyInfo {
+  const info = disconnected();
+  for (const line of output.split(/\r?\n/)) {
+    const index = line.match(/^\s*\[(\d+)\]/)?.[1];
+    const url = line.match(/https:\/\/[^\s]+/)?.[0];
+    if (!index || !url) continue;
+    const user = line.match(/[\w.%+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] ?? '';
+    const name = new URL(url).hostname.split('.')[0];
+    info.environments.push({ index: Number(index), name, url, user, active: line.includes('*') });
   }
+  const active = info.environments.find((env) => env.active);
+  info.user = active?.user ?? ''; info.isReal = !!active;
+  info.status = active ? 'connected' : 'disconnected';
+  return info;
+}
+export interface TenancyService {
+  info(): Promise<TenancyInfo>;
+  select(index: number): Promise<{ ok: boolean; message: string }>;
+  login(input: TenancyLoginInput): TenancyLogin;
+  loginStatus(id: string): TenancyLogin;
+  cancelLogin(id: string): void;
+  close(): void;
+}
 
-  let tenantName = 'GraspAI';
-  let tenantDomain = 'graspai.co.uk';
-  let tenantId = '5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c';
-  let user = 'leon@graspai.co.uk';
-  const environments: TenancyEnvironment[] = [];
-  let isReal = false;
-
-  // Try fetching Azure account details
-  try {
-    const azOut = execSync('az account show -o json', { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'ignore'] });
-    const az = JSON.parse(azOut);
-    if (az?.tenantDisplayName) tenantName = az.tenantDisplayName;
-    if (az?.tenantDefaultDomain) tenantDomain = az.tenantDefaultDomain;
-    if (az?.tenantId) tenantId = az.tenantId;
-    if (az?.user?.name) user = az.user.name;
-    isReal = true;
-  } catch {
-    // az CLI offline or not signed in
-  }
-
-  // Try parsing pac auth list
-  try {
-    const { cmd: pacCmd, shell } = getPacCommand();
-    const pacOut = execSync(`"${pacCmd}" auth list`, { encoding: 'utf-8', timeout: 8000, stdio: ['pipe', 'pipe', 'ignore'], shell });
-    
-    // Parse tabular output lines
-    const lines = pacOut.split(/\r?\n/);
-    for (const line of lines) {
-      if (!line.includes('crm') && !line.includes('dynamics.com')) continue;
-      const indexMatch = line.match(/^\s*\[(\d+)\]/);
-      const index = indexMatch ? parseInt(indexMatch[1], 10) : undefined;
-      const active = line.includes('*');
-      const urlMatch = line.match(/https:\/\/[^\s]+/);
-      const url = urlMatch ? urlMatch[0] : '';
-      const emailMatch = line.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-      const envUser = emailMatch ? emailMatch[0] : user;
-      
-      let envName = 'Power Platform Environment';
-      if (line.includes('MyDevNet')) envName = 'MyDevNet';
-      else if (line.includes("Leon Godwin's Environment")) envName = "Leon Godwin's Environment";
-      else if (url) envName = url.replace('https://', '').split('.')[0];
-
-      if (url) {
-        environments.push({ index, name: envName, url, user: envUser, active });
-        isReal = true;
-      }
+export function createTenancyService(demo = false, runner: TenancyRunner = realRunner): TenancyService {
+  let cache: TenancyInfo | null = null;
+  let checkedAt = 0;
+  let generation = 0;
+  let refreshing: Promise<TenancyInfo> | null = null;
+  const jobs = new Map<string, { value: TenancyLogin; stop: () => void; timer?: NodeJS.Timeout }>();
+  const demoInfo: TenancyInfo = { tenantName: 'Demo tenant', tenantDomain: 'example.com', tenantId: '', user: 'manager@example.com',
+    environments: [{ index: 1, name: 'Demo sandbox', url: 'https://demo.example.com', user: 'manager@example.com', active: true }], isReal: false, status: 'demo' };
+  const invalidate = () => { cache = null; checkedAt = 0; generation++; refreshing = null; };
+  const info = async (): Promise<TenancyInfo> => {
+    if (demo) return structuredClone(demoInfo);
+    if (cache && Date.now() - checkedAt < 20_000) return structuredClone(cache);
+    if (!refreshing) {
+      const current = generation;
+      const request = runner.run('pac', ['auth', 'list']).then(parsePacProfiles).catch(() => cache ? { ...cache, status: 'stale' as const } : disconnected());
+      refreshing = request.then((result) => {
+        if (generation === current) { cache = result; checkedAt = Date.now(); refreshing = null; }
+        return structuredClone(result);
+      });
     }
-  } catch {
-    // pac CLI offline or not available
-  }
-
-  // Fallback defaults if no environments were parsed but we know user has tenancy
-  if (environments.length === 0 && isReal) {
-    environments.push({
-      index: 3,
-      name: "Leon Godwin's Environment",
-      url: 'https://org07f9d658.crm11.dynamics.com/',
-      user: 'leon.godwin@clouddirect.net',
-      active: true,
-    });
-    environments.push({
-      index: 1,
-      name: 'MyDevNet (default)',
-      url: 'https://org0efd6060.crm4.dynamics.com/',
-      user: 'leon@graspai.co.uk',
-      active: false,
-    });
-  }
-
-  cachedTenancy = {
-    tenantName,
-    tenantDomain,
-    tenantId,
-    user,
-    environments,
-    isReal,
+    return cache ? structuredClone(cache) : refreshing;
   };
-  lastCheck = now;
-  return cachedTenancy;
-}
-
-/**
- * Select active Power Platform environment profile by index.
- */
-export function selectEnvironment(index: number): { ok: boolean; message: string } {
-  try {
-    const { cmd: pacCmd, shell } = getPacCommand();
-    execSync(`"${pacCmd}" auth select --index ${index}`, { encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'ignore'], shell });
-    invalidateTenancyCache();
-    return { ok: true, message: `Switched active environment profile to [${index}].` };
-  } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to switch environment: ${errorMsg}`);
-  }
-}
-
-/**
- * Connect to an environment with service principal or launch interactive browser login.
- */
-export function loginTenancy(options: {
-  environmentUrl?: string;
-  tenantId?: string;
-  applicationId?: string;
-  clientSecret?: string;
-  name?: string;
-  interactive?: boolean;
-}): Promise<{ ok: boolean; message: string }> {
-  return new Promise((resolve, reject) => {
-    const { cmd: pacCmd, shell } = getPacCommand();
-    const args: string[] = ['auth', 'create'];
-
-    if (options.name) {
-      args.push('--name', `"${options.name.slice(0, 30)}"`);
-    }
-
-    if (options.environmentUrl) {
-      args.push('--environment', `"${options.environmentUrl}"`);
-    }
-
-    if (options.applicationId && options.clientSecret && options.tenantId) {
-      // Service principal / non-interactive
-      args.push('--tenant', `"${options.tenantId}"`);
-      args.push('--applicationId', `"${options.applicationId}"`);
-      args.push('--clientSecret', `"${options.clientSecret}"`);
-    } else {
-      // Interactive login (opens browser / device code prompt)
-      if (options.tenantId) {
-        args.push('--tenant', `"${options.tenantId}"`);
-      }
-      args.push('--deviceCode');
-    }
-
-    const fullCmd = `"${pacCmd}" ${args.join(' ')}`;
-
-    exec(fullCmd, { encoding: 'utf-8', timeout: 30000, shell }, (err, stdout, stderr) => {
-      invalidateTenancyCache();
-      if (err) {
-        // Check stdout/stderr for device code instruction
-        const output = stdout || stderr || err.message;
-        if (output.includes('https://microsoft.com/devicelogin')) {
-          return resolve({ ok: true, message: output.trim() });
-        }
-        return reject(new Error(`Login failed: ${output}`));
-      }
-      resolve({ ok: true, message: stdout.trim() || 'Authentication profile successfully created.' });
-    });
-  });
-}
-
-/**
- * Returns the currently active environment and tenancy configuration.
- */
-export function getActiveEnvironment(): {
-  tenantName: string;
-  tenantDomain: string;
-  tenantId: string;
-  user: string;
-  environmentName: string;
-  environmentUrl: string;
-} {
-  const info = getTenancyInfo();
-  const activeEnv = info.environments.find((e) => e.active) ?? info.environments[0];
+  const lookup = (id: string) => {
+    const job = jobs.get(id);
+    if (!job) throw new HttpError(404, 'Authentication request not found');
+    return job;
+  };
   return {
-    tenantName: info.tenantName,
-    tenantDomain: info.tenantDomain,
-    tenantId: info.tenantId,
-    user: activeEnv?.user || info.user,
-    environmentName: activeEnv?.name || 'Power Platform Environment',
-    environmentUrl: activeEnv?.url || 'https://org07f9d658.crm11.dynamics.com',
+    info,
+    async select(index) {
+      if (!Number.isInteger(index) || index < 1) throw new HttpError(400, 'Profile index must be a positive integer');
+      if (!(await info()).environments.some((env) => env.index === index)) throw new HttpError(404, 'Authentication profile not found');
+      if (!demo) await runner.run('pac', ['auth', 'select', '--index', String(index)]);
+      invalidate();
+      return { ok: true, message: `${demo ? 'Demo: ' : ''}Selected profile [${index}]` };
+    },
+    login(input) {
+      if ([...jobs.values()].some((job) => job.value.status === 'pending')) throw new HttpError(409, 'An authentication request is already pending');
+      if (jobs.size >= 20) jobs.delete(jobs.keys().next().value!);
+      const value: TenancyLogin = { id: crypto.randomUUID(), status: demo ? 'completed' : 'pending', message: demo ? 'Demo authentication completed; no credentials changed' : 'Waiting for PAC authentication instructions', ok: demo };
+      const job: { value: TenancyLogin; stop: () => void; timer?: NodeJS.Timeout } = { value, stop: () => {} };
+      jobs.set(value.id, job);
+      if (demo) return { ...value };
+      const args = ['auth', 'create'];
+      if (input.name) args.push('--name', input.name);
+      if (input.environmentUrl) args.push('--environment', input.environmentUrl);
+      if (input.tenantId) args.push('--tenant', input.tenantId);
+      if (input.interactive !== false) args.push('--deviceCode');
+      else args.push('--applicationId', input.applicationId!, '--clientSecret', input.clientSecret!);
+      const secret = input.clientSecret;
+      const redact = (text: string) => secret ? text.replaceAll(secret, '[redacted]') : text;
+      let transcript = '';
+      try {
+        job.stop = runner.start(args, (text) => {
+          if (value.status !== 'pending') return;
+          transcript = (transcript + text).slice(-12000);
+          // Credential-based login does not need a transcript; no secret fragment reaches the browser.
+          if (input.interactive !== false) value.message = redact(transcript).slice(-8000);
+        }, (error) => {
+          if (value.status !== 'pending') return;
+          clearTimeout(job.timer); value.status = error ? 'failed' : 'completed'; value.ok = !error;
+          value.message = error ? 'PAC authentication failed. Check the profile and credentials.' : 'Authentication profile created successfully';
+          if (!error) invalidate();
+        });
+        if (value.status === 'pending') {
+          job.timer = setTimeout(() => { value.status = 'expired'; value.ok = false; value.message = 'Authentication expired. Start a new request.'; job.stop(); }, 10 * 60_000);
+          job.timer.unref();
+        }
+      } catch { value.status = 'failed'; value.message = 'PAC could not start. Check the CLI installation.'; }
+      return { ...value };
+    },
+    loginStatus: (id) => ({ ...lookup(id).value }),
+    cancelLogin(id) {
+      const job = lookup(id);
+      if (job.value.status === 'pending') { job.value.status = 'cancelled'; job.value.message = 'Authentication cancelled'; clearTimeout(job.timer); job.stop(); }
+    },
+    close() { for (const job of jobs.values()) { clearTimeout(job.timer); if (job.value.status === 'pending') { job.value.status = 'cancelled'; job.stop(); } } },
   };
+}
+export function activeEnvironment(info: TenancyInfo) {
+  const env = info.environments.find((candidate) => candidate.active);
+  if (!env) return undefined;
+  return { tenantName: info.tenantName, tenantDomain: info.tenantDomain, tenantId: info.tenantId, user: env.user, environmentName: env.name, environmentUrl: env.url };
 }

@@ -33,7 +33,7 @@ export interface HldResult {
 
 export function generateHldContent(input: HldInput): HldResult {
   const docId = `HLD-${Date.now().toString(36).toUpperCase()}`;
-  const tenant = input.tenantName || 'graspai.co.uk';
+  const tenant = input.tenantName || 'Not configured';
 
   const topologyDiagram = `graph TB
     subgraph "1. Engagement Channels"

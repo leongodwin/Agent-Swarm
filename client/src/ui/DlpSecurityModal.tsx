@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useResource } from '../useResource';
+import type { TenancyInfo, TenancyLogin } from '../../../shared/tenancy';
 import { Panel } from './Overlays';
 import { useStore, repoOnFloor } from '../store';
 import { api } from '../api';
@@ -7,21 +9,13 @@ import { ALLOWED_BUSINESS_CONNECTORS, ENTERPRISE_DLP_RULES, auditDlpCompliance, 
 export function DlpSecurityModal() {
   const [activeTab, setActiveTab] = useState<'rules' | 'scanner' | 'entra'>('entra');
   const [isScanning, setIsScanning] = useState(false);
-  const [tenancy, setTenancy] = useState<{
-    tenantName: string;
-    tenantDomain: string;
-    tenantId: string;
-    user: string;
-    environments: Array<{ index?: number; name: string; url: string; user: string; active: boolean }>;
-    isReal: boolean;
-  }>({
-    tenantName: 'GraspAI',
-    tenantDomain: 'graspai.co.uk',
-    tenantId: '5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c',
-    user: 'leon@graspai.co.uk',
-    environments: [],
-    isReal: true,
-  });
+  const resource = useResource('tenancy', api.tenancy);
+  const tenancy: TenancyInfo = resource.value ?? { tenantName: '', tenantDomain: '', tenantId: '', user: '', environments: [], isReal: false };
+  const refreshTenancy = resource.refresh;
+  const [login, setLogin] = useState<TenancyLogin | null>(null);
+  const loginId = useRef<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; if (loginId.current) void api.cancelTenancyLogin(loginId.current).catch(() => {}); }; }, []);
 
   const pushToast = useStore((s) => s.pushToast);
   const [isSwitching, setIsSwitching] = useState(false);
@@ -35,16 +29,8 @@ export function DlpSecurityModal() {
     name: '',
   });
 
-  const refreshTenancy = () => {
-    api.tenancy().then((t) => setTenancy(t)).catch(() => {});
-  };
-
-  useEffect(() => {
-    refreshTenancy();
-  }, []);
-
   const handleSelectEnv = async (index?: number) => {
-    if (!index) return;
+    if (index === undefined) return;
     setIsSwitching(true);
     try {
       await api.selectTenancyEnvironment(index);
@@ -69,14 +55,35 @@ export function DlpSecurityModal() {
         clientSecret: loginMode === 'sp' ? loginForm.clientSecret : undefined,
         name: loginForm.name || undefined,
       });
-      pushToast('success', res.message || 'Authentication profile added successfully!');
-      setShowLoginModal(false);
-      refreshTenancy();
+      if (!mounted.current) { if (res.status === 'pending') void api.cancelTenancyLogin(res.id).catch(() => {}); return; }
+      loginId.current = res.status === 'pending' ? res.id : null;
+      setLogin(res);
+      setLoginForm((form) => ({ ...form, clientSecret: '' }));
+      if (res.status === 'completed') { pushToast('success', res.message); refreshTenancy(); }
     } catch (e: unknown) {
       pushToast('error', `Login failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setIsSwitching(false);
     }
+  };
+
+  useEffect(() => {
+    if (login?.status !== 'pending') return;
+    const timer = setTimeout(() => {
+      api.tenancyLoginStatus(login.id).then((status) => {
+        if (!mounted.current) return;
+        setLogin(status);
+        if (status.status !== 'pending') {
+          loginId.current = null;
+          if (status.status === 'completed') { pushToast('success', status.message); refreshTenancy(); }
+        }
+      }).catch(() => { if (mounted.current) setLogin({ ...login, status: 'failed', ok: false, message: 'Could not read authentication status' }); });
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [login]);
+  const closeLogin = () => {
+    if (loginId.current) void api.cancelTenancyLogin(loginId.current).catch(() => {});
+    loginId.current = null; setLogin(null); setShowLoginModal(false);
   };
 
   const [scanResult, setScanResult] = useState<{
@@ -96,7 +103,7 @@ export function DlpSecurityModal() {
   const handleRunScan = async () => {
     setIsScanning(true);
     try {
-      const report = await api.dlpScan(currentRepo?.id);
+      const report = await api.dlpScan(currentRepo?.id ?? '');
       setScanResult({
         scannedFiles: report.scannedFiles,
         violations: report.violations,
@@ -337,7 +344,7 @@ export function DlpSecurityModal() {
                     <span style={{ fontSize: 20 }}>{scanResult.violations.length === 0 ? '✓' : '⚠️'}</span>
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: scanResult.violations.length === 0 ? '#4ade80' : '#f87171' }}>
-                        {scanResult.violations.length === 0 ? '100% DLP Compliant · Zero Violations' : `${scanResult.violations.length} Policy Violations Detected`}
+                        {scanResult.violations.length === 0 ? (scanResult.isRealScan ? 'No matches in local heuristic scan; tenant policy not evaluated' : 'Scan unavailable or simulated; compliance unknown') : `${scanResult.violations.length} Policy Violations Detected`}
                       </div>
                       <div style={{ fontSize: 11, color: '#cbd5e1' }}>
                         Scanned {scanResult.scannedFiles} solution artifact file{scanResult.scannedFiles === 1 ? '' : 's'} {scanResult.repoName ? `in ${scanResult.repoName}` : ''}.
@@ -517,7 +524,7 @@ export function DlpSecurityModal() {
                         <span style={{ fontSize: 11, color: '#cbd5e1' }}>{env.user}</span>
                         {!env.active && env.index !== undefined && (
                           <button
-                            disabled={isSwitching}
+                            disabled={isSwitching || login?.status === 'pending'}
                             onClick={() => void handleSelectEnv(env.index)}
                             style={{
                               background: '#1e293b',
@@ -574,7 +581,7 @@ export function DlpSecurityModal() {
                       🔑 Connect Microsoft Power Platform Tenancy
                     </div>
                     <button
-                      onClick={() => setShowLoginModal(false)}
+                      onClick={closeLogin}
                       style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer' }}
                     >
                       ✕
@@ -619,6 +626,7 @@ export function DlpSecurityModal() {
                     </button>
                   </div>
 
+                  <p role="status" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{login?.message || resource.error || (tenancy.status === 'stale' ? 'Profile discovery failed; showing cached profiles.' : '')}</p>
                   <form onSubmit={handleExecuteLogin} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div>
                       <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>
@@ -693,17 +701,17 @@ export function DlpSecurityModal() {
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
                       <button
                         type="button"
-                        onClick={() => setShowLoginModal(false)}
+                        onClick={closeLogin}
                         style={{ background: '#334155', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}
                       >
                         Cancel
                       </button>
                       <button
                         type="submit"
-                        disabled={isSwitching}
+                        disabled={isSwitching || login?.status === 'pending'}
                         style={{ background: '#0284c7', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: isSwitching ? 'wait' : 'pointer' }}
                       >
-                        {isSwitching ? 'Authenticating…' : 'Authenticate & Set Active'}
+                        {isSwitching || login?.status === 'pending' ? 'Authenticating…' : 'Authenticate & Set Active'}
                       </button>
                     </div>
                   </form>

@@ -190,6 +190,7 @@ interface State {
   focus: Focus | null;
   locked: boolean;
   started: boolean;
+  worldReady: boolean;
   toasts: Toast[];
   held: Held | null;
   /** performance.now() when the player started charging a throw; null when they aren't. */
@@ -250,6 +251,7 @@ const LOG_KEEP = 600;
 
 export const useStore = create<State>((set, get) => ({
   connected: false,
+  worldReady: false,
   loaded: false,
   user: null,
   ghReady: true,

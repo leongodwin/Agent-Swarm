@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useResource } from '../useResource';
 import { Panel } from './Overlays';
 import { useStore } from '../store';
 import { api } from '../api';
@@ -6,180 +7,16 @@ import type { SolutionComponentNode } from '../../../shared/solutionTypes';
 
 export type { SolutionComponentNode };
 
-const ARCH_NODES: Record<string, SolutionComponentNode> = {
-  teams: {
-    id: 'teams',
-    category: '1. Engagement Channel',
-    name: 'Microsoft Teams & Outlook Channels',
-    badge: 'ACTIVE CHANNEL',
-    badgeBg: '#464EB8',
-    summary: 'Interactive Conversational frontend leveraging Adaptive Cards v1.5 for desktop and mobile.',
-    techStack: ['Bot Framework SDK', 'Adaptive Cards v1.5', 'Teams Activity Handler', 'SSO / Entra ID'],
-    telemetry: { invocations: '1,420 msgs/hr', avgLatency: '82 ms', successRate: '99.9%' },
-    details: 'Handles user prompt ingestion, rich action buttons for approvals, and streaming chunk responses directly into personal chats or collaborative channels.',
-  },
-  pages: {
-    id: 'pages',
-    category: '1. Engagement Channel',
-    name: 'Power Pages & Web Canvas Webchat',
-    badge: 'AUTHENTICATED',
-    badgeBg: '#0284C7',
-    summary: 'Customer self-service portal embedding Microsoft Copilot Studio webchat with Entra ID B2C.',
-    techStack: ['Power Pages Liquid Templates', 'Copilot Webchat v4', 'Entra ID External Identities'],
-    telemetry: { invocations: '890 sessions/day', avgLatency: '94 ms', successRate: '99.8%' },
-    details: 'Enables unauthenticated anonymous knowledge lookup with gated escalation to authenticated support tickets upon customer login.',
-  },
-  pcf: {
-    id: 'pcf',
-    category: '1. Engagement Channel',
-    name: 'Custom PCF Control Form Host',
-    badge: 'FLUENT REACT',
-    badgeBg: '#742774',
-    summary: 'Custom React Fluent UI v9 controls integrated into Model-Driven & Canvas App forms.',
-    techStack: ['Power Apps Component Framework (PCF)', 'Fluent UI React v9', 'Dataverse Web API'],
-    telemetry: { invocations: '4,210 renders', avgLatency: '16 ms', successRate: '100%' },
-    details: 'Empowers back-office claim adjusters with rich multi-photo inspection grids and direct trigger hooks into Copilot topics.',
-  },
-  voice: {
-    id: 'voice',
-    category: '1. Engagement Channel',
-    name: 'Voice & Omnichannel Telephony Gateway',
-    badge: 'REAL-TIME STREAM',
-    badgeBg: '#059669',
-    summary: 'Azure Communication Services bidirectional audio stream connected to Copilot Studio IVR.',
-    techStack: ['Azure Communication Services (ACS)', 'Cognitive Services Speech-to-Text', 'Neural TTS'],
-    telemetry: { invocations: '142 calls/hr', avgLatency: '240 ms', successRate: '99.4%' },
-    details: 'Real-time conversational voice bot handling telephone support queues with automatic sentiment detection and human handover.',
-  },
-  copilot_engine: {
-    id: 'copilot_engine',
-    category: '2. Copilot Studio Agent Core',
-    name: 'Copilot Studio Topics Engine',
-    badge: 'GENERATIVE AI',
-    badgeBg: '#774AE0',
-    summary: 'Autonomous orchestrator classifying customer intents, extracting entities, and executing adaptive topics.',
-    techStack: ['Microsoft Copilot Studio', 'Conversational AI System Prompts', 'Dynamic Chaining'],
-    telemetry: { invocations: '2,940 decisions/hr', avgLatency: '145 ms', successRate: '99.6%' },
-    details: 'Hosts 28 enterprise support topics. Dynamic generative chaining automatically determines if pre-authored topic flows or RAG fallbacks should answer.',
-  },
-  azure_openai: {
-    id: 'azure_openai',
-    category: '2. Copilot Studio Agent Core',
-    name: 'Azure OpenAI Fallback Node & Vector RAG',
-    badge: 'GROUNDED RAG',
-    badgeBg: '#0078D4',
-    summary: 'GPT-4o reasoning over enterprise SharePoint documents and knowledge bases with citation grounding.',
-    techStack: ['Azure OpenAI GPT-4o', 'Azure AI Search (Hybrid Vector)', 'Cognitive Reranking'],
-    telemetry: { invocations: '620 queries/hr', avgLatency: '410 ms', successRate: '99.2%' },
-    details: 'Semantic search across 12,000 internal policy documents. Every response includes verifiable inline citations before returning to the user.',
-  },
-  guardrails: {
-    id: 'guardrails',
-    category: '2. Copilot Studio Agent Core',
-    name: 'Guardrails & Safety Evaluator',
-    badge: 'ZERO JAILBREAKS',
-    badgeBg: '#059669',
-    summary: 'Pre- and post-processing filters scanning for prompt injections, jailbreaks, and PII leakage.',
-    techStack: ['Azure AI Content Safety', 'Prompt Shield', 'PII Masking Regex & NER'],
-    telemetry: { invocations: '3,560 checks/hr', avgLatency: '18 ms', successRate: '100%' },
-    details: 'Guarantees enterprise compliance. Redacts social security and credit card numbers automatically; blocks adversarial jailbreak attempts.',
-  },
-  flow_instant: {
-    id: 'flow_instant',
-    category: '3. Power Automate & Logic',
-    name: 'Instant Cloud Flows (Power Automate)',
-    badge: 'FLOW ORCHESTRATOR',
-    badgeBg: '#0066FF',
-    summary: 'High-performance workflow orchestrator triggered via HTTP actions from Copilot Studio.',
-    techStack: ['Power Automate Cloud Flows', 'HTTP Webhook Trigger', 'JSON Schema Validation'],
-    telemetry: { invocations: '840 runs/hr', avgLatency: '312 ms', successRate: '99.7%' },
-    details: 'Validates ticket payloads, queries SLA thresholds in Dataverse, and routes incident updates to responsible engineering tiers.',
-  },
-  flow_approval: {
-    id: 'flow_approval',
-    category: '3. Power Automate & Logic',
-    name: 'Adaptive Card Approval Flow',
-    badge: 'APPROVAL ENGINE',
-    badgeBg: '#D97706',
-    summary: 'Multi-stage asynchronous manager sign-off delivered directly to Teams mobile and desktop.',
-    techStack: ['Approvals Connector v2', 'Microsoft Teams Webhook', 'Wait for Approval Action'],
-    telemetry: { invocations: '45 approvals/day', avgLatency: '1.2h response', successRate: '98.9%' },
-    details: 'Dispatches manager sign-off cards for high-value claims or SLA overrides with complete audit history recorded in Dataverse.',
-  },
-  custom_connector: {
-    id: 'custom_connector',
-    category: '3. Power Automate & Logic',
-    name: 'Custom Connector Broker (Pro-Code Gateway)',
-    badge: 'PRO-CODE GATEWAY',
-    badgeBg: '#7C3AED',
-    summary: 'OpenAPI-defined microservice gateway connecting the low-code swarm to internal ERPs and Graph.',
-    techStack: ['OpenAPI 3.0 / Swagger', 'OAuth 2.0 Client Credentials', 'Redis Token Cache'],
-    telemetry: { invocations: '1,120 calls/hr', avgLatency: '42 ms', successRate: '99.9%' },
-    details: 'Translates REST endpoints into reusable drag-and-drop connectors for citizen developers and autonomous coding agents.',
-  },
-  dataverse: {
-    id: 'dataverse',
-    category: '4. Dataverse & Enterprise Data',
-    name: 'Microsoft Dataverse System of Record',
-    badge: 'SYSTEM OF RECORD',
-    badgeBg: '#742774',
-    summary: 'Relational business data platform with role-based column security, business units, and auditing.',
-    techStack: ['Dataverse (Common Data Service)', 'Elastic Tables', 'Azure Synapse Link for Dataverse'],
-    telemetry: { invocations: '18,400 CRUD ops/hr', avgLatency: '34 ms', successRate: '99.99%' },
-    details: 'Stores cr_ServiceTicket, cr_KnowledgeTopic, and cr_AgentAuditLog with automated column masking and point-in-time recovery.',
-  },
-  graph_api: {
-    id: 'graph_api',
-    category: '4. Dataverse & Enterprise Data',
-    name: 'Microsoft Graph API v1.0',
-    badge: 'M365 CONNECTED',
-    badgeBg: '#0284C7',
-    summary: 'Unified gateway accessing Microsoft 365 services: user org charts, emails, calendars, and SharePoint files.',
-    techStack: ['Microsoft Graph .NET SDK', 'App-Only Permissions', 'Delta Sync Queries'],
-    telemetry: { invocations: '3,200 req/hr', avgLatency: '68 ms', successRate: '99.9%' },
-    details: 'Empowers agents to dynamically discover employee supervisors, organizational hierarchies, and recent customer correspondence.',
-  },
-  power_bi: {
-    id: 'power_bi',
-    category: '4. Dataverse & Enterprise Data',
-    name: 'Power BI Live Telemetry Hub',
-    badge: 'STREAMING BI',
-    badgeBg: '#D97706',
-    summary: 'Real-time analytics and executive ROI reporting streaming topic resolution rates and token efficiencies.',
-    techStack: ['Power BI REST API', 'DirectQuery over Synapse', 'Push Streaming Datasets'],
-    telemetry: { invocations: '60 refreshes/hr', avgLatency: '120 ms', successRate: '100%' },
-    details: 'Visualizes agent swarm velocity, cost savings compared to manual ticket resolution, and resolution accuracy trends.',
-  },
-};
-
 export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
-  const [nodes, setNodes] = useState<Record<string, SolutionComponentNode>>(ARCH_NODES);
-  const [isUnpacked, setIsUnpacked] = useState(false);
-  const [selectedId, setSelectedId] = useState<string>('copilot_engine');
+  const [selectedId, setSelectedId] = useState('');
   const repos = useStore((s) => s.repos);
-  const repo = repos.find((r) => r.id === repoId) ?? repos[0];
-
-  useEffect(() => {
-    if (!repo?.id) return;
-    let active = true;
-    api.solutionArchitecture(repo.id)
-      .then((data) => {
-        if (active && data?.components && Object.keys(data.components).length > 0) {
-          setNodes(data.components);
-          setIsUnpacked(Boolean(data.isUnpacked));
-          if (!data.components[selectedId]) {
-            const first = Object.keys(data.components)[0];
-            if (first) setSelectedId(first);
-          }
-        }
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [repo?.id]);
-
-  const selectedNode: SolutionComponentNode = nodes[selectedId] ?? Object.values(nodes)[0] ?? ARCH_NODES.copilot_engine;
+  const repo = repoId ? repos.find((r) => r.id === repoId) : repos[0];
+  const resource = useResource(repo?.id ?? '', () => repo ? api.solutionArchitecture(repo.id) : Promise.resolve({ solutionName: 'No repository', totalComponents: 0, components: {}, isUnpacked: false, simulated: false }));
+  const nodes = resource.value?.components ?? {};
+  const isUnpacked = Boolean(resource.value?.isUnpacked);
+  const simulated = Boolean(resource.value?.simulated);
+  const selectedNode = nodes[selectedId] ?? Object.values(nodes)[0];
+  if (!selectedNode) return <Panel title="Solution architecture" wide><p>{resource.loading ? 'Loading architecture…' : resource.error || 'No supported solution artifacts found in this repository.'}</p></Panel>;
 
   const tier1 = Object.values(nodes).filter((n) => n.category.includes('1.') || n.category.toLowerCase().includes('channel') || n.category.toLowerCase().includes('engagement'));
   const tier2 = Object.values(nodes).filter((n) => n.category.includes('2.') || n.category.toLowerCase().includes('copilot'));
@@ -193,7 +30,7 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
           <span style={{ fontSize: 22 }}>🏛️</span>
           <span>Power Platform & Copilot Studio Solution Architecture</span>
           <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 999, background: '#0078D4', color: '#fff', fontWeight: 600 }}>
-            ALM PIPELINE: ACTIVE
+            REPOSITORY ARTIFACTS
           </span>
         </div>
       }
@@ -206,7 +43,7 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ background: '#0f172a', padding: '12px 18px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #1e293b' }}>
             <span style={{ color: '#94a3b8', fontSize: 13, fontWeight: 500 }}>
-              Showing solution components for <strong>{repo ? repo.fullName : 'contoso/copilot-customer-service'}</strong>
+              Showing solution components for <strong>{repo ? repo.fullName : 'No repository'}</strong>
             </span>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {isUnpacked ? (
@@ -215,10 +52,10 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
                 </span>
               ) : (
                 <span style={{ fontSize: 11, color: '#f59e0b', background: '#451a03', border: '1px solid #b45309', padding: '3px 8px', borderRadius: 6, fontWeight: 700, letterSpacing: '0.04em' }}>
-                  ⚠️ SIMULATED ARCHITECTURE
+                  {simulated ? '⚠️ SIMULATED ARCHITECTURE' : 'No unpacked solution detected'}
                 </span>
               )}
-              <span style={{ fontSize: 12, color: '#38bdf8', background: '#082f49', padding: '3px 8px', borderRadius: 6 }}>● PAC CLI Connected</span>
+              <span style={{ fontSize: 12, color: '#38bdf8', background: '#082f49', padding: '3px 8px', borderRadius: 6 }}>Local artifact scan</span>
               <span style={{ fontSize: 12, color: '#4ade80', background: '#052e16', padding: '3px 8px', borderRadius: 6 }}>
                 ● Dataverse Solution: {isUnpacked ? 'Unpacked Repo' : 'Unmanaged'}
               </span>
@@ -382,7 +219,7 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
           )}
 
           <div style={{ background: '#1e293b', borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 11, color: '#38bdf8', fontWeight: 700, marginBottom: 8, textTransform: 'uppercase' }}>Live Telemetry</div>
+            <div style={{ fontSize: 11, color: '#38bdf8', fontWeight: 700, marginBottom: 8, textTransform: 'uppercase' }}>Telemetry (unavailable for local scans)</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, textAlign: 'center' }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#f8fafc' }}>{selectedNode.telemetry.invocations}</div>
@@ -434,7 +271,7 @@ export function SolutionArchitectureView({ repoId }: { repoId?: string }) {
               gap: 8,
             }}
           >
-            <span>⚡</span> Sync Component with Dataverse (PAC CLI)
+            <span>⚡</span> Preview simulated component sync
           </button>
         </div>
       </div>

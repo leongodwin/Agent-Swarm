@@ -57,7 +57,7 @@ export function DlpSecurityKiosk({
       ctx.textAlign = 'right';
       ctx.font = `700 16px ${SANS}`;
       ctx.fillStyle = '#38bdf8';
-      ctx.fillText('TENANT: GraspAI (graspai.co.uk) · [LIVE ZERO-TRUST]', texW - 36, 46);
+      ctx.fillText('LOCAL HEURISTIC SCANNER · INSPECT PROFILES', texW - 36, 46);
       ctx.textAlign = 'left';
 
       // Allowed Business Connectors Card

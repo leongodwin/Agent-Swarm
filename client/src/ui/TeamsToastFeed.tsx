@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useStore, repoOnFloor } from '../store';
 import { api } from '../api';
 import type { TeamsAdaptiveCard } from '../../../shared/teams';
 
@@ -7,14 +8,17 @@ export function TeamsToastFeed() {
   const [isOpen, setIsOpen] = useState(false);
   const [hasNew, setHasNew] = useState(false);
 
+  const repo = useStore((s) => repoOnFloor(s.repos, s.floor));
+  const lastSeen = useRef('');
   useEffect(() => {
+    setMessages([]); setHasNew(false); lastSeen.current = '';
     let active = true;
     const fetchFeed = () => {
-      api.teamsFeed()
+      api.teamsFeed(repo?.id)
         .then((data) => {
           if (active && Array.isArray(data)) {
             setMessages(data);
-            if (data.length > 0) setHasNew(true);
+            if (data[0]?.id && data[0].id !== lastSeen.current) { setHasNew(true); lastSeen.current = data[0].id; }
           }
         })
         .catch(() => {});
@@ -26,7 +30,7 @@ export function TeamsToastFeed() {
       active = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [repo?.id]);
 
   const toggleOpen = () => {
     setIsOpen(!isOpen);
@@ -76,7 +80,7 @@ export function TeamsToastFeed() {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 16 }}>💬</span>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>Microsoft Teams · Live Webhook Feed</span>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>Office notification feed</span>
             </div>
             <button
               onClick={() => setIsOpen(false)}

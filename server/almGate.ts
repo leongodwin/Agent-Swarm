@@ -1,97 +1,41 @@
-import { AlmPipeline, INITIAL_ALM_PIPELINE } from '../shared/alm.ts';
-import { getActiveEnvironment } from './tenancy.ts';
+import { type AlmPipeline, INITIAL_ALM_PIPELINE } from '../shared/alm.ts';
+import { HttpError } from './httpError.ts';
 
-type NotificationFn = (cardInput: { title: string; subtitle?: string; summary?: string; facts?: { title: string; value: string }[] }) => void;
-
-class AlmPipelineManager {
-  private pipeline: AlmPipeline = JSON.parse(JSON.stringify(INITIAL_ALM_PIPELINE));
-  private notifier?: NotificationFn;
-
-  setNotifier(fn: NotificationFn) {
-    this.notifier = fn;
+/** A labelled release simulation. Real deployments require an integration, never fixture claims. */
+export class AlmPipelineManager {
+  private pipeline: AlmPipeline;
+  private history: AlmPipeline[];
+  private notifier?: (card: { title: string; subtitle?: string; summary?: string; facts?: { title: string; value: string }[] }) => void;
+  constructor(saved?: { pipeline: AlmPipeline; history: AlmPipeline[] }) {
+    this.pipeline = structuredClone(saved?.pipeline ?? INITIAL_ALM_PIPELINE);
+    this.history = structuredClone(saved?.history ?? []);
+    this.pipeline.simulated = true;
   }
-
-  getPipeline(): AlmPipeline {
-    // Dynamically align active environment from live tenancy
-    try {
-      const active = getActiveEnvironment();
-      if (active.environmentUrl) {
-        this.pipeline.environments.prod.url = active.environmentUrl;
-        this.pipeline.environments.prod.name = active.environmentName;
-        this.pipeline.environments.dev.url = active.environmentUrl;
-        this.pipeline.environments.test.url = active.environmentUrl;
-      }
-    } catch {
-      // Keep pipeline defaults
+  setNotifier(fn: NonNullable<AlmPipelineManager['notifier']>) { this.notifier = fn; }
+  getPipeline(): AlmPipeline { return structuredClone(this.pipeline); }
+  serialize() { return { pipeline: this.getPipeline(), history: structuredClone(this.history) }; }
+  approveRelease(approver = 'Manager'): AlmPipeline {
+    if (this.pipeline.approvalStatus !== 'pending_manager_approval') throw new HttpError(409, 'This simulated release was already approved');
+    const stages = [this.pipeline.environments.dev, this.pipeline.environments.test];
+    if (stages.some((env) => env.buildStatus !== 'clean' || env.checks.some((check) => check.status !== 'passed'))) {
+      throw new HttpError(409, 'All development and test gates must pass before approval');
     }
-    return this.pipeline;
+    this.history.push(this.getPipeline());
+    if (this.history.length > 20) this.history.shift();
+    const version = this.pipeline.targetVersion;
+    Object.assign(this.pipeline, { approvalStatus: 'deployed', approvedBy: approver, approvedAt: new Date().toISOString(), currentProdVersion: version });
+    Object.assign(this.pipeline.environments.prod, { version, lastDeployedAt: `Simulated approval by ${approver}`,
+      unpackedCommitSha: this.pipeline.environments.test.unpackedCommitSha });
+    const parts = version.split('.').map(Number);
+    if (parts.length === 4 && parts.every(Number.isInteger)) { parts[3]++; this.pipeline.targetVersion = parts.join('.'); }
+    this.notifier?.({ title: `Simulation: release v${version} approved`, subtitle: 'Local ALM simulation',
+      summary: `Approved by ${approver}. No managed solution was deployed.`, facts: [{ title: 'Version', value: version }] });
+    return this.getPipeline();
   }
-
-  approveRelease(approver: string = 'Leon van Zyl'): AlmPipeline {
-    const active = getActiveEnvironment();
-    const oldVersion = this.pipeline.currentProdVersion;
-    const newVersion = this.pipeline.targetVersion;
-
-    this.pipeline.approvalStatus = 'deployed';
-    this.pipeline.approvedBy = approver;
-    this.pipeline.approvedAt = new Date().toISOString();
-    this.pipeline.currentProdVersion = newVersion;
-
-    // Update Prod Environment with real environment URL
-    this.pipeline.environments.prod = {
-      id: 'prod',
-      name: `${active.environmentName} (${active.tenantDomain})`,
-      url: active.environmentUrl,
-      version: newVersion,
-      lastDeployedAt: 'Just now by ' + approver,
-      buildStatus: 'clean',
-      unpackedCommitSha: this.pipeline.environments.test.unpackedCommitSha,
-      checks: [
-        {
-          id: 'prod-release-gate',
-          name: 'Manager Signoff & Enterprise ALM Release Gate',
-          category: 'automated_tests',
-          status: 'passed',
-          details: `Promoted from UAT to Production by ${approver}. Managed zip deployed successfully.`,
-          metric: `v${newVersion} LIVE`,
-        },
-        ...this.pipeline.environments.prod.checks,
-      ],
-    };
-
-    // Increment target version for next release cycle
-    const parts = newVersion.split('.').map(Number);
-    if (parts.length === 4) {
-      parts[3] += 1;
-      this.pipeline.targetVersion = parts.join('.');
-      this.pipeline.managedPackageName = `ContosoCustomerServiceCopilot_${parts.join('_')}_managed.zip`;
-    }
-
-    // Broadcast Adaptive Card announcement to Teams
-    try {
-      this.notifier?.({
-        title: `🚀 Production Release Deployed: v${newVersion}`,
-        subtitle: 'Application Lifecycle Management (ALM)',
-        summary: `Solution '${this.pipeline.solutionFriendlyName}' successfully promoted from UAT to Production by ${approver}. Previous version was v${oldVersion}.`,
-        facts: [
-          { title: 'Solution', value: this.pipeline.solutionUniqueName },
-          { title: 'New Version', value: `v${newVersion}` },
-          { title: 'Approver', value: approver },
-          { title: 'Environment', value: `${active.environmentName} (${active.environmentUrl})` },
-        ],
-      });
-    } catch {
-      // Ignore if broadcast unavailable
-    }
-
-    return this.pipeline;
-  }
-
   rollbackRelease(): AlmPipeline {
-    this.pipeline = JSON.parse(JSON.stringify(INITIAL_ALM_PIPELINE));
-    this.pipeline.approvalStatus = 'pending_manager_approval';
-    return this.pipeline;
+    const previous = this.history.pop();
+    if (!previous) throw new HttpError(409, 'No previous simulated release to restore');
+    this.pipeline = previous;
+    return this.getPipeline();
   }
 }
-
-export const almManager = new AlmPipelineManager();

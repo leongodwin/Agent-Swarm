@@ -1,3 +1,4 @@
+import { ensureSession } from './session';
 import { useStore } from './store';
 import { restartExpected, shouldReload } from './officeUpdate';
 import type { ServerEvent } from '../../shared/types';
@@ -27,7 +28,8 @@ function reloadForNewCommit(commit: string): boolean {
   return true;
 }
 
-export function connect() {
+export async function connect() {
+  try { await ensureSession(); } catch { setTimeout(connect, 2000); return; }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => {

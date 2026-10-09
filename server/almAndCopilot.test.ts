@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { almManager } from './almGate.ts';
+import { AlmPipelineManager } from './almGate.ts';
 import { INITIAL_ALM_PIPELINE } from '../shared/alm.ts';
 
 describe('Application Lifecycle Management (ALM) Multi-Environment Pipeline', () => {
+  let almManager: AlmPipelineManager;
   beforeEach(() => {
-    almManager.rollbackRelease();
+    almManager = new AlmPipelineManager();
   });
 
   it('loads initial pipeline state with complete multi-stage checks and gates', () => {
@@ -49,17 +50,30 @@ describe('Application Lifecycle Management (ALM) Multi-Environment Pipeline', ()
 
     // Production environment updated
     expect(approved.environments.prod.version).toBe('1.3.0.4');
-    expect(approved.environments.prod.checks.some((c) => c.name.includes('Manager Signoff'))).toBe(true);
+    expect(approved.simulated).toBe(true);
 
     // Teams notification dispatched
     expect(capturedNotification).not.toBeNull();
-    expect(capturedNotification.title).toContain('Production Release Deployed');
-    expect(capturedNotification.facts.some((f: any) => f.value.includes('Leon van Zyl'))).toBe(true);
+    expect(capturedNotification.title).toContain('Simulation:');
+    expect(capturedNotification.summary).toContain('No managed solution was deployed');
   });
 
   it('rolls back pipeline cleanly when requested', () => {
+    almManager.approveRelease();
     const rolledBack = almManager.rollbackRelease();
     expect(rolledBack.approvalStatus).toBe('pending_manager_approval');
     expect(rolledBack.targetVersion).toBe(INITIAL_ALM_PIPELINE.targetVersion);
+  });
+  it('rejects duplicate approval and missing rollback history', () => {
+    expect(() => almManager.rollbackRelease()).toThrow('No previous');
+    almManager.approveRelease();
+    expect(() => almManager.approveRelease()).toThrow('already approved');
+  });
+  it('does not approve failed or pending gates or rewrite environment targets', () => {
+    const initial = structuredClone(INITIAL_ALM_PIPELINE);
+    initial.environments.test.checks[0].status = 'failed';
+    const manager = new AlmPipelineManager({ pipeline: initial, history: [] });
+    expect(() => manager.approveRelease()).toThrow('must pass');
+    expect(manager.getPipeline().environments.prod.url).not.toBe(manager.getPipeline().environments.test.url);
   });
 });

@@ -1,7 +1,6 @@
 /**
- * Power Platform & Microsoft Entra ID Data Loss Prevention (DLP) Policy Engine
- * Enforces enterprise data boundaries, connector classifications (Business vs Non-Business vs Blocked),
- * and prevents exfiltration to unauthorized endpoints.
+ * Local source-code DLP heuristic for selected connectors and anonymous authentication.
+ * Supports a merge gate; it does not query or certify actual tenant DLP policies.
  */
 
 export type ConnectorCategory = 'Business' | 'Non-Business' | 'Blocked';
@@ -85,9 +84,24 @@ export const ALLOWED_BUSINESS_CONNECTORS = [
  */
 export function auditDlpCompliance(fileContent: string, resourcePath = 'solution_artifact'): DlpPolicyViolation[] {
   const violations: DlpPolicyViolation[] = [];
+  let anonymous = false;
+  try {
+    const walk = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return;
+      const record = value as Record<string, unknown>;
+      const authentication = record.authentication;
+      if (record.anonymous === true || (authentication && typeof authentication === 'object' &&
+        String((authentication as Record<string, unknown>).type).toLowerCase() === 'none')) anonymous = true;
+      for (const child of Object.values(record)) walk(child);
+    };
+    walk(JSON.parse(fileContent));
+  } catch {
+    // Non-JSON artifacts use documented text heuristics, not a tenant policy evaluation.
+    anonymous = /authentication:\s*\r?\n\s+type:\s*['"]?none\b|anonymous:\s*true\b/i.test(fileContent);
+  }
 
   for (const rule of ENTERPRISE_DLP_RULES) {
-    if (rule.pattern.test(fileContent)) {
+    if (rule.pattern.test(fileContent) || (rule.id === 'anon_http' && anonymous)) {
       violations.push({
         id: `dlp-${rule.id}-${Date.now()}`,
         connectorName: rule.name,
@@ -102,6 +116,8 @@ export function auditDlpCompliance(fileContent: string, resourcePath = 'solution
   return violations;
 }
 
+export const dlpResource = (file: string) => /\.(json|ya?ml|xml|botproj|[cm]?js|tsx?)$/i.test(file);
+
 /**
  * Parse unified diff text into an array of modified files with their newly added lines.
  */
@@ -115,7 +131,7 @@ export function parseDiffFiles(diffText: string): { file: string; addedContent: 
     const fileName = headerMatch ? headerMatch[1].trim() : 'unknown';
     const addedLines = chunk
       .split(/\r?\n/)
-      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+      .filter((l) => (l.startsWith('+') && !l.startsWith('+++')) || l.startsWith(' '))
       .map((l) => l.slice(1))
       .join('\n');
     files.push({ file: fileName, addedContent: addedLines });
@@ -132,7 +148,7 @@ export function auditPrDiff(diffText: string): DlpPolicyViolation[] {
   for (const f of files) {
     const lower = f.file.toLowerCase();
     // Exclude documentation and non-solution asset files
-    if (lower.endsWith('.md') || lower.endsWith('.txt') || lower.endsWith('.png') || lower.endsWith('.svg') || lower.endsWith('.gitignore')) {
+    if (!dlpResource(lower)) {
       continue;
     }
     const found = auditDlpCompliance(f.addedContent, f.file);

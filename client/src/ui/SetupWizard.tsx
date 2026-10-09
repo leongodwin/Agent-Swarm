@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
-import { requestLook } from '../world/Player';
+import { requestLook } from '../world/lookRequest';
 import { CEO_ID, type RepoView } from '../../../shared/types';
 import { ProjectPicker } from './ProjectPicker';
 

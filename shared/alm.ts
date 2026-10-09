@@ -28,6 +28,7 @@ export interface AlmEnvironmentStatus {
 export type AlmApprovalStatus = 'pending_manager_approval' | 'deploying' | 'deployed' | 'rejected';
 
 export interface AlmPipeline {
+  simulated?: boolean;
   solutionUniqueName: string;
   solutionFriendlyName: string;
   targetVersion: string;

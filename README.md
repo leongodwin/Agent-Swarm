@@ -26,7 +26,7 @@ It runs on Windows, macOS and Linux. Not sure you're ready? `npx cubefarm doctor
 npx cubefarm --demo
 ```
 
-Demo mode fakes GitHub and the agents, so it costs nothing and changes nothing.
+Demo mode fakes GitHub and the agents. It never changes real PAC authentication or posts Teams webhooks; simulated feature history is saved locally.
 
 ## Your first five minutes
 
@@ -99,3 +99,15 @@ Running it from a clone of this repo (`npm start`)? Then the office updates itse
 ## License
 
 [MIT](LICENSE)
+
+## Power Platform feature behavior
+
+Copilot chat, flow telemetry/resubmissions, architecture fixtures in demo mode, and ALM releases are explicitly simulated. ALM approval sends only a local announcement; rollback restores the previous simulated release. Flow, ALM, and notification history are scoped to the repository and active PAC environment and saved in `features.json` (`demo-features.json` for demo) inside the configured swarm home. An explicitly requested Teams notification in real mode can use `TEAMS_INCOMING_WEBHOOK_URL`; unsuccessful delivery is reported as an error.
+
+Real architecture scans report supported artifacts discovered in the checkout, including PCF manifests; empty scans remain empty. HLD Save writes `docs/architecture/HLD.md` in the connected checkout and reports success only after the write completes. Demo HLD saves are disabled. The HLD content is a design template, not a verification of deployed infrastructure. DLP is a local source-code heuristic, not a tenant policy certification; merge scans inspect complete supported changed files at the approved PR head and block when inspection fails. Updating a PR branch requires fresh QA.
+
+Tenancy uses the active PAC authentication profile. Missing authentication is shown as disconnected; failed refreshes retain a marked stale snapshot. Device-code login exposes a pending job while the process runs and completes only when PAC exits successfully. No real login is attempted in demo mode.
+
+Browser API and WebSocket access requires a local session and allowed browser origin. The browser obtains its HttpOnly session through `/api/session`; scripts using `/api` must retain that cookie. CLI hook authentication remains separately scoped.
+
+Choose **Low** in Graphics settings, or open the office with `?quality=low`, to disable shadows, effects, and physics toys. The welcome screen defers the 3D renderer and terminal UI until needed. Reduced-motion preferences disable CSS animation and floor-transition motion.

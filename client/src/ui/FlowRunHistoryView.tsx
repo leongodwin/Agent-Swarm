@@ -1,58 +1,51 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useResource } from '../useResource';
 import { Panel } from './Overlays';
 import { useStore } from '../store';
 import { api } from '../api';
-import { INITIAL_FLOW_RUNS, type FlowRun } from '../../../shared/flowTelemetry';
+import type { FlowRun } from '../../../shared/flowTelemetry';
 
-const DEMO_RUNS = INITIAL_FLOW_RUNS;
 
 export function FlowRunHistoryView({ repoId }: { repoId?: string }) {
-  const [runs, setRuns] = useState<FlowRun[]>(INITIAL_FLOW_RUNS);
-  const [selectedRunId, setSelectedRunId] = useState<string>(INITIAL_FLOW_RUNS[0].id);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [runs, setRuns] = useState<FlowRun[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string>('');
   const [selectedStepIdx, setSelectedStepIdx] = useState<number>(0);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const repos = useStore((s) => s.repos);
   const pushToast = useStore((s) => s.pushToast);
-  const repo = repos.find((r) => r.id === repoId) ?? repos[0];
+  const repo = repoId ? repos.find((r) => r.id === repoId) : repos[0];
 
-  const fetchRuns = () => {
-    if (!repo?.id) return;
-    setIsRefreshing(true);
-    api.flowRuns(repo.id)
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setRuns(data);
-          if (!data.some((r) => r.id === selectedRunId)) {
-            setSelectedRunId(data[0].id);
-          }
-        }
-      })
-      .catch(() => {})
-      .finally(() => setIsRefreshing(false));
-  };
-
+  const resource = useResource(repo?.id ?? '', () => repo ? api.flowRuns(repo.id) : Promise.resolve([]));
   useEffect(() => {
-    fetchRuns();
-  }, [repo?.id]);
-
-  const selectedRun = runs.find((r) => r.id === selectedRunId) ?? runs[0] ?? DEMO_RUNS[0];
+    setRuns(resource.value ?? []);
+    setSelectedRunId(resource.value?.[0]?.id ?? '');
+    setSelectedStepIdx(0);
+  }, [resource.value, repo?.id]);
+  const isRefreshing = resource.loading;
+  const fetchRuns = resource.refresh;
+  const selectedRun = runs.find((r) => r.id === selectedRunId) ?? runs[0];
   const selectedStep = selectedRun?.steps?.[selectedStepIdx] ?? selectedRun?.steps?.[0] ?? {
     num: 1, name: 'Default Step', type: 'Action', duration: '0 ms', status: '200 OK', color: '#38bdf8', input: {}, output: {}
   };
 
   const handleResubmit = async () => {
+    if (!repo || !selectedRun) return;
     try {
-      const res = await api.resubmitFlowRun(repo?.id || 'demo', selectedRun.id);
+      const res = await api.resubmitFlowRun(repo.id, selectedRun.id);
+      if (!mounted.current) return;
       if (res?.resubmitted) {
         setRuns((prev) => [res.resubmitted, ...prev]);
         setSelectedRunId(res.resubmitted.id);
         setSelectedStepIdx(0);
-        pushToast('success', `⚡ Resubmitted flow ${selectedRun.flowId} successfully (ID: ${res.resubmitted.id})`);
+        pushToast('success', 'Simulated resubmission saved. No cloud flow was triggered.');
       }
     } catch {
-      pushToast('error', 'Failed to resubmit flow run');
+      if (mounted.current) pushToast('error', 'Failed to resubmit flow run');
     }
   };
+
+  if (!selectedRun || resource.loading || resource.error) return <Panel title="Simulated flow history" wide><p>{resource.loading ? 'Loading flow history…' : resource.error || 'No runs in this repository.'}</p><button onClick={fetchRuns}>Refresh</button></Panel>;
 
   return (
     <Panel

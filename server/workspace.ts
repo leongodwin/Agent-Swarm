@@ -246,6 +246,9 @@ export interface DeskBase {
   pr?: number;
 }
 
+/** A fixer owns its local branch; pushes still target the PR author's remote branch. */
+export const fixDeskBranch = (pr: number, agentSlug: string) => `swarm/fix-pr-${pr}-${agentSlug}`;
+
 /** Remove a directory, retrying while Windows still has handles open in it. */
 async function removeDir(dir: string) {
   await fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });

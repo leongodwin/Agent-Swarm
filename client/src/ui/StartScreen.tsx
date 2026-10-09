@@ -1,5 +1,5 @@
 import { usePhoneBadge, useStore } from '../store';
-import { requestLook } from '../world/Player';
+import { requestLook } from '../world/lookRequest';
 import { CEO_ID } from '../../../shared/types';
 import { SetupWizard } from './SetupWizard';
 import { unlockAudio } from './sfx';

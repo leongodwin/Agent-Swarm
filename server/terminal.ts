@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import xtermHeadless from '@xterm/headless';
 import xtermSerialize from '@xterm/addon-serialize';
 import type { WebSocket } from 'ws';
 import type { TermClientMessage, TermServerMessage } from '../shared/types.ts';
+import { atomicWrite, SerialWriter } from './atomicFile.ts';
 
 // An agent's terminal: a headless xterm that mirrors everything its CLI printed, so a browser that opens it late (or
 // reconnects) gets the same screen and scrollback, plus the viewers watching it live. The CLI itself is bound as the
@@ -48,6 +48,8 @@ export class AgentTerminal {
   private sink: TerminalSink | null = null;
   private mouseEncoding: number | null = null;
   private resync: NodeJS.Timeout | null = null;
+  private writer = new SerialWriter();
+  private revision = 0;
 
   constructor() {
     this.term.loadAddon(this.ser);
@@ -64,6 +66,7 @@ export class AgentTerminal {
     if (!data) return;
     this.term.write(data);
     this.dirty = true;
+    this.revision++;
     this.send({ t: 'data', data });
   }
 
@@ -118,11 +121,12 @@ export class AgentTerminal {
   }
 
   async save(file: string) {
-    this.dirty = false;
-    await this.flush();
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(`${file}.tmp`, this.snapshot());
-    await fs.rename(`${file}.tmp`, file);
+    await this.writer.write(async () => {
+      const revision = this.revision;
+      await this.flush();
+      await atomicWrite(file, this.snapshot());
+      if (this.revision === revision) this.dirty = false;
+    });
   }
 
   async load(file: string) {
@@ -153,11 +157,12 @@ export class AgentTerminal {
       } catch {
         return;
       }
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
       if (msg.t === 'input' && typeof msg.data === 'string') {
         const data = msg.data.slice(0, 64 * 1024);
         this.sink?.write(data);
         this.onInput?.(data);
-      } else if (msg.t === 'resize') {
+      } else if (msg.t === 'resize' && typeof msg.cols === 'number' && Number.isFinite(msg.cols) && typeof msg.rows === 'number' && Number.isFinite(msg.rows)) {
         this.resize(msg.cols, msg.rows);
         for (const other of this.viewers.keys()) if (other !== ws) this.sendTo(other, { t: 'size', cols: this.cols, rows: this.rows });
       }

@@ -10,6 +10,7 @@ import { Lobby } from './Lobby';
 import { OfficeFloor } from './OfficeFloor';
 import { Player } from './Player';
 import { Lights } from './Shell';
+import { useVisualPrefs, reducedMotion } from '../visualPrefs';
 
 function Travel() {
   const travel = useStore((s) => s.travel);
@@ -24,7 +25,7 @@ function Travel() {
           ding();
         } else finish('done');
       },
-      travel.phase === 'closing' ? 750 : 650,
+      reducedMotion() ? 0 : travel.phase === 'closing' ? 750 : 650,
     );
     return () => clearTimeout(t);
   }, [travel, finish]);
@@ -32,6 +33,7 @@ function Travel() {
 }
 
 export function Game() {
+  const low = useVisualPrefs((state) => state.quality === 'low');
   const floor = useStore((s) => s.floor);
   const repos = useStore((s) => s.repos);
   const lightMode = useStore((s) => s.lightMode);
@@ -45,11 +47,11 @@ export function Game() {
 
   return (
     <Canvas
-      shadows
+      shadows={!low}
       frameloop={paused ? 'never' : 'always'}
-      dpr={[1, maxDpr]}
+      dpr={[1, low ? 1 : maxDpr]}
       camera={{ fov: 72, near: 0.05, far: 90, position: [0, 1.65, 10] }}
-      gl={{ antialias: true, powerPreference: 'high-performance' }}
+      gl={{ antialias: !low, powerPreference: low ? 'low-power' : 'high-performance' }}
       onCreated={({ gl }) => {
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = keynote ? 1.15 : 1.0;
@@ -65,7 +67,7 @@ export function Game() {
       <FrameWhilePaused paused={paused} />
       <AdaptiveResolution onChange={setMaxDpr} />
       {statsEnabled && <StatsProbe paused={paused} />}
-      <EffectComposer multisampling={0}>
+      {!low && <EffectComposer multisampling={0}>
         <Bloom
           luminanceThreshold={0.88}
           luminanceSmoothing={0.3}
@@ -73,7 +75,7 @@ export function Game() {
           mipmapBlur
         />
         <Vignette eskil={false} offset={0.15} darkness={keynote ? 0.65 : 0.25} />
-      </EffectComposer>
+      </EffectComposer>}
     </Canvas>
   );
 }

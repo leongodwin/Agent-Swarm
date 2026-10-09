@@ -1,3 +1,4 @@
+import { ensureSession } from '../session';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -71,7 +72,9 @@ export function LiveTerminal({ agentId, className }: { agentId: string; classNam
       }
       if (ready) send({ t: 'resize', cols: term.cols, rows: term.rows });
     };
-    const connect = () => {
+    const connect = async () => {
+      try { await ensureSession(); } catch { if (!closed) retry = window.setTimeout(connect, 1500); return; }
+      if (closed) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const socket = new WebSocket(`${proto}://${location.host}/ws/term?agent=${encodeURIComponent(agentId)}`);
       ws = socket;

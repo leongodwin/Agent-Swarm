@@ -10,19 +10,23 @@ export function HldViewerModal({ repoId }: { repoId?: string }) {
   const pushToast = useStore((s) => s.pushToast);
 
   const [activeTab, setActiveTab] = useState<'topology' | 'erd' | 'sequence' | 'security' | 'alm' | 'raw'>('topology');
-  const [tenantName, setTenantName] = useState<string>('graspai.co.uk');
+  const [tenantName, setTenantName] = useState<string>('Not configured');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    let active = true;
     api.tenancy()
       .then((t) => {
+        if (!active) return;
         if (t?.tenantDomain) setTenantName(t.tenantDomain);
         else if (t?.tenantName) setTenantName(t.tenantName);
       })
       .catch(() => {});
+    return () => { active = false; };
   }, []);
 
-  const hldData: HldResult = useMemo(() => {
-    return generateHldContent({
+  const hldInput = useMemo(() => {
+    return {
       solutionName: repo ? repo.fullName : 'Contoso Copilot Field Claims Accelerator',
       problemContext: repo
         ? repo.mission || 'Unified Power Apps & Copilot Studio solution automating field claims inspection and approval workflows.'
@@ -58,17 +62,23 @@ export function HldViewerModal({ repoId }: { repoId?: string }) {
         },
       ],
       tenantName,
-      repoPath: repo?.checkoutPath || undefined,
-    });
+    };
   }, [repo, tenantName]);
 
-  const handleCopyMarkdown = () => {
-    navigator.clipboard.writeText(hldData.markdownContent);
+  const hldData: HldResult = useMemo(() => generateHldContent(hldInput), [hldInput]);
+  const handleCopyMarkdown = async () => {
+    try { await navigator.clipboard.writeText(hldData.markdownContent); } catch { pushToast('error', 'Could not copy HLD'); return; }
     pushToast('success', 'HLD Markdown copied to clipboard!');
   };
 
-  const handleSaveToRepo = () => {
-    pushToast('success', 'HLD successfully verified and saved to docs/architecture/HLD.md');
+  const handleSaveToRepo = async () => {
+    if (!repo || saving) return;
+    setSaving(true);
+    try {
+      const result = await api.generateHld<HldResult>({ ...hldInput, repoId: repo.id });
+      if (!result.savedFilePath) throw new Error('Server did not return a saved path');
+      pushToast('success', `HLD saved to ${result.savedFilePath}`);
+    } catch { /* API errors already appear as toasts. */ } finally { setSaving(false); }
   };
 
   return (
@@ -108,7 +118,7 @@ export function HldViewerModal({ repoId }: { repoId?: string }) {
               📋 Copy Markdown
             </button>
             <button
-              onClick={handleSaveToRepo}
+              onClick={() => void handleSaveToRepo()} disabled={saving || !repo}
               style={{ background: '#0078D4', color: '#fff', border: 'none', padding: '7px 16px', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 700 }}
             >
               💾 Save to docs/architecture/HLD.md

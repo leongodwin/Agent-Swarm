@@ -2,14 +2,15 @@ import { useEffect, useSyncExternalStore, lazy, Suspense, type ReactNode } from 
 import { useStore } from '../store';
 import { SENSITIVITY_MAX, SENSITIVITY_MIN, useLookPrefs } from '../world/look';
 import { CEO_ID } from '../../../shared/types';
-import { AppViewer } from './AppViewer';
-import { ElevatorPanel } from './ElevatorPanel';
-import { KanbanView } from './KanbanView';
-import { Phone } from './Phone';
-import { TerminalView } from './TerminalView';
+import { useVisualPrefs } from '../visualPrefs';
 import { getAudioPrefs, setAudioPrefs, subscribeAudio } from './sfx';
 
 const ManagerConsole = lazy(() => import('./ManagerConsole').then((m) => ({ default: m.ManagerConsole })));
+const AppViewer = lazy(() => import('./AppViewer').then((m) => ({ default: m.AppViewer })));
+const ElevatorPanel = lazy(() => import('./ElevatorPanel').then((m) => ({ default: m.ElevatorPanel })));
+const KanbanView = lazy(() => import('./KanbanView').then((m) => ({ default: m.KanbanView })));
+const Phone = lazy(() => import('./Phone').then((m) => ({ default: m.Phone })));
+const TerminalView = lazy(() => import('./TerminalView').then((m) => ({ default: m.TerminalView })));
 const SolutionArchitectureView = lazy(() => import('./SolutionArchitectureView').then((m) => ({ default: m.SolutionArchitectureView })));
 const FlowRunHistoryView = lazy(() => import('./FlowRunHistoryView').then((m) => ({ default: m.FlowRunHistoryView })));
 const VisualCvView = lazy(() => import('./VisualCvView').then((m) => ({ default: m.VisualCvView })));
@@ -70,8 +71,11 @@ export function Panel({
 /** Office volume and mute; saved in this browser. */
 export function SoundControls() {
   const { volume, muted } = useSyncExternalStore(subscribeAudio, getAudioPrefs);
+  const quality = useVisualPrefs((state) => state.quality);
+  const setQuality = useVisualPrefs((state) => state.setQuality);
   return (
     <div className="row wrap sound">
+      <label>Graphics <select value={quality} onChange={(event) => setQuality(event.target.value as 'low' | 'high')}><option value="high">Full office</option><option value="low">Low (no shadows, effects or physics toys)</option></select></label>
       <label className="toggle">
         <input type="checkbox" checked={!muted} onChange={(e) => setAudioPrefs({ muted: !e.target.checked })} /> {muted ? '🔇' : '🔊'} Sound
       </label>
@@ -176,6 +180,7 @@ function Help() {
 
 export function Overlays() {
   const overlay = useStore((s) => s.overlay);
+  const floor = useStore((s) => s.floor);
   if (!overlay) return null;
 
   const renderContent = () => {
@@ -215,5 +220,6 @@ export function Overlays() {
     }
   };
 
-  return <Suspense fallback={null}>{renderContent()}</Suspense>;
+  const scope = `${overlay.kind}:${'repoId' in overlay ? overlay.repoId : ''}:${floor}`;
+  return <Suspense key={scope} fallback={null}>{renderContent()}</Suspense>;
 }

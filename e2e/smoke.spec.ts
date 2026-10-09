@@ -73,6 +73,7 @@ async function canvasColours(page: Page) {
 }
 
 test('/api/state returns JSON with floors', async ({ request }) => {
+  await request.get('/api/session');
   const res = await request.get('/api/state');
   expect(res.ok()).toBe(true);
   expect(res.headers()['content-type']).toContain('application/json');
@@ -81,6 +82,19 @@ test('/api/state returns JSON with floors', async ({ request }) => {
   expect(state.repos.length).toBeGreaterThan(0);
   for (const repo of state.repos) expect(repo.floor).toBeGreaterThan(0);
   expect(state.agents.length).toBeGreaterThan(0);
+});
+
+test('welcome screen defers the renderer and low graphics skips physics toys', async ({ page }) => {
+  const scripts: string[] = [];
+  page.on('request', (request) => { if (request.resourceType() === 'script') scripts.push(request.url()); });
+  await page.goto('/?quality=low');
+  await expect(page.getByRole('button', { name: 'Enter the office' }).or(page.getByRole('button', { name: /skip setup/i }))).toBeVisible();
+  expect(scripts.some((url) => /\/(Game|perf|rapier|TerminalView)-/.test(url))).toBe(false);
+  const enter = page.getByRole('button', { name: 'Enter the office' });
+  const skip = page.getByRole('button', { name: /skip setup/i });
+  if (await skip.isVisible()) await skip.click(); else { await expect(enter).toBeEnabled(); await enter.click(); }
+  await expect(page.locator('canvas').first()).toBeVisible();
+  expect(scripts.some((url) => /\/rapier-/.test(url))).toBe(false);
 });
 
 test('the office loads, you can walk in and the 3D view renders', async ({ page }) => {
@@ -175,4 +189,30 @@ test('holding W walks forward', async ({ page }) => {
   const to = (await savedView(page))!;
   expect(to.floor).toBe(from.floor);
   expect(to.yaw).toBeCloseTo(from.yaw); // W walks, it doesn't turn
+});
+
+
+test('feature panels disclose simulation and clear empty repository results', async ({ page }) => {
+  await page.goto('/?quality=low');
+  await expect(page.getByRole('button', { name: 'Enter the office' })).toBeEnabled();
+  const open = async (kind: string) => page.evaluate((kind) => {
+    const store = (window as any).__swarmStore;
+    const repoId = store.getState().repos[0].id;
+    store.getState().openOverlay({ kind, repoId });
+  }, kind);
+  await open('copilot');
+  await expect(page.getByText('⚠ SIMULATED DIRECT LINE')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await open('flow-runs');
+  await expect(page.getByText('⚠️ SIMULATED TELEMETRY')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.route('**/api/repos/*/flow-runs', (route) => route.fulfill({ json: [] }));
+  await open('flow-runs');
+  await expect(page.getByText('No runs in this repository.')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await open('alm-kiosk');
+  await expect(page.getByText('⚠ Simulated pipeline')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await open('solution-architecture');
+  await expect(page.getByText('⚠️ SIMULATED ARCHITECTURE')).toBeVisible();
 });

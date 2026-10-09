@@ -14,7 +14,7 @@ import { pokeToy } from './toys/poke';
 import { isBlasterId } from './toys/darts';
 import { reloadHeld, takeBlaster } from './toys/gun';
 
-let canvasEl: HTMLCanvasElement | null = null;
+import { requestLook, setLookCanvas } from './lookRequest';
 
 // After an action, mouse presses are swallowed for a moment, so the second half of a double click
 // (or a click right after E) can't land on the panel's backdrop and close it, or confirm a hire.
@@ -24,26 +24,6 @@ const QUIET_EVENTS = ['mousedown', 'mouseup', 'click', 'dblclick'] as const;
 const hushMouse = () => {
   quietUntil = performance.now() + QUIET_MS;
 };
-
-/** Grab the mouse for looking around. Must be called from a click handler. */
-export function requestLook() {
-  const s = useStore.getState();
-  if (!canvasEl || s.overlay || !s.started || isConfirmOpen()) return;
-  const el = canvasEl;
-  // Raw (unadjusted) input skips the OS mouse path that produces bogus spikes on Windows.
-  // Browsers that can't do it reject with NotSupportedError (Firefox ignores the option).
-  lockPointer(el, { unadjustedMovement: true })?.catch?.((err: unknown) => {
-    if (err instanceof DOMException && err.name === 'NotSupportedError') lockPointer(el)?.catch?.(() => undefined);
-  });
-}
-
-function lockPointer(el: HTMLCanvasElement, options?: PointerLockOptions): Promise<void> | undefined {
-  try {
-    return el.requestPointerLock?.(options);
-  } catch {
-    return undefined; // older browsers throw instead of rejecting
-  }
-}
 
 /** Spike counters, readable from the console as __swarmLook. */
 const lookDiag = { dropped: 0, skipped: 0 };
@@ -129,7 +109,7 @@ export function Player({ colliders, floor }: { colliders: Rect[]; floor: number 
   }, [camera]);
 
   useEffect(() => {
-    canvasEl = gl.domElement;
+    setLookCanvas(gl.domElement);
     // Left button only. If the mouse is already captured, use what you're holding (winding up a throw until
     // the button comes up) or, empty-handed, act on the crosshair's target (like E). Otherwise this press
     // just captures the mouse, so the click that locks never also acts.
@@ -216,7 +196,10 @@ export function Player({ colliders, floor }: { colliders: Rect[]; floor: number 
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
     const stopLookLock = watchLookLock(requestLook, hushMouse);
+    useStore.setState({ worldReady: true });
     return () => {
+      setLookCanvas(null);
+      useStore.setState({ worldReady: false });
       stopLookLock();
       gl.domElement.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mouseup', onMouseUp);

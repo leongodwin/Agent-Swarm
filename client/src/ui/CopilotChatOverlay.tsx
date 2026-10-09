@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Panel } from './Overlays';
 import { copilotChime } from './sfx';
+import { api } from '../api';
 
 interface ChatMessage {
   id: string;
@@ -24,7 +25,7 @@ export function CopilotChatOverlay({ onClose }: { onClose?: () => void }) {
     {
       id: '1',
       sender: 'bot',
-      text: "Hello! I am Contoso Service Copilot, built with Copilot Studio and Power Platform by our AI agent engineering swarm. How can I assist you with your customer requests or Power Platform flows today?",
+      text: "This is a scripted simulation. I am Contoso Service Copilot, built with Copilot Studio and Power Platform by our AI agent engineering swarm. How can I assist you with your customer requests or Power Platform flows today?",
       timestamp: 'Just now',
       topic: 'Greeting Topic',
       confidence: 0.99,
@@ -34,12 +35,32 @@ export function CopilotChatOverlay({ onClose }: { onClose?: () => void }) {
   const [confidence, setConfidence] = useState(0.99);
   const [selectedStage, setSelectedStage] = useState<number>(1);
   const [showDirectLineInspector, setShowDirectLineInspector] = useState(false);
+  const [environmentName, setEnvironmentName] = useState('Loading connected environment…');
   const [activeVariables, setActiveVariables] = useState<Record<string, string>>({
-    'User.DisplayName': 'Leon van Zyl',
-    'User.Email': 'leon@contoso.com',
+    'User.DisplayName': 'Not configured',
+    'User.Email': 'Not configured',
     'Session.Channel': 'Copilot Kiosk v2.4',
-    'Dataverse.OrgUrl': 'https://contoso.crm.dynamics.com',
+    'Dataverse.OrgUrl': 'Loading…',
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    api.tenancy().then((tenancy) => {
+      if (cancelled) return;
+      const environment = tenancy.environments.find((env) => env.active);
+      setEnvironmentName(environment?.name || 'No connected environment');
+      setActiveVariables((prev) => ({
+        ...prev,
+        'Dataverse.OrgUrl': environment?.url || 'No connected environment',
+        'User.Email': tenancy.user || 'Not configured',
+      }));
+    }).catch(() => {
+      if (cancelled) return;
+      setEnvironmentName('Connected environment unavailable');
+      setActiveVariables((prev) => ({ ...prev, 'Dataverse.OrgUrl': 'Unavailable' }));
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -47,6 +68,8 @@ export function CopilotChatOverlay({ onClose }: { onClose?: () => void }) {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => () => { for (const timer of timers.current) clearTimeout(timer); timers.current.clear(); }, []);
   const handleSend = (textToSend?: string) => {
     const query = (textToSend || input).trim();
     if (!query) return;
@@ -64,7 +87,8 @@ export function CopilotChatOverlay({ onClose }: { onClose?: () => void }) {
     if (!textToSend) setInput('');
 
     // Simulated Copilot Studio Topic Evaluation Engine
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
       const q = query.toLowerCase();
       let reply: ChatMessage;
 
@@ -137,8 +161,10 @@ export function CopilotChatOverlay({ onClose }: { onClose?: () => void }) {
         };
       }
 
+      reply.text = `Simulated response (no external action): ${reply.text}`;
       setMessages((prev) => [...prev, reply]);
     }, 600);
+    timers.current.add(timer);
   };
 
   const samplePrompts = [
@@ -155,8 +181,8 @@ export function CopilotChatOverlay({ onClose }: { onClose?: () => void }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontSize: 24 }}>⚡</span>
             <div>
-              <div style={{ fontWeight: 800, fontSize: 18, color: '#FFFFFF' }}>Copilot Studio Interactive Test Canvas</div>
-              <div style={{ fontSize: 13, color: '#38BDF8', fontWeight: 600 }}>Connected to Power Platform Environment · contoso_prod</div>
+              <div style={{ fontWeight: 800, fontSize: 18, color: '#FFFFFF' }}>Copilot Studio Simulated Test Canvas</div>
+              <div style={{ fontSize: 13, color: '#38BDF8', fontWeight: 600 }}>Simulation · Environment reference: {environmentName}</div>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>

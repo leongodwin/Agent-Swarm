@@ -7,10 +7,12 @@ import { realPreviews, type PreviewBackend } from './previewRunner.ts';
 import { realOffice, type OfficeHost } from './officeUpdate.ts';
 import type { AgentTerminal } from './terminal.ts';
 import type { CliView, GhRepoSummary, IssueInfo, PullInfo } from '../shared/types.ts';
+import { createTenancyService, type TenancyService } from './tenancy.ts';
 
 /** Everything the swarm needs from the outside world. The demo backend fakes all of it. */
 export interface Backend {
   demo: boolean;
+  tenancy: TenancyService;
   user(): Promise<string>;
   listMyRepos(owner?: string): Promise<GhRepoSummary[]>;
   repoMeta(fullName: string): Promise<github.RepoMeta>;
@@ -26,6 +28,8 @@ export interface Backend {
   prForBranch(fullName: string, branch: string): Promise<{ number: number; url: string } | null>;
   prDetails(fullName: string, number: number): Promise<github.PrDetails>;
   prDiff(fullName: string, number: number): Promise<string>;
+  /** Full changed-file contents at the exact PR head; reject unavailable or changed heads. */
+  prFiles(fullName: string, number: number, headSha: string): Promise<{ file: string; content: string }[]>;
   issueDetails(fullName: string, number: number): Promise<{ title: string; body: string }>;
   commentPull(fullName: string, number: number, body: string): Promise<string>;
   uploadEvidence(fullName: string, filePath: string, data: Buffer): Promise<string>;
@@ -64,6 +68,7 @@ export interface Backend {
 
 export const realBackend: Backend = {
   demo: false,
+  tenancy: createTenancyService(),
   user: github.currentUser,
   listMyRepos: github.listMyRepos,
   repoMeta: github.repoMeta,
@@ -78,6 +83,7 @@ export const realBackend: Backend = {
   prForBranch: github.prForBranch,
   prDetails: github.prDetails,
   prDiff: github.prDiff,
+  prFiles: github.prFiles,
   issueDetails: github.issueDetails,
   commentPull: github.commentPull,
   uploadEvidence: github.uploadEvidence,

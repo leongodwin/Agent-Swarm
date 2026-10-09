@@ -8,6 +8,7 @@ import { CLIS } from './clis.ts';
 import type { GhRepoSummary, IssueInfo, PullInfo } from '../shared/types.ts';
 import type { LocalFolder } from './workspace.ts';
 import { HOME_DIR } from './config.ts';
+import { createTenancyService } from './tenancy.ts';
 import { takeLastUpdate, underLauncher, type OfficeHost } from './officeUpdate.ts';
 
 // `npm run demo`: a fake GitHub and fake Claude Code sessions, so the office (including the
@@ -405,6 +406,7 @@ export function createDemoBackend(): Backend {
   };
   return {
     demo: true,
+    tenancy: createTenancyService(true),
     user: async () => 'demo-manager',
     listMyRepos: async (): Promise<GhRepoSummary[]> =>
       [...repos.values()].map((r) => ({ nameWithOwner: r.fullName, description: r.description, visibility: 'PUBLIC', updatedAt: now() })),
@@ -483,6 +485,10 @@ export function createDemoBackend(): Backend {
       };
     },
     prDiff: async (fullName, number) => demoDiffs.get(`${fullName}#${number}`) ?? '',
+    prFiles: async (fullName, number) => {
+      const diff = demoDiffs.get(`${fullName}#${number}`) ?? '';
+      return diff ? [{ file: 'Workflows/demo.json', content: diff }] : [];
+    },
     issueDetails: async (fullName, number) => {
       const i = repos.get(fullName)?.issues.find((x) => x.number === number);
       return { title: i?.title ?? `Issue #${number}`, body: i?.body ?? '' };

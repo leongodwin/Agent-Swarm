@@ -1,7 +1,29 @@
 import { gh, ghJson } from './exec.ts';
 import type { GhRepoSummary, IssueInfo, PullInfo } from '../shared/types.ts';
+import { dlpResource } from '../shared/dlp.ts';
 
 // All GitHub access goes through the gh CLI so it reuses the user's existing `gh auth login`.
+
+/** Inspect full files at a pinned head, rejecting a concurrently changed PR. */
+export async function prFiles(fullName: string, number: number, headSha: string): Promise<{ file: string; content: string }[]> {
+  if ((await prDetails(fullName, number)).headSha !== headSha) throw new Error('PR head changed during DLP scan');
+  const pages = await ghJson<{ filename: string; status: string }[][]>(['api', '--paginate', '--slurp', `repos/${fullName}/pulls/${number}/files?per_page=100`]);
+  const changed = pages.flat();
+  if (changed.length >= 3000) throw new Error('PR file listing reached the API limit; full DLP coverage cannot be verified');
+  const files = changed.filter((file) => file.status !== 'removed' && dlpResource(file.filename));
+  const result: { file: string; content: string }[] = [];
+  // Bound concurrency and memory; an unavailable/oversized file blocks rather than skips the scan.
+  for (const file of files) {
+    const filename = file.filename.split('/').map(encodeURIComponent).join('/');
+    const raw = await ghJson<{ type: string; encoding: string; size: number; content: string }>([
+      'api', `repos/${fullName}/contents/${filename}?ref=${encodeURIComponent(headSha)}`,
+    ]);
+    if (raw.type !== 'file' || raw.encoding !== 'base64' || raw.size > 5_000_000) throw new Error(`Cannot inspect ${file.filename} for DLP`);
+    result.push({ file: file.filename, content: Buffer.from(raw.content, 'base64').toString('utf8') });
+  }
+  if ((await prDetails(fullName, number)).headSha !== headSha) throw new Error('PR head changed during DLP scan');
+  return result;
+}
 
 export async function currentUser(): Promise<string> {
   return gh(['api', 'user', '--jq', '.login']);

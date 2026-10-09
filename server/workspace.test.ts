@@ -33,7 +33,7 @@ await fs.writeFile(gitConfig, '[user]\n\tname = Sync Test\n\temail = sync-test@e
 process.env.GIT_CONFIG_GLOBAL = gitConfig;
 
 const { git } = await import('./exec.ts');
-const { leftoversInDesk, mainDir, syncMain: sync } = await import('./workspace.ts');
+const { leftoversInDesk, mainDir, prepareDesk, fixDeskBranch, syncMain: sync } = await import('./workspace.ts');
 // Most tests only care about the status line.
 const syncMain = async (...args: Parameters<typeof sync>) => (await sync(...args))?.status ?? null;
 
@@ -217,6 +217,35 @@ describe('syncMain', { timeout: 60_000 }, () => {
     expect(await syncMain(r.fullName, 'main', { touch: true })).toMatch(/^updated to \w+$/);
     expect(await head(r.dir)).toBe(await head(r.upstream));
     expect(await fs.readFile(path.join(r.dir, 'lines.txt'), 'utf8')).toBe('one\r\ntwo\r\n');
+  });
+});
+
+describe('PR fix worktrees', { timeout: 60_000 }, () => {
+  it('lets another developer fix a PR while preserving the author desk and remote branch', async () => {
+    const r = await makeRepos();
+    const remoteBranch = 'swarm/issue-8-grace';
+    const grace = await prepareDesk(r.fullName, { defaultBranch: 'main' }, 'grace-4971', remoteBranch);
+    await commitFile(grace, 'fix.txt', 'original PR\n');
+    await git(['push', 'origin', `HEAD:refs/pull/8/head`, `HEAD:refs/heads/${remoteBranch}`], { cwd: grace });
+    const graceHead = await head(grace);
+    await fs.writeFile(path.join(grace, 'uncommitted.txt'), 'keep Grace work\n');
+
+    const branch = fixDeskBranch(8, 'ada-1234');
+    const ada = await prepareDesk(r.fullName, { defaultBranch: 'main', pr: 8 }, 'ada-1234', branch);
+    expect(await head(ada)).toBe(graceHead);
+    expect(await git(['branch', '--show-current'], { cwd: ada })).toBe(branch);
+    await commitFile(ada, 'fix.txt', 'Ada fix\n');
+    await git(['push', 'origin', `HEAD:${remoteBranch}`], { cwd: ada });
+    expect(await git(['ls-remote', 'origin', `refs/heads/${remoteBranch}`], { cwd: ada })).toContain(await head(ada));
+    expect(await head(grace)).toBe(graceHead);
+    expect(await git(['branch', '--show-current'], { cwd: grace })).toBe(remoteBranch);
+    expect(await fs.readFile(path.join(grace, 'uncommitted.txt'), 'utf8')).toBe('keep Grace work\n');
+
+    // Reusing Ada's desk for a later fix must work too.
+    await git(['push', 'origin', 'HEAD:refs/pull/8/head'], { cwd: ada });
+    const fixedHead = await head(ada);
+    expect(await prepareDesk(r.fullName, { defaultBranch: 'main', pr: 8 }, 'ada-1234', branch)).toBe(ada);
+    expect(await head(ada)).toBe(fixedHead);
   });
 });
 

@@ -67,8 +67,8 @@ describe('Proposal Generator Agent', () => {
 });
 
 describe('High-Level Design (HLD) Document Generator Agent', () => {
-  it('generates Well-Architected Framework HLD and Mermaid schematics', () => {
-    const res = generateHld({
+  it('generates Well-Architected Framework HLD and Mermaid schematics', async () => {
+    const res = await generateHld({
       solutionName: 'Contoso Claims Fusion Accelerator',
       problemContext: 'Automating multi-point claim inspection.',
       components: [
