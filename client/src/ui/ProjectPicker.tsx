@@ -229,6 +229,18 @@ export function ProjectPicker({ onConnected, initial = 'folder' }: { onConnected
   const [mode, setMode] = useState<Mode>(initial);
   const [mission, setMission] = useState('');
   const [autoAssign, setAutoAssign] = useState(true);
+  const [tenancy, setTenancy] = useState<{
+    tenantName: string;
+    tenantDomain: string;
+    environments: Array<{ name: string; url: string; active: boolean }>;
+  } | null>(null);
+
+  useEffect(() => {
+    api.tenancy().then((t) => setTenancy(t)).catch(() => {});
+  }, []);
+
+  const activeEnv = tenancy?.environments.find((e) => e.active) ?? tenancy?.environments[0];
+
   const floor: FloorOptions = { mission, autoAssign };
   const done = (repo: RepoView) => {
     setMission('');
@@ -241,6 +253,43 @@ export function ProjectPicker({ onConnected, initial = 'folder' }: { onConnected
   ];
   return (
     <div className="picker">
+      {/* Active Tenancy Target Banner */}
+      <div
+        style={{
+          background: '#091322',
+          border: '1px solid #0284c7',
+          borderRadius: 8,
+          padding: '10px 14px',
+          marginBottom: 12,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>
+            🎯 Target Power Platform Tenancy
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#f8fafc', marginTop: 2 }}>
+            {tenancy ? `${tenancy.tenantName} (${tenancy.tenantDomain})` : 'Connecting to Microsoft Tenancy…'}
+            {activeEnv && <span style={{ color: '#94a3b8', marginLeft: 8, fontWeight: 400 }}>· {activeEnv.name}</span>}
+          </div>
+          {activeEnv && (
+            <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
+              {activeEnv.url}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className="btn btn-small btn-ghost"
+          style={{ fontSize: 11 }}
+          onClick={() => useStore.getState().openOverlay({ kind: 'dlp-kiosk' })}
+        >
+          Change Tenancy
+        </button>
+      </div>
+
       <div className="picker-tabs">
         {modes.map(([k, label]) => (
           <button key={k} className={`picker-tab ${mode === k ? 'picker-tab-on' : ''}`} onClick={() => setMode(k)}>
@@ -252,7 +301,7 @@ export function ProjectPicker({ onConnected, initial = 'folder' }: { onConnected
         value={mission}
         onChange={(e) => setMission(e.target.value)}
         rows={2}
-        placeholder={mode === 'new' ? 'What should the team build? e.g. A cozy 3D browser game where you run a tiny island bakery.' : 'Brief for the CEO (optional): what should the team work on next?'}
+        placeholder={mode === 'new' ? 'What should the team build? e.g. A corporate expense management app with Dataverse and Copilot Studio.' : 'Brief for the CEO (optional): what should the team work on next?'}
       />
       <label className="toggle small">
         <input type="checkbox" checked={autoAssign} onChange={(e) => setAutoAssign(e.target.checked)} />

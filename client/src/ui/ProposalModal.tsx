@@ -12,13 +12,14 @@ import {
 export function ProposalModal({ ideaId: _ideaId }: { ideaId?: string }) {
   const pushToast = useStore((s) => s.pushToast);
   const openOverlay = useStore((s) => s.openOverlay);
+  const companyName = useStore((s) => s.settings.companyName);
 
   // Input states
-  const [clientName, setClientName] = useState('Contoso Global Logistics');
-  const [title, setTitle] = useState('Commercial Claims & Field Inspection Automation');
-  const [industry] = useState('Logistics & Energy');
+  const [clientName, setClientName] = useState(companyName || 'Grasp AI');
+  const [title, setTitle] = useState(`${companyName || 'Enterprise'} Copilot Swarm & Power Platform Modernization`);
+  const [industry] = useState('Technology & Professional Services');
   const [problemStatement, setProblemStatement] = useState(
-    'Field adjusters and depot inspectors spend 45 minutes manually reconciling handwritten forms and PDF damage reports with disparate back-office ERP systems, causing delayed claims processing and lost customer billing.'
+    'Disparate back-office systems and manual cross-department handoffs create approval bottlenecks. Autonomous Copilot Studio agents with Power Automate cloud flows and Dataverse governance accelerate turnaround and eliminate manual reconciliation.'
   );
   const [userCount, setUserCount] = useState<number>(450);
   const [monthlyTransactions, setMonthlyTransactions] = useState<number>(35000);

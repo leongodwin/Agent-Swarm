@@ -128,6 +128,11 @@ function FloorRow({ repo, all }: { repo: RepoView; all: RepoView[] }) {
               ⟳ Sync now
             </button>
           </div>
+          {repo.targetTenancy && (
+            <div className="muted small" style={{ color: '#38bdf8' }}>
+              🎯 Target: <b>{repo.targetTenancy.tenantName}</b> ({repo.targetTenancy.tenantDomain}) · <code>{repo.targetTenancy.environmentUrl}</code>
+            </div>
+          )}
           {repo.cloneError && <div className="term-error small">clone failed: {repo.cloneError}</div>}
           {repo.syncError && <div className="term-error small">sync failed: {repo.syncError}</div>}
         </div>
@@ -775,12 +780,19 @@ function SettingsTab() {
             🧭 Replay the tour
           </button>
         </div>
-        <h3>ℹ️ Environment</h3>
+        <h3>ℹ️ Environment & Cloud</h3>
         <div className="small">
           GitHub: <b>{user ?? 'not signed in'}</b>
           {demo && ' (demo)'}
           <br />
           Agent desks: <code>{workspaceRoot}</code>
+          <br />
+          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>Microsoft Tenancy & PAC CLI:</span>
+            <button className="btn btn-small btn-ghost" onClick={() => useStore.getState().openOverlay({ kind: 'dlp-kiosk' })}>
+              ⚙️ Switch / Login Tenancy
+            </button>
+          </div>
         </div>
       </div>
     </div>

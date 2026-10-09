@@ -45,6 +45,8 @@ import type {
   WorldSnapshot,
 } from '../shared/types.ts';
 
+import { getActiveEnvironment } from './tenancy.ts';
+
 // ---------- persisted shape ----------
 
 interface PersistedRepo {
@@ -64,6 +66,14 @@ interface PersistedRepo {
   summary: string;
   qaBrief: string;
   preview: PreviewConfig; // how the floor's app runs for the preview monitor
+  targetTenancy?: {
+    tenantName: string;
+    tenantDomain: string;
+    tenantId: string;
+    user: string;
+    environmentName: string;
+    environmentUrl: string;
+  };
   addedAt: number;
 }
 
@@ -635,6 +645,7 @@ export class Swarm {
       syncError: rt.syncError,
       previewConfig: r.preview,
       preview: this.previews.view(r),
+      targetTenancy: r.targetTenancy,
     };
   }
 
@@ -865,6 +876,7 @@ export class Swarm {
       summary: '',
       qaBrief: '',
       preview: { ...DEFAULT_PREVIEW, env: {} },
+      targetTenancy: getActiveEnvironment(),
       addedAt: Date.now(),
     };
     this.backend.setLocalPath(repo.fullName, folder);
@@ -1549,6 +1561,18 @@ export class Swarm {
       `Repository: ${repo.fullName} (default branch: ${repo.defaultBranch})`,
       repo.summary ? `Project: ${repo.summary}` : '',
       repo.mission ? `What the team is building (the manager's brief): ${repo.mission}` : '',
+      repo.targetTenancy
+        ? [
+            'Target Tenancy & Microsoft Power Platform Environment:',
+            `- Tenant Name: ${repo.targetTenancy.tenantName} (${repo.targetTenancy.tenantDomain})`,
+            `- Tenant ID: ${repo.targetTenancy.tenantId}`,
+            `- Target Environment URL: ${repo.targetTenancy.environmentUrl}`,
+            `- Authenticated User / Owner: ${repo.targetTenancy.user}`,
+            'CRITICAL TENANCY RULE: All solution components, connection references, XML/YAML schemas, seed data, and documentation must align directly to this real tenancy (@' +
+              repo.targetTenancy.tenantDomain +
+              '). Never use generic contoso.com placeholders.',
+          ].join('\n')
+        : '',
       `Your worktree: ${cwd}`,
       fixing
         ? `You are fixing pull request #${fixing.pr}. Its code is checked out on local branch ${branch}; push fixes with: ${push}. Do not open a new pull request.`
@@ -1858,6 +1882,15 @@ export class Swarm {
       `Repository: ${repo.fullName} (default branch: ${repo.defaultBranch})`,
       ...(repo.summary ? [`Project: ${repo.summary}`] : []),
       ...(repo.mission ? [`What the team is building (the manager's brief): ${repo.mission}`] : []),
+      ...(repo.targetTenancy
+        ? [
+            'Target Tenancy & Verification Boundary:',
+            `- Tenant: ${repo.targetTenancy.tenantName} (${repo.targetTenancy.tenantDomain})`,
+            `- Environment URL: ${repo.targetTenancy.environmentUrl}`,
+            `- Owner: ${repo.targetTenancy.user}`,
+            'Verify that solution artifacts and seed data align strictly with this tenancy, rejecting mock placeholders.',
+          ]
+        : []),
       ...(repo.qaBrief ? [`What to check on this project (from the CEO):\n${repo.qaBrief}`] : []),
       `Pull request #${pr.number} "${pr.title}" from branch ${pr.headRefName}: ${pr.url}`,
       `Your worktree: ${cwd}. It has the pull request's code checked out on local branch ${branch}.`,
@@ -2604,7 +2637,14 @@ export class Swarm {
   private ceoFloor(repoId?: string) {
     const repo = repoId ? this.state.repos.find((r) => r.id === repoId) : undefined;
     if (!repo) return null;
-    return { floor: repo.floor, fullName: repo.fullName, clone: this.backend.mainDir(repo.fullName), mission: repo.mission, backlog: this.repoRt.get(repo.id)?.issues.length ?? 0 };
+    return {
+      floor: repo.floor,
+      fullName: repo.fullName,
+      clone: this.backend.mainDir(repo.fullName),
+      mission: repo.mission,
+      backlog: this.repoRt.get(repo.id)?.issues.length ?? 0,
+      targetTenancy: repo.targetTenancy,
+    };
   }
 
   private ceoInfo(): CeoInfo {

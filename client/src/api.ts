@@ -107,6 +107,24 @@ export const api = {
   almApprove: (data: { approver?: string } = {}) => call<AlmPipeline>('POST', '/api/alm/approve', data),
   almRollback: () => call<AlmPipeline>('POST', '/api/alm/rollback'),
   dlpScan: (repoId?: string) => call<DlpScanReport>('GET', `/api/repos/${encodeURIComponent(repoId || 'default')}/dlp-scan`),
+  tenancy: () =>
+    call<{
+      tenantName: string;
+      tenantDomain: string;
+      tenantId: string;
+      user: string;
+      environments: Array<{ index?: number; name: string; url: string; user: string; active: boolean }>;
+      isReal: boolean;
+    }>('GET', '/api/tenancy'),
+  selectTenancyEnvironment: (index: number) => call<{ ok: boolean; message: string }>('POST', '/api/tenancy/select', { index }),
+  loginTenancy: (data: {
+    environmentUrl?: string;
+    tenantId?: string;
+    applicationId?: string;
+    clientSecret?: string;
+    name?: string;
+    interactive?: boolean;
+  }) => call<{ ok: boolean; message: string }>('POST', '/api/tenancy/login', data),
 };
 
 

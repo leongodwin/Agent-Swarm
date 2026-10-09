@@ -1,4 +1,5 @@
 import { AlmPipeline, INITIAL_ALM_PIPELINE } from '../shared/alm.ts';
+import { getActiveEnvironment } from './tenancy.ts';
 
 type NotificationFn = (cardInput: { title: string; subtitle?: string; summary?: string; facts?: { title: string; value: string }[] }) => void;
 
@@ -11,10 +12,23 @@ class AlmPipelineManager {
   }
 
   getPipeline(): AlmPipeline {
+    // Dynamically align active environment from live tenancy
+    try {
+      const active = getActiveEnvironment();
+      if (active.environmentUrl) {
+        this.pipeline.environments.prod.url = active.environmentUrl;
+        this.pipeline.environments.prod.name = active.environmentName;
+        this.pipeline.environments.dev.url = active.environmentUrl;
+        this.pipeline.environments.test.url = active.environmentUrl;
+      }
+    } catch {
+      // Keep pipeline defaults
+    }
     return this.pipeline;
   }
 
   approveRelease(approver: string = 'Leon van Zyl'): AlmPipeline {
+    const active = getActiveEnvironment();
     const oldVersion = this.pipeline.currentProdVersion;
     const newVersion = this.pipeline.targetVersion;
 
@@ -23,11 +37,11 @@ class AlmPipelineManager {
     this.pipeline.approvedAt = new Date().toISOString();
     this.pipeline.currentProdVersion = newVersion;
 
-    // Update Prod Environment
+    // Update Prod Environment with real environment URL
     this.pipeline.environments.prod = {
       id: 'prod',
-      name: 'Production Enterprise Cluster',
-      url: 'https://contoso.crm.dynamics.com',
+      name: `${active.environmentName} (${active.tenantDomain})`,
+      url: active.environmentUrl,
       version: newVersion,
       lastDeployedAt: 'Just now by ' + approver,
       buildStatus: 'clean',
@@ -63,7 +77,7 @@ class AlmPipelineManager {
           { title: 'Solution', value: this.pipeline.solutionUniqueName },
           { title: 'New Version', value: `v${newVersion}` },
           { title: 'Approver', value: approver },
-          { title: 'Environment', value: 'Production (https://contoso.crm.dynamics.com)' },
+          { title: 'Environment', value: `${active.environmentName} (${active.environmentUrl})` },
         ],
       });
     } catch {

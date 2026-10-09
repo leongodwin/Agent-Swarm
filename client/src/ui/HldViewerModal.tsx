@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Panel } from './Overlays';
 import { useStore } from '../store';
+import { api } from '../api';
 import { generateHldContent, type HldResult } from '../../../shared/hld';
 
 export function HldViewerModal({ repoId }: { repoId?: string }) {
@@ -9,7 +10,16 @@ export function HldViewerModal({ repoId }: { repoId?: string }) {
   const pushToast = useStore((s) => s.pushToast);
 
   const [activeTab, setActiveTab] = useState<'topology' | 'erd' | 'sequence' | 'security' | 'alm' | 'raw'>('topology');
-  const tenantName = 'contoso.onmicrosoft.com';
+  const [tenantName, setTenantName] = useState<string>('graspai.co.uk');
+
+  useEffect(() => {
+    api.tenancy()
+      .then((t) => {
+        if (t?.tenantDomain) setTenantName(t.tenantDomain);
+        else if (t?.tenantName) setTenantName(t.tenantName);
+      })
+      .catch(() => {});
+  }, []);
 
   const hldData: HldResult = useMemo(() => {
     return generateHldContent({

@@ -362,26 +362,48 @@ export function ReleasePipelineModal({ onClose }: { onClose?: () => void }) {
                         ) : (
                           <>
                             <div style={{ fontSize: 12, fontWeight: 700, color: '#34d399', marginBottom: 4 }}>
-                              ✅ Solution v{pipeline.currentProdVersion} Live in Production (Simulated)
+                              ✅ Solution v{pipeline.currentProdVersion} Live in Production
                             </div>
                             <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
                               Signed off by {pipeline.approvedBy || 'Leon van Zyl'}
                             </div>
-                            <button
-                              onClick={handleRollback}
-                              style={{
-                                background: 'rgba(239, 68, 68, 0.2)',
-                                border: '1px solid rgba(239, 68, 68, 0.4)',
-                                color: '#f87171',
-                                padding: '4px 10px',
-                                borderRadius: 6,
-                                fontSize: 11,
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                              }}
-                            >
-                              ↩️ Reset Pipeline Gate
-                            </button>
+                            <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                              <a
+                                href="https://make.powerapps.com"
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  background: '#0284c7',
+                                  color: '#fff',
+                                  textDecoration: 'none',
+                                  padding: '5px 12px',
+                                  borderRadius: 6,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                }}
+                              >
+                                <span>🌐</span>
+                                <span>Open in Power Apps Maker</span>
+                              </a>
+                              <button
+                                onClick={handleRollback}
+                                style={{
+                                  background: 'rgba(239, 68, 68, 0.2)',
+                                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                                  color: '#f87171',
+                                  padding: '5px 10px',
+                                  borderRadius: 6,
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                ↩️ Reset Pipeline Gate
+                              </button>
+                            </div>
                           </>
                         )}
                       </div>

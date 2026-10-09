@@ -236,12 +236,14 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
       return { args, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config), CUBEFARM_NOTIFY_URL: ctx.notify.url } };
     }
     case 'copilot': {
+      // Gemini and non-reasoning flash models in GitHub Copilot CLI reject the --effort flag
+      const supportsEffort = !ctx.model || (!ctx.model.toLowerCase().includes('gemini') && !ctx.model.toLowerCase().includes('flash'));
       const args = [
         '--no-auto-update',
         '--allow-all',
         '--silent',
         ...(ctx.model ? ['--model', ctx.model] : []),
-        ...(ctx.effort ? ['--effort', ctx.effort] : []),
+        ...(ctx.effort && supportsEffort ? ['--effort', ctx.effort] : []),
         ...(ctx.resumeId ? [`--resume=${ctx.resumeId}`] : ['--session-id', ctx.sessionId]),
         ...(ctx.files.mcp ? ['--additional-mcp-config', `@${ctx.files.mcp}`] : []),
         '-p',

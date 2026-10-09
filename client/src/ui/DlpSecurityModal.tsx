@@ -1,12 +1,84 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Panel } from './Overlays';
 import { useStore, repoOnFloor } from '../store';
 import { api } from '../api';
 import { ALLOWED_BUSINESS_CONNECTORS, ENTERPRISE_DLP_RULES, auditDlpCompliance, type DlpPolicyViolation } from '../../../shared/dlp';
 
 export function DlpSecurityModal() {
-  const [activeTab, setActiveTab] = useState<'rules' | 'scanner' | 'entra'>('scanner');
+  const [activeTab, setActiveTab] = useState<'rules' | 'scanner' | 'entra'>('entra');
   const [isScanning, setIsScanning] = useState(false);
+  const [tenancy, setTenancy] = useState<{
+    tenantName: string;
+    tenantDomain: string;
+    tenantId: string;
+    user: string;
+    environments: Array<{ index?: number; name: string; url: string; user: string; active: boolean }>;
+    isReal: boolean;
+  }>({
+    tenantName: 'GraspAI',
+    tenantDomain: 'graspai.co.uk',
+    tenantId: '5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c',
+    user: 'leon@graspai.co.uk',
+    environments: [],
+    isReal: true,
+  });
+
+  const pushToast = useStore((s) => s.pushToast);
+  const [isSwitching, setIsSwitching] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginMode, setLoginMode] = useState<'interactive' | 'sp'>('interactive');
+  const [loginForm, setLoginForm] = useState({
+    environmentUrl: '',
+    tenantId: '',
+    applicationId: '',
+    clientSecret: '',
+    name: '',
+  });
+
+  const refreshTenancy = () => {
+    api.tenancy().then((t) => setTenancy(t)).catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshTenancy();
+  }, []);
+
+  const handleSelectEnv = async (index?: number) => {
+    if (!index) return;
+    setIsSwitching(true);
+    try {
+      await api.selectTenancyEnvironment(index);
+      pushToast('success', `Active deployment target switched to profile [${index}]!`);
+      refreshTenancy();
+    } catch (e: unknown) {
+      pushToast('error', `Failed to switch environment: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsSwitching(false);
+    }
+  };
+
+  const handleExecuteLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSwitching(true);
+    try {
+      const res = await api.loginTenancy({
+        interactive: loginMode === 'interactive',
+        environmentUrl: loginForm.environmentUrl || undefined,
+        tenantId: loginForm.tenantId || undefined,
+        applicationId: loginMode === 'sp' ? loginForm.applicationId : undefined,
+        clientSecret: loginMode === 'sp' ? loginForm.clientSecret : undefined,
+        name: loginForm.name || undefined,
+      });
+      pushToast('success', res.message || 'Authentication profile added successfully!');
+      setShowLoginModal(false);
+      refreshTenancy();
+    } catch (e: unknown) {
+      pushToast('error', `Login failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsSwitching(false);
+    }
+  };
+
   const [scanResult, setScanResult] = useState<{
     scannedFiles: number;
     violations: DlpPolicyViolation[];
@@ -95,10 +167,10 @@ export function DlpSecurityModal() {
         <div style={{ background: '#061325', padding: '12px 18px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #0369a1' }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc' }}>
-              Tenant Security Perimeter: <span style={{ color: '#38bdf8' }}>contoso.onmicrosoft.com</span>
+              Tenant Security Perimeter: <span style={{ color: '#38bdf8' }}>{tenancy.tenantName} ({tenancy.tenantDomain})</span>
             </div>
             <div style={{ fontSize: 11, color: '#94a3b8' }}>
-              Autonomous coding agents are isolated within Microsoft Entra ID boundaries. Cross-tenant exfiltration blocked.
+              Authenticated User: <span style={{ color: '#cbd5e1' }}>{tenancy.user}</span> · {tenancy.isReal ? 'Verified live Microsoft tenancy' : 'Simulated tenant'}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -381,6 +453,263 @@ export function DlpSecurityModal() {
                 </div>
               </div>
             </div>
+
+            {/* Live Connected Environments */}
+            <div style={{ marginTop: 6, background: '#090e1a', padding: 14, borderRadius: 8, border: '1px solid #1e293b' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>
+                  Live Power Platform Tenancy Profiles ({tenancy.environments.length} Active Endpoints)
+                </div>
+                <button
+                  onClick={() => setShowLoginModal(true)}
+                  style={{
+                    background: '#0284c7',
+                    color: '#fff',
+                    border: 'none',
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  <span>➕</span>
+                  <span>Connect Tenancy / Environment</span>
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {tenancy.environments.length > 0 ? (
+                  tenancy.environments.map((env, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        background: env.active ? '#082f49' : '#0f172a',
+                        padding: '10px 14px',
+                        borderRadius: 8,
+                        border: env.active ? '1px solid #0284c7' : '1px solid #1e293b',
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {env.index !== undefined && (
+                            <span style={{ fontSize: 10, background: '#1e293b', color: '#94a3b8', padding: '1px 6px', borderRadius: 4, fontFamily: 'monospace' }}>
+                              [{env.index}]
+                            </span>
+                          )}
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc' }}>{env.name}</span>
+                          {env.active && (
+                            <span style={{ fontSize: 10, background: '#064e3b', color: '#34d399', padding: '2px 8px', borderRadius: 4, fontWeight: 800 }}>
+                              ✓ ACTIVE TARGET
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{env.url}</span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span style={{ fontSize: 11, color: '#cbd5e1' }}>{env.user}</span>
+                        {!env.active && env.index !== undefined && (
+                          <button
+                            disabled={isSwitching}
+                            onClick={() => void handleSelectEnv(env.index)}
+                            style={{
+                              background: '#1e293b',
+                              color: '#38bdf8',
+                              border: '1px solid #0284c7',
+                              padding: '5px 12px',
+                              borderRadius: 6,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: isSwitching ? 'wait' : 'pointer',
+                            }}
+                          >
+                            Set Active
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ fontSize: 12, color: '#94a3b8' }}>No PAC CLI profiles connected.</div>
+                )}
+              </div>
+            </div>
+
+            {/* Tenancy Login Modal */}
+            {showLoginModal && (
+              <div
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  background: 'rgba(0, 0, 0, 0.75)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 9999,
+                }}
+              >
+                <div
+                  style={{
+                    background: '#0f172a',
+                    border: '1px solid #0284c7',
+                    borderRadius: 12,
+                    padding: 24,
+                    width: 500,
+                    maxWidth: '90vw',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 16,
+                    boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: '#f8fafc' }}>
+                      🔑 Connect Microsoft Power Platform Tenancy
+                    </div>
+                    <button
+                      onClick={() => setShowLoginModal(false)}
+                      style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Mode switcher */}
+                  <div style={{ display: 'flex', gap: 8, background: '#090e1a', padding: 4, borderRadius: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setLoginMode('interactive')}
+                      style={{
+                        flex: 1,
+                        background: loginMode === 'interactive' ? '#0284c7' : 'transparent',
+                        color: '#fff',
+                        border: 'none',
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Interactive (Browser / Device Code)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLoginMode('sp')}
+                      style={{
+                        flex: 1,
+                        background: loginMode === 'sp' ? '#0284c7' : 'transparent',
+                        color: '#fff',
+                        border: 'none',
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Entra Service Principal
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleExecuteLogin} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>
+                        Profile Name (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Production Orgs, Client Tenancy"
+                        value={loginForm.name}
+                        onChange={(e) => setLoginForm({ ...loginForm, name: e.target.value })}
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: 6, background: '#1e293b', border: '1px solid #334155', color: '#fff', fontSize: 12, boxSizing: 'border-box' }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>
+                        Environment URL or Name
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. https://contoso-dev.crm.dynamics.com"
+                        value={loginForm.environmentUrl}
+                        onChange={(e) => setLoginForm({ ...loginForm, environmentUrl: e.target.value })}
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: 6, background: '#1e293b', border: '1px solid #334155', color: '#fff', fontSize: 12, boxSizing: 'border-box' }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>
+                        Tenant ID / Domain
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. yourcompany.onmicrosoft.com or Tenant GUID"
+                        value={loginForm.tenantId}
+                        onChange={(e) => setLoginForm({ ...loginForm, tenantId: e.target.value })}
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: 6, background: '#1e293b', border: '1px solid #334155', color: '#fff', fontSize: 12, boxSizing: 'border-box' }}
+                      />
+                    </div>
+
+                    {loginMode === 'sp' && (
+                      <>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>
+                            Application (Client) ID
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Azure App Registration GUID"
+                            value={loginForm.applicationId}
+                            onChange={(e) => setLoginForm({ ...loginForm, applicationId: e.target.value })}
+                            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, background: '#1e293b', border: '1px solid #334155', color: '#fff', fontSize: 12, boxSizing: 'border-box' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>
+                            Client Secret
+                          </label>
+                          <input
+                            type="password"
+                            required
+                            placeholder="Client Secret Value"
+                            value={loginForm.clientSecret}
+                            onChange={(e) => setLoginForm({ ...loginForm, clientSecret: e.target.value })}
+                            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, background: '#1e293b', border: '1px solid #334155', color: '#fff', fontSize: 12, boxSizing: 'border-box' }}
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowLoginModal(false)}
+                        style={{ background: '#334155', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSwitching}
+                        style={{ background: '#0284c7', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: isSwitching ? 'wait' : 'pointer' }}
+                      >
+                        {isSwitching ? 'Authenticating…' : 'Authenticate & Set Active'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

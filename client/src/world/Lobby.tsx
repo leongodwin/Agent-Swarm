@@ -11,7 +11,7 @@ import { useCanvasTexture, useInteractable } from './interact';
 import { CEO_DESK, CEO_ROOM, HALF_D, HALF_W, MANAGER_DESK, MANAGER_ROOM, RECEPTION, WAITING, WAITING_ROTATION } from './layout';
 import { acousticFabric, brushedMetal, cyberGlow, glow, pbrWood, shade } from './materials';
 import { WallSign } from './OfficeFloor';
-import { Couch, CoffeeTable, GlassWall, LivingMossWall, Plant, Rug, WallClock } from './Props';
+import { Couch, CoffeeTable, GlassWall, Plant, Rug, WallClock } from './Props';
 import { Shell } from './Shell';
 import { Ball, Box, Cyl } from './Toon';
 import { Toys } from './toys';
@@ -280,34 +280,6 @@ function Directory() {
   );
 }
 
-function TrophyCabinet() {
-  const stats = useOfficeStats();
-  const tex = useCanvasTexture(
-    512,
-    160,
-    (ctx) => drawSign(ctx, 512, 160, [{ text: `🏆 ${stats.merged} PRs merged`, size: 50, color: '#2d3142' }], '#ffe8a3'),
-    [stats.merged],
-  );
-  const cups = Math.min(8, stats.merged);
-  return (
-    <group position={[12, 0, -HALF_D + 0.55]}>
-      <Box size={[4.4, 2.1, 1]} position={[0, 1.05, 0]} color="#b08968" outline />
-      <Box size={[4.1, 1.2, 0.8]} position={[0, 1.2, 0.12]} color="#fdf6e3" shadow={false} />
-      <Box size={[4.1, 0.04, 0.8]} position={[0, 1.2, 0.12]} color="#b08968" shadow={false} />
-      {Array.from({ length: cups }, (_, i) => (
-        <group key={i} position={[-1.7 + (i % 4) * 1.1, i < 4 ? 0.62 : 1.22, 0.2]}>
-          <Cyl r={0.08} rTop={0.16} h={0.22} position={[0, 0.2, 0]} color="#ffd43b" outline />
-          <Cyl r={0.03} h={0.1} position={[0, 0.05, 0]} color="#ffd43b" />
-          <Box size={[0.2, 0.04, 0.2]} position={[0, 0.01, 0]} color="#495057" />
-        </group>
-      ))}
-      <mesh position={[0, 2.45, 0.02]}>
-        <planeGeometry args={[2.4, 0.75]} />
-        <meshBasicMaterial map={tex} transparent toneMapped={false} />
-      </mesh>
-    </group>
-  );
-}
 
 /** The CEO's wall screen: what they're doing, what's next, and who's waiting to be hired. */
 function CeoBoard() {
@@ -473,11 +445,10 @@ export function Lobby() {
   const m = MANAGER_ROOM;
   const user = useStore((s) => s.user);
   const managerName = useStore((s) => s.settings.managerName);
-  const demo = useStore((s) => s.demo);
   const boss = managerName || user;
   return (
     <group>
-      <Shell accent={ACCENT} floorColor="#e2c7a3" westWindows={[1.5, 8]} eastWindows={[-2, 6]} seed={0} />
+      <Shell accent={ACCENT} floorColor="#e2c7a3" westWindows={[1.5, 8]} eastWindows={[-2]} seed={0} />
       <Rug position={[3, 0.004, 3]} size={[14, 9]} color="#ffd6a5" />
 
       {/* manager's office */}
@@ -496,18 +467,9 @@ export function Lobby() {
       />
       <ManagerComputer />
       {/* Leon's Visual CV on the manager's office wall */}
-      {demo && <ManagerVisualCv position={[-HALF_W + 0.05, 0, -8]} rotationY={Math.PI / 2} />}
+      <ManagerVisualCv position={[-HALF_W + 0.05, 0, -8]} rotationY={Math.PI / 2} />
       <Plant position={[m.maxX - 0.6, 0, m.minZ + 0.6]} scale={1.1} pot="#0078d4" />
       <Plant position={[m.minX + 0.6, 0, m.maxZ - 0.6]} scale={0.9} />
-      {/* Modern Acoustic Vertical Oak Slat Feature Wall behind Manager Desk */}
-      <group position={[MANAGER_DESK.x, 1.8, -HALF_D + 0.02]}>
-        {/* Dark acoustic felt backing */}
-        <Box size={[4.2, 3.2, 0.02]} position={[0, 0, 0]} color="#1e293b" shadow={false} />
-        {/* Vertical natural oak architectural slats */}
-        {Array.from({ length: 26 }, (_, i) => (
-          <Box key={i} size={[0.07, 3.2, 0.04]} position={[-1.9 + i * 0.15, 0, 0.02]} color="#d4a373" shadow={false} />
-        ))}
-      </group>
 
       <WallSign
         position={[MANAGER_DESK.x, 2.3, -HALF_D + 0.06]}
@@ -579,7 +541,7 @@ export function Lobby() {
       </group>
 
       {/* Interactive Copilot Studio Test Kiosk in Lobby */}
-      {demo && <CopilotKiosk position={[8.8, 0, 5.5]} rotationY={-Math.PI / 4} />}
+      <CopilotKiosk position={[8.8, 0, 5.5]} rotationY={-Math.PI / 4} />
 
       {/* Microsoft Entra ID & DLP Policy Security Kiosk */}
       <DlpSecurityKiosk position={[-6.8, 0, 8.5]} rotationY={Math.PI / 5} />
@@ -594,7 +556,7 @@ export function Lobby() {
         <Rug position={[0, 0.005, 0]} size={[5.4, 3.4]} color="#1e293b" />
 
         {/* Interactive Boardroom Table with Swarm Ideator */}
-        {demo && <WarRoomTable />}
+        <WarRoomTable />
 
         {/* Executive Conference Swarm Chairs */}
         {[-0.9, 0, 0.9].map((x) => (
@@ -643,8 +605,6 @@ export function Lobby() {
         />
       </group>
 
-      {/* Biophilic Living Moss Feature Wall behind Reception / Waiting Wall */}
-      <LivingMossWall position={[HALF_W - 0.04, 1.3, -4.5]} rotationY={-Math.PI / 2} width={5.2} height={2.8} />
 
       {/* Cyber-Fluent Glowing Architecture Floor Bus Pipe connecting War Room to Elevator */}
       <mesh position={[-1.5, 0.015, 6.2]} rotation={[0, 0, 0]} material={cyberGlow('#0078d4', 2.2)}>
@@ -671,7 +631,6 @@ export function Lobby() {
       <Elevator floorLabel="▲ G · Lobby" accent={ACCENT} />
       <Toys floor="lobby" />
       <Directory />
-      <TrophyCabinet />
       <WallClock position={[11.2, 2.85, -HALF_D + 0.05]} />
       <Couch position={[11.5, 0, 4]} rotationY={Math.PI} color="#5C2D91" />
       <CoffeeTable position={[11.5, 0, 6.2]} />

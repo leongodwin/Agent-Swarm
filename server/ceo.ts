@@ -198,12 +198,32 @@ export function ceoSystemPrompt(o: {
   ].join('\n');
 }
 
-export function ceoJobPrompt(job: CeoJob, floor: { floor: number; fullName: string; clone: string; mission: string; backlog: number } | null): string {
+export function ceoJobPrompt(
+  job: CeoJob,
+  floor: {
+    floor: number;
+    fullName: string;
+    clone: string;
+    mission: string;
+    backlog: number;
+    targetTenancy?: {
+      tenantName: string;
+      tenantDomain: string;
+      tenantId: string;
+      user: string;
+      environmentName: string;
+      environmentUrl: string;
+    };
+  } | null,
+): string {
   switch (job.kind) {
     case 'onboard':
       if (!floor) return 'A floor was added but has since been removed. Reply "Nothing to do."';
       return [
         `Floor ${floor.floor} (${floor.fullName}) just joined the company. Its read-only clone is at ${floor.clone}.`,
+        floor.targetTenancy
+          ? `Target Tenancy & Environment: ${floor.targetTenancy.tenantName} (${floor.targetTenancy.tenantDomain}) at ${floor.targetTenancy.environmentUrl}. Primary user: ${floor.targetTenancy.user}. Ensure all planned issues and job descriptions mandate this real tenancy boundary (no generic contoso.com).`
+          : '',
         'Study it: README, package manifest, source layout, tests, and how far along it is. Then:',
         "1. set_floor_profile with a one-line summary and a QA brief for this project. If npm run dev / start / preview wouldn't serve the app on PORT, also set preview_command (and preview_env) so the floor's preview monitor can run it.",
         '2. update_job for the people already on the floor so their titles, specialties and job descriptions fit this project (every floor starts with a generalist QA tester).',
@@ -213,20 +233,27 @@ export function ceoJobPrompt(job: CeoJob, floor: { floor: number; fullName: stri
           : floor.backlog === 0
             ? '4. There is no brief and the backlog is empty. Do not invent work; suggest in your final message what the manager might want next.'
             : `4. There are ${floor.backlog} open issues. Label nothing retroactively; just make sure the team can cover them.`,
-      ].join('\n');
+      ]
+        .filter(Boolean)
+        .join('\n');
     case 'plan':
       if (!floor) return 'A floor you were asked to plan has been removed. Reply "Nothing to do."';
       return [
         `The manager has a brief for floor ${floor.floor} (${floor.fullName}, clone at ${floor.clone}):`,
+        floor.targetTenancy
+          ? `Target Tenancy: ${floor.targetTenancy.tenantName} (${floor.targetTenancy.tenantDomain}) at ${floor.targetTenancy.environmentUrl} (Owner: ${floor.targetTenancy.user}).`
+          : '',
         `"""${floor.mission}"""`,
         '',
         'Plan the next milestone toward it:',
         `- Read the current code and the ${floor.backlog} open issues first, so you build on what exists and do not duplicate anything.`,
         '- If the repository is empty or nearly empty, the first issue sets up a small project skeleton, and the others depend on it. Everything after that should be able to run side by side.',
-        '- File the issues, each routed to a specialty.',
+        '- File the issues, each routed to a specialty. Enforce the target tenancy domain across all issues.',
         '- Make sure the floor has the specialists those issues need; propose hires if not.',
         '- Update the floor profile and QA brief if the brief changes what the project is.',
-      ].join('\n');
+      ]
+        .filter(Boolean)
+        .join('\n');
     case 'review':
       return [
         'Periodic review of the company. For every floor, look at:',

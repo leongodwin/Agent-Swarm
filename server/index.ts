@@ -17,6 +17,7 @@ import { scanDirectoryDlp } from './dlpScanner.ts';
 import { INITIAL_FLOW_RUNS } from '../shared/flowTelemetry.ts';
 import { buildTeamsCard, formatAdaptiveCardJson, type TeamsAdaptiveCard } from '../shared/teams.ts';
 import { almManager } from './almGate.ts';
+import { getTenancyInfo, selectEnvironment, loginTenancy } from './tenancy.ts';
 
 const recentTeamsMessages: TeamsAdaptiveCard[] = [
   buildTeamsCard({
@@ -201,6 +202,24 @@ almManager.setNotifier((cardInput) => {
 app.get('/api/alm/pipeline', route(() => almManager.getPipeline()));
 app.post('/api/alm/approve', route((req) => almManager.approveRelease(str(req.body?.approver) || undefined)));
 app.post('/api/alm/rollback', route(() => almManager.rollbackRelease()));
+
+// Live Microsoft Entra ID & Power Platform Tenancy Status & Authentication
+app.get('/api/tenancy', route(() => getTenancyInfo()));
+app.post('/api/tenancy/select', route((req) => {
+  const index = Number(req.body?.index);
+  if (isNaN(index) || index <= 0) throw new HttpError(400, 'Valid environment profile index is required');
+  return selectEnvironment(index);
+}));
+app.post('/api/tenancy/login', route(async (req) => {
+  return await loginTenancy({
+    environmentUrl: typeof req.body?.environmentUrl === 'string' ? req.body.environmentUrl.trim() : undefined,
+    tenantId: typeof req.body?.tenantId === 'string' ? req.body.tenantId.trim() : undefined,
+    applicationId: typeof req.body?.applicationId === 'string' ? req.body.applicationId.trim() : undefined,
+    clientSecret: typeof req.body?.clientSecret === 'string' ? req.body.clientSecret.trim() : undefined,
+    name: typeof req.body?.name === 'string' ? req.body.name.trim() : undefined,
+    interactive: Boolean(req.body?.interactive),
+  });
+}));
 
 // The floor's app, for the preview monitor
 app.post(

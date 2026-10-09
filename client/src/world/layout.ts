@@ -134,7 +134,6 @@ export function lobbyColliders(): Rect[] {
   out.push(rect(RECEPTION.x, RECEPTION.z, RECEPTION.w, RECEPTION.d, SOLID_H.reception));
   out.push(rect(11.5, 4, 3.2, 1, SOLID_H.couch)); // sofa
   out.push(rect(11.5, 6.2, 1.6, 0.9, SOLID_H.coffeeTable)); // table
-  out.push(rect(12, -HALF_D + 0.55, 4.4, 1.1, SOLID_H.cabinet)); // trophy cabinet
   return out;
 }
 

@@ -47,7 +47,6 @@ export function WallSign({
 
 export function OfficeFloor({ repo }: { repo: RepoView }) {
   const allAgents = useStore((s) => s.agents);
-  const demo = useStore((s) => s.demo);
   const agents = useMemo(() => agentsOnRepo(allAgents, repo.id), [allAgents, repo.id]);
   const devBySlot = useMemo(() => new Map(agents.filter((a) => a.role === 'dev').map((a) => [a.desk, a])), [agents]);
   const qaBySlot = useMemo(() => new Map(agents.filter((a) => a.role === 'qa').map((a) => [a.desk, a])), [agents]);
@@ -102,13 +101,13 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
       <ReleaseApprovalStation position={[HALF_W - 2.8, 0, 3.8]} rotationY={-Math.PI / 3} />
 
       {/* Live Power Automate Flow Run History Telemetry Board (West Wall) */}
-      {demo && <FlowRunHistoryBoard position={[-HALF_W + 0.05, 0.45, 0]} rotationY={Math.PI / 2} width={5.2} height={2.6} repoId={repo.id} />}
+      <FlowRunHistoryBoard position={[-HALF_W + 0.05, 0.45, 0]} rotationY={Math.PI / 2} width={5.2} height={2.6} repoId={repo.id} />
 
       {/* Dataverse Schema & ERD Screen (North Wall, East of Kanban) */}
-      {demo && <DataverseSchemaMonitor position={[9.8, 2.25, -HALF_D + 0.04]} rotationY={0} width={3.4} height={1.8} />}
+      <DataverseSchemaMonitor position={[9.2, 0.75, -HALF_D + 0.04]} rotationY={0} width={3.4} height={1.8} />
 
       {/* Interactive Copilot Studio Test Kiosk on the office floor */}
-      {demo && <CopilotKiosk position={[-9.2, 0, 7.8]} rotationY={Math.PI / 3} />}
+      <CopilotKiosk position={[-9.2, 0, 7.8]} rotationY={Math.PI / 3} />
 
       <AppMonitor repo={repo} agents={agents} />
       <Elevator floorLabel={`▲ ${repo.floor} · ${name}`} accent={repo.color} />
@@ -164,13 +163,13 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
       <WaterCooler position={[HALF_W - 0.5, 0, -9.5]} />
       <WallClock position={[-10, 2.75, -HALF_D + 0.05]} />
       {/* Fluent UI Microsoft AI & Power Platform Wall Display */}
-      <group position={[10, 2.2, -HALF_D + 0.03]}>
-        <FluentIconMesh name="copilot" size={0.45} position={[-0.8, 0.45, 0]} />
-        <FluentIconMesh name="powerplatform" size={0.45} position={[0, 0.45, 0]} />
-        <FluentIconMesh name="powerautomate" size={0.45} position={[0.8, 0.45, 0]} />
-        <FluentIconMesh name="word" size={0.38} position={[-0.8, -0.25, 0]} />
-        <FluentIconMesh name="excel" size={0.38} position={[0, -0.25, 0]} />
-        <FluentIconMesh name="teams" size={0.38} position={[0.8, -0.25, 0]} />
+      <group position={[12.8, 1.65, -HALF_D + 0.03]}>
+        <FluentIconMesh name="copilot" size={0.45} position={[-0.45, 0.45, 0]} />
+        <FluentIconMesh name="powerplatform" size={0.45} position={[0.45, 0.45, 0]} />
+        <FluentIconMesh name="powerautomate" size={0.45} position={[-0.45, -0.05, 0]} />
+        <FluentIconMesh name="teams" size={0.45} position={[0.45, -0.05, 0]} />
+        <FluentIconMesh name="word" size={0.4} position={[-0.45, -0.55, 0]} />
+        <FluentIconMesh name="excel" size={0.4} position={[0.45, -0.55, 0]} />
       </group>
     </group>
   );

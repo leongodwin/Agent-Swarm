@@ -74,6 +74,14 @@ export interface RepoView {
   syncError?: string;
   previewConfig: PreviewConfig;
   preview: PreviewView;
+  targetTenancy?: {
+    tenantName: string;
+    tenantDomain: string;
+    tenantId: string;
+    user: string;
+    environmentName: string;
+    environmentUrl: string;
+  };
 }
 
 /**
