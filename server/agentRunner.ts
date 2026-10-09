@@ -54,6 +54,8 @@ export interface SessionResult {
   structured?: unknown;
   /** The manager interrupted the turn in the agent's terminal (Esc). */
   interrupted?: boolean;
+  /** OpenCode hit its free usage limit and needs fallback to Copilot. */
+  opencodeLimit?: boolean;
 }
 
 export interface SessionCallbacks {

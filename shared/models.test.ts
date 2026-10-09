@@ -21,6 +21,12 @@ describe('effectiveModel', () => {
     expect(effectiveModel('claude-opus-5-5', 'codex', claudeOffice, 'claude-opus-5-5')).toBe('');
     expect(effectiveModel('gpt-5.5', 'claude', claudeOffice, 'claude-opus-5-5')).toBe('claude-sonnet-5');
     expect(effectiveModel('', 'codex', { defaultCli: 'codex', defaultModel: 'claude-opus-5-5' }, 'claude-opus-5-5')).toBe('');
+    expect(effectiveModel('Space Bunny Free', 'copilot', claudeOffice, 'claude-opus-5-5')).toBe('claude-sonnet-5.5');
+    expect(effectiveModel('', 'copilot', claudeOffice, 'claude-opus-5-5')).toBe('claude-sonnet-5.5');
+    expect(effectiveModel('claude-sonnet-5.5', 'copilot', claudeOffice, 'claude-opus-5-5')).toBe('claude-sonnet-5.5');
+    expect(effectiveModel('GPT-6.1 Sol (low)', 'codex', codexOffice, 'claude-opus-5-5')).toBe('gpt-6.1-sol');
+    expect(effectiveModel('GPT-6.1 Sol', 'codex', codexOffice, 'claude-opus-5-5')).toBe('gpt-6.1-sol');
+    expect(effectiveModel('', 'codex', { defaultCli: 'codex', defaultModel: 'gpt-6.1-sol' }, 'claude-opus-5-5')).toBe('gpt-6.1-sol');
   });
 
   it("knows Claude Code's names and aliases", () => {

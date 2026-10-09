@@ -401,7 +401,7 @@ export default async function CubefarmPlugin({ client } = {}) {
       if (event?.type === 'session.idle' && (!root || sessionID === root)) {
         post({ hook_event_name: 'TurnComplete', session_id: sessionID ?? null, last_assistant_message: sessionID ? await lastReply(sessionID) : '' });
       }
-      if (event?.type === 'session.error') post({ hook_event_name: 'TurnError', session_id: sessionID ?? null, error: String(props.error?.data?.message ?? props.error?.name ?? 'error') });
+      if (event?.type === 'session.error') post({ hook_event_name: 'TurnError', session_id: sessionID ?? null, error: String(props.error?.data?.message ?? props.error?.message ?? props.error?.name ?? 'error') });
     },
   };
 }

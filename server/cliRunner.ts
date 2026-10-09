@@ -580,10 +580,20 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
         turnEnded(text);
         return {};
       }
-      case 'TurnError':
-        turnError = `${label}: ${clip(String(b.error ?? 'error'), 200)}`;
+      case 'TurnError': {
+        const rawErr = String(b.error ?? 'error');
+        turnError = `${label}: ${clip(rawErr, 200)}`;
         log([{ kind: 'error', text: `✗ ${turnError}` }]);
+        if (cli === 'opencode' && /Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go|rate_limit|payment/i.test(rawErr)) {
+          finish({
+            ok: false,
+            text: '',
+            errors: [`OpenCode free limit reached: ${clip(rawErr, 160)}`],
+            opencodeLimit: true,
+          });
+        }
         return {};
+      }
     }
     return {};
   };
@@ -610,8 +620,15 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       finish({ ok: false, text: '', errors: [`${label} couldn't find the conversation it was resuming, so the next session starts a new one.`] });
       return;
     }
-    const ok = exitCode === 0 && (lastText !== '' || (cli !== 'claude' && Date.now() - started > 20_000));
-    finish({ ok, text: lastText, errors: ok ? [] : [`${label} exited${exitCode ? ` with code ${exitCode}` : ''} before finishing.`] });
+    const screen = term.screen();
+    const isOpenCodeLimit = cli === 'opencode' && /Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen);
+    const ok = exitCode === 0 && (lastText !== '' || (cli !== 'claude' && Date.now() - started > 20_000)) && !isOpenCodeLimit;
+    finish({
+      ok,
+      text: lastText,
+      errors: ok ? [] : [isOpenCodeLimit ? 'OpenCode free limit reached' : `${label} exited${exitCode ? ` with code ${exitCode}` : ''} before finishing.`],
+      opencodeLimit: isOpenCodeLimit,
+    });
   };
 
   const handle: SessionHandle = {
@@ -742,10 +759,25 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     shotTimer = setInterval(collectShots, 2000);
 
     // Starting up: answer the folder-trust question for the office's own worktrees (the answer that trusts it), and
-    // say so when a CLI is waiting on something only the manager can do (signing in).
+    // say so when a CLI is waiting on something only the manager can do (signing in),
+    // and continuously monitor for OpenCode free tier limit modals so the office can fall back to GitHub Copilot.
     screenTimer = setInterval(() => {
-      if (done || Date.now() - started > BOOT_MS * 2) return clearInterval(screenTimer);
+      if (done || (cli !== 'opencode' && Date.now() - started > BOOT_MS * 2)) return clearInterval(screenTimer);
       const screen = term.screen();
+      if (cli === 'opencode' && /Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen)) {
+        clearInterval(screenTimer);
+        log([{ kind: 'error', text: `⚠ OpenCode free tier limit reached: ${label}. Triggering fallback to GitHub Copilot.` }]);
+        quietly(() => p.write('\x1b'));
+        setTimeout(() => {
+          finish({
+            ok: false,
+            text: '',
+            errors: ['OpenCode free limit reached: Subscribe to OpenCode Go for reliable access or fallback to GitHub Copilot.'],
+            opencodeLimit: true,
+          });
+        }, 300);
+        return;
+      }
       const review = hookReviewKey(screen);
       const key = trustKeys < 12 && Date.now() - trustedAt > 3000 ? (trustKey(screen) ?? review) : null;
       if (key === 'down') {

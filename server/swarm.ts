@@ -1361,7 +1361,11 @@ export class Swarm {
     patch: { name?: string; model?: string; effort?: string; cli?: string; look?: string; title?: string; specialty?: string; brief?: string; color?: string; hair?: string },
   ) {
     const a = this.agent(id);
-    if (patch.cli !== undefined && a.role !== 'ceo') a.cli = isCli(patch.cli) ? patch.cli : '';
+    if (patch.cli !== undefined) a.cli = isCli(patch.cli) ? patch.cli : '';
+    if (a.role === 'ceo' && a.status === 'error') {
+      a.status = 'idle';
+      a.lastError = null;
+    }
     if (patch.name?.trim() && patch.name.trim() !== a.name) {
       a.name = patch.name.trim().slice(0, 24);
       a.look = lookFor(a.name);
@@ -1495,7 +1499,7 @@ export class Swarm {
    */
   private sessionRuntime(a: PersistedAgent, resume?: string): { terminal?: AgentTerminal; cli?: AgentCli; label?: string; resumeSessionId?: string } {
     const inTerminal = a.role === 'ceo' || (this.state.settings.runtime === 'terminal' && this.backend.terminals);
-    let cli: AgentCli = a.role === 'ceo' ? 'copilot' : a.cli || this.state.settings.defaultCli;
+    let cli: AgentCli = a.cli || this.state.settings.defaultCli;
     if (resume && a.sessionCli && a.sessionCli !== cli) {
       if (a.role === 'ceo') resume = undefined;
       else if (inTerminal) cli = a.sessionCli;
@@ -1744,6 +1748,17 @@ export class Swarm {
     void this.backend.releaseDesk(repo.fullName, this.agentSlug(a), this.port(a)).catch(() => undefined);
     if (result.interrupted) this.interrupted(a);
 
+    if (!result.ok && this.isOpenCodeLimit(result, a)) {
+      const recovered = await this.fallbackFromOpenCodeToCopilot(a, repo);
+      if (recovered) {
+        this.emitAgent(a);
+        this.save();
+        void this.syncRepo(repo.id);
+        setTimeout(() => this.schedule(), 500);
+        return;
+      }
+    }
+
     if (a.task === 'qa') await this.onQaFinished(a, repo, result);
     else if (a.task === 'fix') this.onFixFinished(a, repo, result);
     else await this.onIssueFinished(a, repo, result);
@@ -1763,6 +1778,64 @@ export class Swarm {
     a.lastError = result.errors.join('; ') || 'Session failed';
     this.appendLog(a, [{ kind: 'error', text: `✗ ${a.lastError}` }]);
     this.toast('error', `${a.name} hit a problem on ${what}: ${a.lastError.slice(0, 120)}`);
+  }
+
+  private isOpenCodeLimit(result: SessionResult, a?: PersistedAgent): boolean {
+    if (result.opencodeLimit) return true;
+    const combined = [...(result.errors || []), result.text || ''].join(' ');
+    if (/Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(combined)) return true;
+    if (a) {
+      const rt = this.agentRt.get(a.id);
+      const screen = rt?.terminal?.screen() ?? '';
+      if (/Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen)) return true;
+    }
+    return false;
+  }
+
+  private async fallbackFromOpenCodeToCopilot(a: PersistedAgent, repo: PersistedRepo): Promise<boolean> {
+    const fallbackModel = 'claude-sonnet-5.5';
+    a.cli = 'copilot';
+    a.model = fallbackModel;
+    a.sessionId = null;
+    a.sessionCli = null;
+    a.lastError = null;
+
+    if (this.state.settings.defaultCli === 'opencode') {
+      this.state.settings.defaultCli = 'copilot';
+      this.state.settings.defaultModel = fallbackModel;
+    }
+
+    this.appendLog(a, [
+      { kind: 'system', text: `🔄 OpenCode free tier limit reached. Automatically falling back to GitHub Copilot (model: ${fallbackModel}).` },
+    ]);
+    this.postMessage(
+      'office',
+      `🔄 OpenCode free tier limit reached for ${a.name}. Automatically switching to GitHub Copilot (${fallbackModel}) to continue uninterrupted.`,
+    );
+    this.toast('info', `${a.name} hit OpenCode limit: switched to GitHub Copilot (${fallbackModel}).`);
+
+    if (a.task === 'issue' && a.issueNumber) {
+      const issue = this.repoRt.get(repo.id)?.issues.find((i) => i.number === a.issueNumber);
+      if (issue) {
+        await this.runTask(a, repo, issue);
+        return true;
+      }
+    } else if (a.task === 'fix' && a.prNumber) {
+      const rec = this.state.qa.find((q) => q.repoId === repo.id && q.prNumber === a.prNumber);
+      if (rec) {
+        await this.runFix(a, repo, rec);
+        return true;
+      }
+    } else if (a.task === 'qa' && a.prNumber) {
+      const rec = this.state.qa.find((q) => q.repoId === repo.id && q.prNumber === a.prNumber);
+      if (rec) {
+        await this.runQa(a, repo, rec);
+        return true;
+      }
+    }
+
+    a.status = 'idle';
+    return true;
   }
 
   private async onIssueFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult) {
@@ -2421,6 +2494,24 @@ export class Swarm {
     this.tickUsage();
     if (this.officeUpdateTick()) return; // draining for the office's own update
     if (this.limited()) return;
+
+    // Rescue any agents currently frozen on OpenCode's free limit dialog
+    for (const a of this.state.agents) {
+      if (a.status === 'working') {
+        const rt = this.agentRt.get(a.id);
+        const screen = rt?.terminal?.screen() ?? '';
+        if (/Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen)) {
+          const repo = this.state.repos.find((r) => r.id === a.repoId);
+          if (repo) {
+            if (rt?.session) {
+              try { rt.session.stop(); } catch {}
+            }
+            void this.fallbackFromOpenCodeToCopilot(a, repo);
+          }
+        }
+      }
+    }
+
     // Management first: the CEO's jobs are short and shape everyone else's work.
     this.maybeHeartbeat();
     this.startCeoWork();

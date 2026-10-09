@@ -258,10 +258,10 @@ export const useStore = create<State>((set, get) => ({
   // Until the server's snapshot arrives; setupDone stays true so the wizard doesn't flash while loading.
   settings: {
     sessionLimit: 0,
-    defaultModel: '',
-    defaultEffort: 'medium',
+    defaultModel: 'gpt-6.1-sol',
+    defaultEffort: 'low',
     runtime: 'terminal',
-    defaultCli: 'copilot',
+    defaultCli: 'codex',
     hiring: 'approve',
     teamCap: 6,
     ceoHeartbeatMin: 60,
