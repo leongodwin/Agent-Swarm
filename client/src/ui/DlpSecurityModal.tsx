@@ -94,6 +94,8 @@ export function DlpSecurityModal() {
     scannedPaths?: string[];
     repoName?: string;
     isDemoInjection?: boolean;
+    status?: 'clear' | 'blocked' | 'incomplete' | 'unavailable';
+    errors?: { path: string; reason: string }[];
   } | null>(null);
 
   const repos = useStore((s) => s.repos);
@@ -112,6 +114,8 @@ export function DlpSecurityModal() {
         scannedPaths: report.scannedPaths,
         repoName: report.repoFullName,
         isDemoInjection: false,
+        status: report.status,
+        errors: report.errors,
       });
     } catch {
       setScanResult({
@@ -122,6 +126,7 @@ export function DlpSecurityModal() {
         scannedPaths: [],
         repoName: currentRepo?.fullName ?? 'Offline',
         isDemoInjection: false,
+        status: 'unavailable',
       });
     } finally {
       setIsScanning(false);
@@ -307,7 +312,7 @@ export function DlpSecurityModal() {
                   {scanResult && (
                     scanResult.isRealScan ? (
                       <span style={{ fontSize: 10, background: '#064e3b', color: '#34d399', border: '1px solid #059669', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>
-                        ● LIVE REPO SCAN
+                        {scanResult.status === 'incomplete' ? '⚠ PARTIAL REPO SCAN' : '● LIVE REPO SCAN'}
                       </span>
                     ) : scanResult.isDemoInjection ? (
                       <span style={{ fontSize: 10, background: '#451a03', color: '#fbbf24', border: '1px solid #b45309', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>
@@ -333,24 +338,31 @@ export function DlpSecurityModal() {
               ) : scanResult ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
                   <div style={{
-                    background: scanResult.violations.length === 0 ? '#052e16' : '#450a0a',
-                    border: `1px solid ${scanResult.violations.length === 0 ? '#166534' : '#991b1b'}`,
+                    background: scanResult.status === 'clear' ? '#052e16' : '#450a0a',
+                    border: `1px solid ${scanResult.status === 'clear' ? '#166534' : '#991b1b'}`,
                     padding: 12,
                     borderRadius: 8,
                     display: 'flex',
                     alignItems: 'center',
                     gap: 10,
                   }}>
-                    <span style={{ fontSize: 20 }}>{scanResult.violations.length === 0 ? '✓' : '⚠️'}</span>
+                    <span style={{ fontSize: 20 }}>{scanResult.status === 'clear' ? '✓' : '⚠️'}</span>
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: scanResult.violations.length === 0 ? '#4ade80' : '#f87171' }}>
-                        {scanResult.violations.length === 0 ? (scanResult.isRealScan ? 'No matches in local heuristic scan; tenant policy not evaluated' : 'Scan unavailable or simulated; compliance unknown') : `${scanResult.violations.length} Policy Violations Detected`}
+                      <div style={{ fontSize: 14, fontWeight: 700, color: scanResult.status === 'clear' ? '#4ade80' : '#f87171' }}>
+                        {scanResult.status === 'incomplete' ? 'Scan incomplete; compliance unknown' : scanResult.violations.length === 0 ? (scanResult.status === 'clear' ? 'No matches in local heuristic scan; tenant policy not evaluated' : 'Scan unavailable or simulated; compliance unknown') : `${scanResult.violations.length} Policy Violations Detected`}
                       </div>
                       <div style={{ fontSize: 11, color: '#cbd5e1' }}>
                         Scanned {scanResult.scannedFiles} solution artifact file{scanResult.scannedFiles === 1 ? '' : 's'} {scanResult.repoName ? `in ${scanResult.repoName}` : ''}.
                       </div>
                     </div>
                   </div>
+
+                  {!!scanResult.errors?.length && (
+                    <div style={{ fontSize: 12, color: '#fbbf24' }}>
+                      {scanResult.errors.slice(0, 10).map((error, index) => <div key={index}>{error.path}: {error.reason}</div>)}
+                      {scanResult.errors.length > 10 && <div>{scanResult.errors.length - 10} additional scan errors</div>}
+                    </div>
+                  )}
 
                   {scanResult.scannedPaths && scanResult.scannedPaths.length > 0 && (
                     <div style={{ fontSize: 11, color: '#64748b', display: 'flex', gap: 6, flexWrap: 'wrap' }}>

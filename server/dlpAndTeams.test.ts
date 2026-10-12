@@ -120,7 +120,7 @@ index 3333333..4444444 100644
         JSON.stringify({ host: { connectionName: 'shared_trello' } }),
       );
 
-      const report = scanDirectoryDlp(tmpDir, 'test/org-solution');
+      const report = await scanDirectoryDlp(tmpDir, 'test/org-solution');
       expect(report.scannedFiles).toBe(2);
       expect(report.isRealScan).toBe(true);
       expect(report.violations.length).toBe(1);

@@ -294,11 +294,18 @@ export function prepareDesk(fullName: string, base: DeskBase, agentSlug: string,
     return withGitLease(main, async () => {
     await git(['check-ref-format', '--branch', branch], { cwd: main });
     if ((await fs.lstat(wt).catch(() => null))?.isSymbolicLink()) throw new Error(`Desk ${wt} is a symbolic link; refusing to change its target`);
+    // Git reports physical paths, while Node's temp/home paths may use aliases
+    // (macOS /var versus /private/var, Windows short names or junctions).
+    const canonicalDesk = await fs.realpath(wt).catch(() => path.resolve(wt));
+    const pathKey = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
     const listing = await git(['worktree', 'list', '--porcelain'], { cwd: main });
     for (const entry of listing.split(/\r?\n\r?\n/)) {
       const ownedBranch = entry.match(/^branch refs\/heads\/(.+)$/m)?.[1]?.trim();
       const location = entry.match(/^worktree (.+)$/m)?.[1]?.trim();
-      if (ownedBranch === branch && location && path.resolve(location).toLowerCase() !== path.resolve(wt).toLowerCase()) throw new Error(`Branch ${branch} is already owned by worktree ${location}; choose a separate desk branch`);
+      if (ownedBranch === branch && location) {
+        const canonicalLocation = await fs.realpath(location).catch(() => path.resolve(location));
+        if (pathKey(canonicalLocation) !== pathKey(canonicalDesk)) throw new Error(`Branch ${branch} is already owned by worktree ${location}; choose a separate desk branch`);
+      }
     }
     const branchExists = await git(['rev-parse', '--verify', `refs/heads/${branch}`], { cwd: main }).then(() => true, () => false);
     if (branchExists && Number(await git(['rev-list', '--count', branch, '--not', '--remotes'], { cwd: main }))) throw new Error(`Branch ${branch} has unpublished commits; preserve them before assigning work`);

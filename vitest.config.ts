@@ -12,5 +12,14 @@ export default defineConfig({
     environment: 'node',
     // Anything a test imports must never see the live office's state (~/.cubefarm) or its ports.
     env: { SWARM_HOME: path.join(os.tmpdir(), `cubefarm-vitest-${process.pid}`), SWARM_PORT: '0' },
+    coverage: {
+      provider: 'v8',
+      include: ['server/**/*.ts'],
+      exclude: ['server/**/*.test.ts', 'server/**/*.d.ts'],
+      reporter: ['text', 'json-summary', 'lcov', 'html'],
+      reportsDirectory: 'coverage/backend',
+      // Explicitly measure the entire backend, including unimported modules.
+      thresholds: { branches: 90.01 },
+    },
   },
 });

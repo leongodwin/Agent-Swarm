@@ -37,10 +37,33 @@ jobs:
 
       - run: npm ci
       - run: npm run typecheck
+      # The backend verification tests launch Chromium, not just the E2E job.
+      - run: npx playwright install --with-deps chromium
       - run: npm test
       - run: npm run build
       # The npm package as users get it: packed, installed into an empty folder and booted in demo mode.
       - run: node scripts/smoke-package.mjs
+
+  coverage:
+    name: backend branch coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:coverage
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage/backend/
+          retention-days: 14
+          if-no-files-found: warn
 
   # The built app in a real browser: a demo office boots, renders, and its panels open (e2e/, Playwright).
   e2e:

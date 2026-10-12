@@ -5,19 +5,10 @@ import type { ParsedSolution } from '../../shared/solutionTypes';
 import type { FlowRun } from '../../shared/flowTelemetry';
 import type { TeamsAdaptiveCard } from '../../shared/teams';
 import type { AlmPipeline } from '../../shared/alm';
-import type { DlpPolicyViolation } from '../../shared/dlp';
+import type { DlpScanReport } from '../../shared/dlp';
+export type { DlpScanReport } from '../../shared/dlp';
 import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../../shared/tenancy';
 import { ensureSession } from './session';
-
-export interface DlpScanReport {
-  repoFullName: string;
-  checkoutPath: string | null;
-  scannedFiles: number;
-  scannedPaths: string[];
-  violations: DlpPolicyViolation[];
-  timestamp: string;
-  isRealScan: boolean;
-}
 
 async function call<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
   await ensureSession();

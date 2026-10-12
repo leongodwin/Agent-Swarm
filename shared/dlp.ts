@@ -23,6 +23,19 @@ export interface DlpPolicyViolation {
   remediation: string;
 }
 
+export interface DlpScanReport {
+  repoFullName: string;
+  checkoutPath: string | null;
+  scannedFiles: number;
+  scannedPaths: string[];
+  violations: DlpPolicyViolation[];
+  timestamp: string;
+  isRealScan: boolean;
+  status: 'clear' | 'blocked' | 'incomplete' | 'unavailable';
+  errors: { path: string; reason: string }[];
+  scope: 'local-source-heuristic';
+}
+
 export const ENTERPRISE_DLP_RULES: DlpPolicyRule[] = [
   // Blocked Exfiltration & Consumer Storage
   {

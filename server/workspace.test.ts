@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 // "upstream" clone that pushes new work. Everything lives in one temp folder whose path has spaces in it.
 
 const npmRuns = vi.hoisted(() => [] as { cmd: string; cwd?: string }[]);
+const listingAlias = vi.hoisted(() => ({ from: '', to: '' }));
 
 // npm install is stubbed: only what it was asked to do is recorded. git still runs for real.
 vi.mock('./exec.ts', async (importOriginal) => {
@@ -18,7 +19,8 @@ vi.mock('./exec.ts', async (importOriginal) => {
         npmRuns.push({ cmd, cwd: opts?.cwd });
         return Promise.resolve('');
       }
-      return actual.run(cmd, args, opts);
+      return actual.run(cmd, args, opts).then((result) => listingAlias.from && cmd === 'git' && args.join(' ') === 'worktree list --porcelain'
+        ? result.replace(listingAlias.from, listingAlias.to) : result);
     },
   };
 });
@@ -221,6 +223,14 @@ describe('syncMain', { timeout: 60_000 }, () => {
 });
 
 describe('PR fix worktrees', { timeout: 60_000 }, () => {
+  it('recognizes the same existing desk through a physical path alias without displacing another worktree', async () => {
+    const r=await makeRepos();const desk=await prepareDesk(r.fullName,{defaultBranch:'main'},'ada','swarm/ada');
+    const alias=path.join(ROOT,'desk-parent-alias');await fs.symlink(path.dirname(desk),alias,'junction');
+    listingAlias.from=(await fs.realpath(desk)).replace(/\\/g,'/');
+    listingAlias.to=path.join(alias,path.basename(desk)).replace(/\\/g,'/');
+    try { expect(await prepareDesk(r.fullName,{defaultBranch:'main'},'ada','swarm/ada')).toBe(desk); }
+    finally { listingAlias.from='';listingAlias.to=''; }
+  });
   it('preserves unfinished work and unpublished commits during reuse and removal', async () => {
     const r = await makeRepos();
     const desk = await prepareDesk(r.fullName, { defaultBranch: 'main' }, 'ada', 'swarm/ada');
