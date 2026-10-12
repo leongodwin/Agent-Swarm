@@ -61,13 +61,29 @@ export async function verifyCloudFlowContext(adapter: FlowAdapter, identity: Pla
 
 /** A correct reference row is insufficient if the deployed flow uses a different binding. */
 export async function verifyCloudFlowBindings(adapter: FlowAdapter, environmentId: string, flowId: string, components: TargetComponent[], actions: TargetAction[]) {
-  const references = z.record(z.string(), z.object({ connectionName: z.string().min(1), connectionReferenceLogicalName: z.string().min(1), id: z.string().min(1) })).parse(await adapter.call('get_flow', { env: environmentId, flow: flowId, path: 'properties.connectionReferences' }));
+  return checkFlowBindings(adapter, environmentId, flowId, components, actions);
+}
+/** Imported stopped flows resolve embedded connection names during activation.
+ * Require a fresh check of the approved Dataverse reference before activating;
+ * the caller must then verify resolved runtime bindings with the strict check. */
+export async function verifyCloudFlowActivationBindings(adapter: FlowAdapter, environmentId: string, flowId: string, components: TargetComponent[], actions: TargetAction[], verifyReference: (action: Extract<TargetAction, { type: 'connection-reference-check' }>) => Promise<void>) {
+  return checkFlowBindings(adapter, environmentId, flowId, components, actions, verifyReference);
+}
+async function checkFlowBindings(adapter: FlowAdapter, environmentId: string, flowId: string, components: TargetComponent[], actions: TargetAction[], verifyReference?: (action: Extract<TargetAction, { type: 'connection-reference-check' }>) => Promise<void>) {
+  const references = z.record(z.string(), z.object({ connectionName: z.string().min(1).optional(), source: z.string().optional(), connectionReferenceLogicalName: z.string().min(1), id: z.string().min(1) })).parse(await adapter.call('get_flow', { env: environmentId, flow: flowId, path: 'properties.connectionReferences' }));
   const observations = [];
   for (const [alias, reference] of Object.entries(references)) {
     const component = components.find((component) => component.kind === 'connection-reference' && component.logicalName === reference.connectionReferenceLogicalName);
     const approved = actions.filter((action): action is Extract<TargetAction, { type: 'connection-reference-check' }> => action.type === 'connection-reference-check' && action.component === component?.key);
-    if (!component || !approved.length || approved.some((action) => action.connectionId !== reference.connectionName || action.connectorId !== reference.id)) throw new Error(`Cloud flow connection ${alias} lacks a matching approved target binding`);
-    observations.push({ alias, component: component.key, connectionId: reference.connectionName, connectorId: reference.id });
+    if (!component || !approved.length || approved.some((action) => action.connectorId !== reference.id || action.connectionId !== approved[0].connectionId)) throw new Error(`Cloud flow connection ${alias} lacks a matching approved target binding`);
+    let connectionName = reference.connectionName;
+    if (!connectionName) {
+      if (!verifyReference || reference.source !== 'Embedded') throw new Error(`Cloud flow connection ${alias} is unresolved`);
+      await verifyReference(approved[0]);
+      connectionName = approved[0].connectionId;
+    }
+    if (approved.some((action) => action.connectionId !== connectionName)) throw new Error(`Cloud flow connection ${alias} lacks a matching approved target binding`);
+    observations.push({ alias, component: component.key, connectionId: connectionName, connectorId: reference.id });
   }
   return observations;
 }

@@ -16,7 +16,7 @@ import { discoverSkills, selectSkills } from './skillRegistry.ts';
 import { acquireResourceLease } from './resourceLease.ts';
 import { targetBindingSchema, targetComponentSchema, targetActionSchema, verifyTarget, mapTargetComponents, verifyMappedCanvasUrls, reconcileWorkflowAction, verifyConnectionReference, type Request } from './targetOperations.ts';
 import { platformIdentitySchema, verifyPlatformAuthentication } from './platformAuth.ts';
-import { connectFlowAdapter, verifyCloudFlowContext, verifyCloudFlowBindings, verifyCloudFlowRun, type FlowAdapter } from './flowAdapter.ts';
+import { connectFlowAdapter, verifyCloudFlowContext, verifyCloudFlowBindings, verifyCloudFlowActivationBindings, verifyCloudFlowRun, type FlowAdapter } from './flowAdapter.ts';
 import { reconcileCloudFlow, reconcileCopilot } from './platformLifecycle.ts';
 import { reconcileAdditionalAction, verifyMigrationCompatibility } from './deploymentAdapters.ts';
 import { canvasResource } from './canvasOwnership.ts';
@@ -454,8 +454,12 @@ export class DeliveryService {
               const save = () => this.save(), owned = () => targetLease!.assertOwned();
               if (action.type === 'workflow-state') await reconcileWorkflowAction(action, component, request, run, save, owned);
               else if (action.type === 'cloud-flow-state') {
-                if (action.state === 'active') await verifyCloudFlowBindings(flow!, manifest.platformIdentity!.environmentId, component.id, manifest.targetComponents, manifest.postDeployActions);
+                if (action.state === 'active') await verifyCloudFlowActivationBindings(flow!, manifest.platformIdentity!.environmentId, component.id, manifest.targetComponents, manifest.postDeployActions, async (check) => {
+                  await verifyTarget(request, manifest.targetBinding!);
+                  await verifyConnectionReference(check, mapping.find((item) => item.key === check.component)!, request, run, save, owned);
+                });
                 await reconcileCloudFlow(action, component, flow!, manifest.platformIdentity!, manifest.solutionUniqueName, run, save, owned);
+                if (action.state === 'active') await verifyCloudFlowBindings(flow!, manifest.platformIdentity!.environmentId, component.id, manifest.targetComponents, manifest.postDeployActions);
               }
               else if (action.type === 'connection-reference-check') await verifyConnectionReference(action, component, request, run, save, owned);
               else if (action.type === 'connection-reference-bind' || action.type === 'record-share' || action.type === 'schema-check') await reconcileAdditionalAction(action, component, request, run, save, owned);

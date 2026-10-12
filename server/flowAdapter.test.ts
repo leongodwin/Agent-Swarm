@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { verifyCloudFlowBindings } from './flowAdapter.ts';
+import { verifyCloudFlowBindings, verifyCloudFlowActivationBindings } from './flowAdapter.ts';
 import type { TargetAction, TargetComponent } from './targetOperations.ts';
 
 const components: TargetComponent[] = [{ key: 'dataverse', kind: 'connection-reference', logicalName: 'exp_dataverse' }];
@@ -19,4 +19,16 @@ it('checks every runtime flow reference against approved logical name, connector
 it('fails closed on unresolved references and permits a flow with no connector dependencies', async () => {
   await expect(verifyCloudFlowBindings(adapter({ dataverse: { id: 'dataverse-connector' } }), 'environment', 'flow', components, actions)).rejects.toThrow();
   expect(await verifyCloudFlowBindings(adapter({}), 'environment', 'flow', [], [])).toEqual([]);
+});
+it('requires live reference verification before activating an imported embedded reference, and runtime resolution afterward', async () => {
+  const imported = adapter({ dataverse: { ...reference, connectionName: undefined, source: 'Embedded' } });
+  const verify = vi.fn(async () => {});
+  await expect(verifyCloudFlowBindings(imported, 'environment', 'flow', components, actions)).rejects.toThrow('unresolved');
+  expect(await verifyCloudFlowActivationBindings(imported, 'environment', 'flow', components, actions, verify)).toHaveLength(1);
+  expect(verify).toHaveBeenCalledExactlyOnceWith(actions[0]);
+  await expect(verifyCloudFlowBindings(imported, 'environment', 'flow', components, actions)).rejects.toThrow('unresolved');
+  await expect(verifyCloudFlowActivationBindings(imported, 'environment', 'flow', components, actions, async () => { throw new Error('live reference drift'); })).rejects.toThrow('live reference drift');
+  await expect(verifyCloudFlowActivationBindings(adapter({ dataverse: { ...reference, connectionName: undefined, source: 'Invoker' } }), 'environment', 'flow', components, actions, verify)).rejects.toThrow('unresolved');
+  await expect(verifyCloudFlowActivationBindings(adapter({ dataverse: { ...reference, source: 'Embedded', connectionName: 'wrong' } }), 'environment', 'flow', components, actions, verify)).rejects.toThrow('approved target binding');
+  expect(verify).toHaveBeenCalledTimes(1);
 });

@@ -1,6 +1,12 @@
-# Tenant readiness and validation — 12 October 2026
+# Tenant readiness and validation — 13 October 2026
 
-## Latest backend/reload checkpoint
+## Current checkpoint — 13 October 2026
+
+The combined non-Copilot expense application passed a live package reimport and data-preserving forward-repair rehearsal in the authorized Development test environment. Canvas submission/approval, independent Dataverse persistence, two independently received Inbox notifications, replay without duplicate sends, and 34 live server regression checks passed. All run-owned tenant fixtures were cleaned up and all pre-existing data/receipts and component membership preserved. The worker is Started; Copilot Studio remains paused.
+
+See [the current recovery validation report](RECOVERY-VALIDATION-2026-10-13.md) and [runbook](EXPENSE-RECOVERY-RUNBOOK.md). Earlier checkpoint statements below are historical where superseded. Canvas file chooser/download acceptance, separate licensed intended-role isolation, individual starter tenant proofs and independent QA approval remain incomplete. This was application forward repair, not an administrator point-in-time environment restore.
+
+## Previous backend/reload checkpoint
 
 API-only acceptance and bounded connection-repair, record-sharing, schema-contract and local Canvas ownership adapters are implemented. Runner-owned MyDevNet read assertions, table/schema mapping and no-op binding reconciliation passed. The live non-demo office was reloaded and its ownership-conflict, restart recovery and persisted Copilot pause checked. Grace's surviving Copilot task is stopped; other workers remain attached. Detailed scope, tests and remaining tenant-mutation boundaries are in [the 12 October report](RELIABILITY-VALIDATION-2026-10-12.md). This supersedes the older statement that these adapters are all pending; it does not complete the Canvas picker test, role isolation, general data migrations or full application recovery.
 
