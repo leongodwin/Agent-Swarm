@@ -40,6 +40,17 @@ it('grants only the approved record share and recovers a lost response without a
   const state = run(); const execute = () => reconcileAdditionalAction({ ...action, expectedRights: [], rights: ['ReadAccess'] }, table, request, state, async () => {}, async () => {});
   await expect(execute()).rejects.toThrow('response lost'); await execute();
   const writes = request.mock.calls.filter(([method]) => method === 'POST');
+  const observePath = request.mock.calls.find(([_method, resource]) => resource.startsWith('RetrieveShared'))![1];
+  const literal = JSON.parse(decodeURIComponent(observePath.split('@target=')[1]));
+  expect(literal).toEqual({ '@odata.id': `/exp_reports(${id})` });
   expect(writes).toHaveLength(1); expect(writes[0][1]).toBe('GrantAccess');
   expect(writes[0][2]).toMatchObject({ Target: { exp_reportid: id }, PrincipalAccess: { AccessMask: 'ReadAccess' } });
+});
+it('recognizes the live polymorphic ownerid principal only with the approved entity type', async () => {
+  const action = { id: 'share-team', type: 'record-share', component: 'reports', recordId: id, principalId: id, principalType: 'team', expectedRights: [], rights: ['ReadAccess'] } as const;
+  const request = vi.fn<Request>(async (_method, resource) => resource.startsWith('teams') ? { teamid: id } : resource.startsWith('RetrieveShared') ? { PrincipalAccesses: [{ Principal: { '@odata.type': '#Microsoft.Dynamics.CRM.team', ownerid: id }, AccessMask: 'ReadAccess' }] } : {});
+  const state = run();
+  await reconcileAdditionalAction({ ...action, expectedRights: [], rights: ['ReadAccess'] }, table, request, state, async () => {}, async () => {});
+  expect(state.operations![0].status).toBe('verified');
+  expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
 });

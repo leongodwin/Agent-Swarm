@@ -31,13 +31,21 @@ export async function reconcileAdditionalAction(action: AdditionalAction, compon
     };
   } else {
     if (component.kind !== 'dataverse-table' || !component.logicalName || !component.entitySet || !component.primaryId) throw new Error('Record sharing requires a mapped table');
-    const target = { '@odata.type': `Microsoft.Dynamics.CRM.${component.logicalName}`, '@odata.id': `${component.entitySet}(${action.recordId})` };
+    // Function entity-reference literals accept @odata.id, not an action-style
+    // polymorphic object. The slash makes the identifier service-root relative.
+    const target = { '@odata.id': `/${component.entitySet}(${action.recordId})` };
     observe = async () => {
       const principal = z.object(action.principalType === 'systemuser' ? { isdisabled: z.literal(false) } : { teamid: z.literal(action.principalId) }).parse(await request('GET', `${action.principalType === 'systemuser' ? 'systemusers' : 'teams'}(${action.principalId})?$select=${action.principalType === 'systemuser' ? 'isdisabled' : 'teamid'}`));
       void principal;
       await request('GET', `${component.entitySet}(${action.recordId})`);
       const result = z.object({ PrincipalAccesses: z.array(z.object({ Principal: z.record(z.string(), z.unknown()), AccessMask: z.string() })) }).parse(await request('GET', `RetrieveSharedPrincipalsAndAccess(Target=@target)?@target=${encodeURIComponent(JSON.stringify(target))}`));
-      const shared = result.PrincipalAccesses.filter((access) => String(access.Principal[`${action.principalType}id`]).toLowerCase() === action.principalId.toLowerCase());
+      const shared = result.PrincipalAccesses.filter((access) => {
+        // Dataverse serializes the polymorphic principal's key as ownerid.
+        // Accept it only when its declared entity type matches the approved principal.
+        const declaredType = String(access.Principal['@odata.type'] ?? '').replace(/^#/, '');
+        const identifier = access.Principal[`${action.principalType}id`] ?? (declaredType === `Microsoft.Dynamics.CRM.${action.principalType}` ? access.Principal.ownerid : undefined);
+        return String(identifier).toLowerCase() === action.principalId.toLowerCase();
+      });
       if (shared.length > 1) throw new Error('Ambiguous principal access');
       const rights = shared[0]?.AccessMask.split(',').map((right) => right.trim()).filter((right) => right !== 'None') ?? [];
       if (sameRights(rights, action.rights)) return true;
