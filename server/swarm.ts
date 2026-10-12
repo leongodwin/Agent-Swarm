@@ -1,3 +1,5 @@
+import { deliveryCapabilitiesPrompt } from './deliveryCapabilities.ts';
+import { DELIVERY_ENGINEERING } from '../shared/delivery.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -358,6 +360,16 @@ const ICON = { pass: '✅', fail: '❌', skip: '⏭️' } as const;
 export { HttpError };
 
 export class Swarm {
+  capabilityFingerprint = () => '';
+  capabilityStatus = () => '{}';
+  capabilityPreflight: (repoId: string, cli: string) => Promise<string | null> = async () => null;
+  taskPaused: (title: string) => boolean = () => false;
+  deliveryRevision = () => 0;
+  requestDeliveryReview: (id: string) => Promise<string> = async () => { throw new Error('Delivery unavailable'); };
+  createDeliveryRelease: (repoId: string, plan: unknown) => Promise<string> = async () => { throw new Error("Delivery unavailable"); };
+  engineeringTools: () => OfficeTools | undefined = () => undefined;
+  deliveryQaTools: (agentId: string, repoId: string) => OfficeTools | undefined = () => undefined;
+  deliveryStatus = () => JSON.stringify({ message: 'Delivery service is unavailable' });
   private state: Persisted = {
     version: 2,
     settings: {
@@ -392,6 +404,10 @@ export class Swarm {
   private officeTools(): OfficeTools {
     return createOfficeTools({
       companyStatus: () => this.companyStatus(),
+      deliveryStatus: () => this.deliveryStatus(),
+      capabilityStatus: () => this.capabilityStatus(),
+      reviewRelease: (id) => this.requestDeliveryReview(id),
+      createRelease: (repoId, plan) => this.createDeliveryRelease(repoId, plan),
       agentDetail: (a) => this.agentDetail(a),
       setFloorProfile: (a) => this.setFloorProfile(a),
       updateJob: (a) => this.updateJob(a),
@@ -1436,7 +1452,8 @@ export class Swarm {
     const repo = this.state.repos.find((r) => r.id === a.repoId);
     if (!repo) return;
     this.appendLog(a, [{ kind: 'system', text: '↻ The office restarted; their CLI kept working and the office is following it again.' }]);
-    this.startAgentSession(a, repo, this.backend.deskDir(repo.fullName, this.agentSlug(a)), '', '', a.sessionId ?? undefined, undefined, 'reattach');
+    this.startAgentSession(a, repo, a.task === 'qa' && a.prNumber === null ? this.backend.mainDir(repo.fullName) : this.backend.deskDir(repo.fullName, this.agentSlug(a)), '', '', a.sessionId ?? undefined, undefined, 'reattach');
+    if (this.taskPaused?.(a.issueTitle ?? '')) this.stopAgent(a.id);
   }
 
   /** The manager pressed Esc in the agent's terminal and the CLI stopped its turn: a Stop that leaves the CLI to them. */
@@ -1481,6 +1498,7 @@ export class Swarm {
     this.ensureSlot();
     const issue = this.repoRt.get(repo.id)?.issues.find((i) => i.number === issueNumber);
     if (!issue) throw new HttpError(404, `Issue #${issueNumber} is not open on ${repo.fullName}`);
+    if (this.taskPaused?.(issue.title)) throw new HttpError(409, 'This platform is paused by the manager');
     const holder = this.state.agents.find((x) => x.id !== a.id && x.repoId === repo.id && x.issueNumber === issueNumber && BUSY.includes(x.status));
     if (holder) throw new HttpError(409, `${holder.name} is already working on #${issueNumber}`);
     void this.runTask(a, repo, issue, note);
@@ -1562,6 +1580,8 @@ export class Swarm {
     return [
       `You are ${a.name}, ${a.title ? `the team's ${a.title},` : 'a software engineer'} on an autonomous agent team ("cubefarm"). Several teammates work in parallel on other issues of the same repository, each in their own git worktree. Nobody is watching live to answer questions, so make sensible decisions yourself and record assumptions in the PR description. The manager may occasionally send you messages; follow their instructions.`,
       `Every pull request is reviewed and tested by a QA teammate. ${repo.autoMerge ? "Once they sign off and GitHub's checks pass, the office merges it by itself" : 'Once they sign off, the manager merges it'}. If they find problems, or checks fail, or it conflicts with the default branch, you will get the details; fix them on the same branch.`,
+      DELIVERY_ENGINEERING,
+      deliveryCapabilitiesPrompt([a.brief, repo.summary, repo.mission].filter(Boolean).join('\n')),
       a.brief ? `\nYour job description:\n${a.brief}` : '',
       '',
       `Repository: ${repo.fullName} (default branch: ${repo.defaultBranch})`,
@@ -1646,6 +1666,21 @@ export class Swarm {
     }
   }
 
+  private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo) {
+    if (this.taskPaused?.(a.issueTitle ?? '')) {
+      a.status = 'stopped'; a.lastError = 'This platform is paused by the manager';
+      this.emitAgent(a); this.save(); return false;
+    }
+    if (this.backend.demo) return true;
+    try {
+      const blocker = await this.capabilityPreflight(repo.id, this.state.settings.runtime === 'terminal' ? a.cli || this.state.settings.defaultCli : 'node');
+      if (!blocker) return true;
+      a.lastError = blocker;
+    } catch { a.lastError = 'Capability check unavailable; refresh project readiness before assigning work'; }
+    a.status = 'error'; a.endedAt = Date.now();
+    this.appendLog(a, [{ kind: 'error', text: a.lastError! }]); this.emitAgent(a); this.save(); return false;
+  }
+
   private async runTask(a: PersistedAgent, repo: PersistedRepo, issue: IssueInfo, note?: string) {
     const branch = `swarm/issue-${issue.number}-${slugify(a.name)}`;
     this.beginTask(
@@ -1654,6 +1689,7 @@ export class Swarm {
       `Issue #${issue.number}: ${issue.title}`,
       `Preparing worktree on ${branch}…`,
     );
+    if (!await this.checkTaskCapabilities(a, repo)) return;
     const cwd = await this.prepare(a, repo, {}, branch);
     if (!cwd) return;
 
@@ -1695,6 +1731,7 @@ export class Swarm {
         effort: a.effort || this.state.settings.defaultEffort,
         browserTesting: repo.browserTesting,
         additionalDirectories: this.linkedRepos(repo).map((r) => this.backend.mainDir(r.fullName)),
+        office: a.role === 'qa' ? this.deliveryQaTools(a.id, repo.id) : this.engineeringTools(),
         role: a.task === 'qa' ? 'qa' : a.role, // a developer covering QA works under QA's rules
         outputSchema,
         // A developer's CLI stays at its prompt afterwards, for the manager and for follow-ups; QA's closes.
@@ -1761,7 +1798,10 @@ export class Swarm {
       }
     }
 
-    if (a.task === 'qa') await this.onQaFinished(a, repo, result);
+    if (a.task === 'qa' && a.prNumber === null) {
+      a.status = result.ok ? 'done' : 'error'; a.lastError = result.ok ? null : result.errors.join('; ');
+      this.appendLog(a, [{ kind: result.ok ? 'system' : 'error', text: result.text || a.lastError || 'Release review ended' }]);
+    } else if (a.task === 'qa') await this.onQaFinished(a, repo, result);
     else if (a.task === 'fix') this.onFixFinished(a, repo, result);
     else await this.onIssueFinished(a, repo, result);
 
@@ -1950,6 +1990,8 @@ export class Swarm {
 
   private buildQaSystemAppend(a: PersistedAgent, repo: PersistedRepo, cwd: string, branch: string, pr: PrDetails) {
     return [
+      DELIVERY_ENGINEERING,
+      deliveryCapabilitiesPrompt([a.brief, repo.summary, repo.mission, repo.qaBrief, pr.title].filter(Boolean).join('\n')),
       `You are ${a.name}, ${a.title ? `the team's ${a.title},` : 'a QA engineer'} on an autonomous agent team ("cubefarm"). Developers open pull requests; you review and independently verify each one before it is merged. Your sign-off is the review: ${repo.autoMerge ? "on this floor a PR you pass merges by itself as soon as GitHub's checks are green, so nobody else reads the code after you. " : ''}Be thorough and skeptical, but fair: fail a PR only for real problems (broken behaviour, failing tests or build, the issue's requirements not met, obvious regressions), not for style preferences.`,
       ...(a.brief ? ['', `Your job description:\n${a.brief}`] : []),
       ...(a.role === 'dev' ? ['', "You're a developer covering for the QA lab while its testers are busy. You didn't write this pull request: test it as an independent QA engineer would."] : []),
@@ -2019,6 +2061,7 @@ export class Swarm {
       return;
     }
 
+    if (!await this.checkTaskCapabilities(a, repo)) { this.setQa(rec, { status: 'queued' }); return; }
     const cwd = await this.prepare(a, repo, { pr: rec.prNumber }, branch);
     if (!cwd) {
       if (this.state.qa.includes(rec) && rec.status === 'testing') this.setQa(rec, { status: 'queued', qaAgentId: null });
@@ -2171,6 +2214,7 @@ export class Swarm {
             : `Fixing PR #${rec.prNumber} after QA round ${rec.round}`,
       `Checking out PR #${rec.prNumber}…`,
     );
+    if (!await this.checkTaskCapabilities(dev, repo)) { this.setQa(rec, { status: 'failed' }); return; }
     const cwd = await this.prepare(dev, repo, { pr: rec.prNumber }, branch);
     if (!cwd) {
       if (rec.status === 'fixing') this.setQa(rec, { status: 'failed' });
@@ -2382,7 +2426,7 @@ export class Swarm {
   private startPipelineWork(repo: PersistedRepo): boolean {
     const devs = this.available(repo, 'dev');
     const testers = this.available(repo, 'qa');
-    const waiting = (status: QaRecord['status']) => this.state.qa.filter((q) => q.repoId === repo.id && q.status === status).sort((x, y) => x.updatedAt - y.updatedAt);
+    const waiting = (status: QaRecord['status']) => this.state.qa.filter((q) => q.repoId === repo.id && q.status === status && !this.taskPaused?.(this.repoRt.get(repo.id)?.pulls.find((pull) => pull.number === q.prNumber)?.title ?? this.repoRt.get(repo.id)?.issues.find((issue) => issue.number === q.issueNumber)?.title ?? '')).sort((x, y) => x.updatedAt - y.updatedAt);
     for (const rec of waiting('queued')) {
       const tester =
         testers[0] ??
@@ -2415,7 +2459,7 @@ export class Swarm {
   private startIssueWork(repo: PersistedRepo): boolean {
     if (!repo.autoAssign || !this.mayStart('issue')) return false;
     const free = this.available(repo, 'dev');
-    const ready = free.length ? this.readyIssues(repo) : [];
+    const ready = free.length ? this.readyIssues(repo).filter((item) => !this.taskPaused?.(item.issue.title)) : [];
     if (ready.length === 0) return false;
     const fits = (a: PersistedAgent, want: string) => a.specialty.toLowerCase() === want;
     // Of the issues holding up the most, take one a free specialist fits.
@@ -2917,6 +2961,16 @@ export class Swarm {
     this.enqueueCeo({ kind: 'chat', text: t, at: Date.now() });
   }
 
+  reviewDeliveryRelease(agentId: string, repoId: string, releaseId: string) {
+    const a = this.state.agents.find((a) => a.id === agentId && a.repoId === repoId && a.role === 'qa');
+    if (!a || !FREE.includes(a.status) || this.slotsFull()) throw new HttpError(409, 'Assigned QA reviewer or session slot is busy; request the release review when available');
+    const repo = this.repo(repoId);
+    a.task = 'qa'; a.prNumber = null; a.issueNumber = null; a.issueTitle = `Release review ${releaseId}`; a.startedAt = Date.now(); a.lastError = null;
+    this.startAgentSession(a, repo, this.backend.mainDir(repo.fullName),
+      `Independently review release ${releaseId}. If its run is reviewing, inspect every captured desktop/mobile screenshot, accessibility report, usability results and recovery rehearsal evidence, then call approve_visual with the run ID, evidence hash, five visual scores and specific review notes. Otherwise review the plan. Call delivery_status, inspect the exact pinned commit with git show, read docs/DELIVERY.md, and inspect all acceptance scenarios. Do not modify source or approve weak/static assertions. Every required issue must be implemented in the pinned commit, each component packaged, authorization must exercise denied access, and persistence must prove a write survives reload. If adequate call approve_release with the exact plan hash. Otherwise explain the specific gaps without approving.`, DELIVERY_ENGINEERING);
+    this.save(); return 'Assigned QA review started';
+  }
+
   requestReview() {
     if (this.state.repos.length === 0) throw new HttpError(400, 'Connect a repo first: the CEO needs a floor to review.');
     this.enqueueCeo({ kind: 'review', at: Date.now() });
@@ -2941,6 +2995,8 @@ export class Swarm {
   /** Everything the heartbeat cares about. When it hasn't changed since the last review, the review is skipped. */
   private fingerprint() {
     const data = {
+      capabilities: this.capabilityFingerprint(),
+      delivery: this.deliveryRevision(),
       repos: this.state.repos.map((r) => {
         const rt = this.repoRt.get(r.id);
         return [r.id, r.mission, r.summary, rt?.issues.map((i) => i.number), rt?.pulls.filter((p) => p.state === 'OPEN').map((p) => p.number)];

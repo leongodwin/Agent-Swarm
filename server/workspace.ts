@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { WORKSPACE_ROOT } from './config.ts';
+import { WORKSPACE_ROOT, RESOURCE_LEASE_ROOT } from './config.ts';
+import { withResourceLease } from './resourceLease.ts';
 import { gh, git, run } from './exec.ts';
 
 // Layout on disk:
@@ -14,6 +15,7 @@ const localRoots = new Map<string, string>(); // lowercased owner/name -> the us
 
 /** Serialise git operations per repo so concurrent worktree adds don't fight over index locks. */
 function withRepoLock<T>(fullName: string, fn: () => Promise<T>): Promise<T> {
+  fullName = fullName.toLowerCase();
   const prev = locks.get(fullName) ?? Promise.resolve();
   const next = prev.catch(() => undefined).then(fn);
   locks.set(fullName, next);
@@ -249,9 +251,23 @@ export interface DeskBase {
 /** A fixer owns its local branch; pushes still target the PR author's remote branch. */
 export const fixDeskBranch = (pr: number, agentSlug: string) => `swarm/fix-pr-${pr}-${agentSlug}`;
 
-/** Remove a directory, retrying while Windows still has handles open in it. */
-async function removeDir(dir: string) {
-  await fs.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+function checkedDesk(fullName: string, agentSlug: string) {
+  const root = path.resolve(repoDir(fullName), 'desks');
+  const wt = path.resolve(deskDir(fullName, agentSlug));
+  const relative = path.relative(root, wt);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Invalid desk path');
+  return wt;
+}
+
+async function requireSafeDesk(wt: string) {
+  if (await git(['status', '--porcelain', '--untracked-files=all'], { cwd: wt })) throw new Error(`Desk ${wt} has local changes; commit or preserve them before reusing/removing it`);
+  if (Number(await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], { cwd: wt }))) throw new Error(`Desk ${wt} has unpublished commits; push or preserve them before reusing/removing it`);
+}
+
+async function withGitLease<T>(main: string, fn: () => Promise<T>) {
+  const common = await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: main });
+  const canonical = await fs.realpath(common.trim());
+  return withResourceLease(RESOURCE_LEASE_ROOT, `git:${process.platform === 'win32' ? canonical.toLowerCase() : canonical}`, main, fn);
 }
 
 export function prepareDesk(fullName: string, base: DeskBase, agentSlug: string, branch: string): Promise<string> {
@@ -274,48 +290,48 @@ export function prepareDesk(fullName: string, base: DeskBase, agentSlug: string,
       );
     }
 
-    const wt = deskDir(fullName, agentSlug);
+    const wt = checkedDesk(fullName, agentSlug);
+    return withGitLease(main, async () => {
+    await git(['check-ref-format', '--branch', branch], { cwd: main });
+    if ((await fs.lstat(wt).catch(() => null))?.isSymbolicLink()) throw new Error(`Desk ${wt} is a symbolic link; refusing to change its target`);
+    const listing = await git(['worktree', 'list', '--porcelain'], { cwd: main });
+    for (const entry of listing.split(/\r?\n\r?\n/)) {
+      const ownedBranch = entry.match(/^branch refs\/heads\/(.+)$/m)?.[1]?.trim();
+      const location = entry.match(/^worktree (.+)$/m)?.[1]?.trim();
+      if (ownedBranch === branch && location && path.resolve(location).toLowerCase() !== path.resolve(wt).toLowerCase()) throw new Error(`Branch ${branch} is already owned by worktree ${location}; choose a separate desk branch`);
+    }
+    const branchExists = await git(['rev-parse', '--verify', `refs/heads/${branch}`], { cwd: main }).then(() => true, () => false);
+    if (branchExists && Number(await git(['rev-list', '--count', branch, '--not', '--remotes'], { cwd: main }))) throw new Error(`Branch ${branch} has unpublished commits; preserve them before assigning work`);
 
     // Reuse the desk's worktree in place. Deleting it fails on Windows while any process (a dev server
     // the agent left running, a browser) still has its working directory inside, and reuse keeps
     // node_modules warm between tasks.
     if (await exists(path.join(wt, '.git'))) {
-      try {
-        await git(['checkout', '--force', '-B', branch, ref], { cwd: wt });
-        await git(['reset', '--hard', ref], { cwd: wt });
-        // Untracked leftovers from the last task go; ignored files (node_modules, build caches) stay.
-        await git(['clean', '-fd'], { cwd: wt }).catch(() => undefined);
-        return wt;
-      } catch {
-        // fall through and rebuild the worktree from scratch
-      }
+      await requireSafeDesk(wt);
+      await git(['checkout', '-B', branch, ref], { cwd: wt });
+      return wt;
     }
 
     if (await exists(wt)) {
-      await git(['worktree', 'remove', '--force', wt], { cwd: main }).catch(() => undefined);
-      try {
-        await removeDir(wt);
-      } catch (err) {
-        throw new Error(
-          `Could not clear the desk folder ${wt}: ${(err as Error).message}. A program started by the previous task is probably still running there. Close it and try again.`,
-        );
-      }
+      if ((await fs.readdir(wt)).length) throw new Error(`Desk folder ${wt} contains files but is not a worktree; preserve it before assigning work`);
     }
     await git(['worktree', 'prune'], { cwd: main });
     await fs.mkdir(path.dirname(wt), { recursive: true });
     await git(['worktree', 'add', '-B', branch, wt, ref], { cwd: main });
     return wt;
+    });
   });
 }
 
 export function removeDesk(fullName: string, agentSlug: string): Promise<void> {
   return withRepoLock(fullName, async () => {
     const main = mainDir(fullName);
-    const wt = deskDir(fullName, agentSlug);
+    const wt = checkedDesk(fullName, agentSlug);
     if (!(await exists(wt))) return;
-    await git(['worktree', 'remove', '--force', wt], { cwd: main }).catch(() => undefined);
-    await removeDir(wt).catch(() => undefined);
-    await git(['worktree', 'prune'], { cwd: main }).catch(() => undefined);
+    await withGitLease(main, async () => {
+      await requireSafeDesk(wt);
+      await git(['worktree', 'remove', wt], { cwd: main });
+    });
   });
 }
 

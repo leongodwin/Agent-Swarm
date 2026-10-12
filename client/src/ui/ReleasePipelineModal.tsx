@@ -1,3 +1,4 @@
+import { DeliveryPanel } from './DeliveryPanel';
 import { useState, useEffect, useRef } from 'react';
 import { Panel } from './Overlays';
 import { api } from '../api';
@@ -7,7 +8,7 @@ import { cue } from './sfx';
 import { useResource } from '../useResource';
 import { useStore, repoOnFloor } from '../store';
 
-export function ReleasePipelineModal({ onClose }: { onClose?: () => void }) {
+function SimulatedReleasePipelineModal({ onClose }: { onClose?: () => void }) {
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [pipeline, setPipeline] = useState<AlmPipeline>(INITIAL_ALM_PIPELINE);
@@ -528,4 +529,9 @@ export function ReleasePipelineModal({ onClose }: { onClose?: () => void }) {
       </div>
     </Panel>
   );
+}
+
+export function ReleasePipelineModal({ onClose }: { onClose?: () => void }) {
+  const demo = useStore((state) => state.demo);
+  return demo ? <SimulatedReleasePipelineModal onClose={onClose} /> : <DeliveryPanel onClose={onClose} />;
 }

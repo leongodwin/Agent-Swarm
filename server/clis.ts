@@ -149,6 +149,8 @@ export interface LaunchContext {
   plugin: string; // file URL of the OpenCode plugin
   /** The Playwright MCP server, when the floor tests in a browser. Claude Code gets it through its MCP config file. */
   browser: { command: string; args: string[] } | null;
+  /** Session-scoped CEO office tools, using Streamable HTTP. */
+  officeUrl?: string;
 }
 
 export interface Launch {
@@ -208,8 +210,9 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         `developer_instructions=${toml(ctx.systemAppend)}`,
         ...(ctx.model ? ['-m', ctx.model] : []),
         ...(ctx.effort ? ['-c', `model_reasoning_effort=${toml(EFFORT_CODEX[ctx.effort])}`] : []),
-        ...(ctx.browser ? ['-c', `mcp_servers.playwright={command=${toml(ctx.browser.command)},args=[${ctx.browser.args.map(toml).join(',')}]}`] : []),
-        ...CODEX_HOOK_EVENTS.flatMap((e) => ['-c', `hooks.${e}=[{hooks=[{type="command",command=${toml(codexHookCommand(process.execPath, ctx.codexHook))},timeout=10}]}]`]),
+        ...(ctx.browser ? ['-c', `mcp_servers.playwright={command=${toml(ctx.browser.command)},args=[${ctx.browser.args.map(toml).join(',')}],startup_timeout_sec=60}`] : []),
+        ...(ctx.officeUrl ? ['-c', `mcp_servers.office={url=${toml(ctx.officeUrl)}}`] : []),
+        ...CODEX_HOOK_EVENTS.flatMap((e) => ['-c', `hooks.${e}=[{hooks=[{type="command",command=${toml(codexHookCommand(process.execPath, ctx.codexHook))},timeout=${e === 'Interrupt' ? 3 : 10}}]}]`]),
         // Like the manager's own Codex, but it can't stop to ask: no approvals and no sandbox (its sandbox can't reach
         // the credential store, so git and gh fail in it).
         '--dangerously-bypass-approvals-and-sandbox',
@@ -222,7 +225,10 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         instructions: [ctx.files.system],
         autoupdate: false, // several agents starting at once must not each reinstall it
         permission: { edit: 'allow', bash: 'allow', webfetch: 'allow' }, // it can't stop to ask either
-        ...(ctx.browser ? { mcp: { playwright: { type: 'local', command: [ctx.browser.command, ...ctx.browser.args], enabled: true } } } : {}),
+        ...((ctx.browser || ctx.officeUrl) ? { mcp: {
+          ...(ctx.browser ? { playwright: { type: 'local', command: [ctx.browser.command, ...ctx.browser.args], enabled: true } } : {}),
+          ...(ctx.officeUrl ? { office: { type: 'remote', url: ctx.officeUrl, enabled: true } } : {}),
+        } } : {}),
       };
       // No project argument: it starts in its terminal's folder, and a desk path in its command line would make the
       // desk clean-up take it for a leftover.

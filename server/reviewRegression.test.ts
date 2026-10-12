@@ -12,6 +12,36 @@ afterEach(async () => { for (const dir of dirs.splice(0)) await fs.rm(dir, { rec
 async function temp() { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cubefarm-review-')); dirs.push(dir); return dir; }
 
 describe('Review regressions', () => {
+  it('stops paused platform work before readiness checks or workspace preparation', async () => {
+    const agent = { issueTitle: 'Copilot expense topics', status: 'preparing', lastError: '' };
+    const preflight = vi.fn(); const fake = { taskPaused: () => true, capabilityPreflight: preflight, emitAgent: vi.fn(), save: vi.fn() };
+    const check = (Swarm.prototype as unknown as { checkTaskCapabilities(a: unknown, repo: unknown): Promise<boolean> }).checkTaskCapabilities;
+    expect(await check.call(fake, agent, {})).toBe(false);
+    expect(agent.status).toBe('stopped'); expect(agent.lastError).toContain('paused'); expect(preflight).not.toHaveBeenCalled();
+  });
+  it('reattaches solely to stop a surviving paused platform session', () => {
+    const start = vi.fn(); const stop = vi.fn();
+    const fake = { state: { repos: [{ id: 'repo', fullName: 'owner/repo' }] }, taskPaused: () => true, appendLog: vi.fn(), backend: { deskDir: () => 'desk' }, agentSlug: () => 'grace', startAgentSession: start, stopAgent: stop };
+    const restore = (Swarm.prototype as unknown as { reattachSession(a: unknown): void }).reattachSession;
+    restore.call(fake, { id: 'grace', repoId: 'repo', issueTitle: 'Copilot Studio topics', task: 'fix', sessionId: 'existing-session' });
+    expect(start.mock.calls[0][7]).toBe('reattach'); expect(stop).toHaveBeenCalledWith('grace');
+  });
+  it('includes delivery changes in CEO heartbeat decisions', () => {
+    let revision = 1;
+    const fake = { capabilityFingerprint: () => '', deliveryRevision: () => revision, state: { repos: [], agents: [], qa: [], requests: [] } };
+    const fingerprint = (Swarm.prototype as unknown as { fingerprint(): string }).fingerprint;
+    const before = fingerprint.call(fake); expect(fingerprint.call(fake)).toBe(before);
+    revision++; expect(fingerprint.call(fake)).not.toBe(before);
+  });
+  it('starts a release review only with its free assigned QA agent and no PR side effects', () => {
+    const agent = { id: 'sherlock', role: 'qa', repoId: 'test/repo', status: 'idle' };
+    const startAgentSession = vi.fn();
+    const fake = { state: { agents: [agent] }, slotsFull: () => false, repo: () => ({ fullName: 'test/repo' }), backend: { mainDir: () => 'checkout' }, startAgentSession, save: vi.fn() };
+    const review = (Swarm.prototype as unknown as { reviewDeliveryRelease(...args: string[]): string }).reviewDeliveryRelease;
+    expect(review.call(fake, 'sherlock', 'test/repo', 'release')).toContain('started');
+    expect(startAgentSession.mock.calls[0][3]).toContain('exact pinned commit');
+    agent.status = 'working'; expect(() => review.call(fake, 'sherlock', 'test/repo', 'release')).toThrow('busy');
+  });
   it('blocks an unavailable DLP scan without merging', async () => {
     const mergePull = vi.fn(); const mergeNote = vi.fn((_rec: unknown, _note: string) => false);
     const fake = { backend: { prFiles: vi.fn(async () => { throw new Error('offline'); }), mergePull }, mergeNote };

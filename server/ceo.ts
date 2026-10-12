@@ -1,3 +1,7 @@
+import { deliveryCapabilitiesPrompt } from './deliveryCapabilities.ts';
+import { discoverSkills, selectSkills } from './skillRegistry.ts';
+import { templateCatalog, templateFiles, type TemplateId } from './implementationTemplates.ts';
+import { DELIVERY_CEO } from '../shared/delivery.ts';
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { blockers, holdUps, setDependsOn } from '../shared/issues.ts';
@@ -18,6 +22,10 @@ export interface CeoJob {
 /** What the CEO's tools do. Implemented by the swarm; errors are returned to the CEO as tool errors. */
 export interface OfficeHandlers {
   companyStatus(): string;
+  deliveryStatus?(): string;
+  capabilityStatus?(): string;
+  reviewRelease?(id: string): Promise<string>;
+  createRelease?(repoId: string, plan: unknown): Promise<string>;
   agentDetail(a: { agent_id: string }): string;
   setFloorProfile(a: { floor: number; summary?: string; qa_brief?: string; preview_command?: string; preview_env?: Record<string, string> }): string;
   updateJob(a: { agent_id: string; title?: string; specialty?: string; job_description?: string }): string;
@@ -55,6 +63,12 @@ export function createOfficeTools(h: OfficeHandlers): OfficeTools {
     }
   };
   const defs = [
+    tool('installed_skills', 'Discover installed Power Platform instructions and content hashes. Installation does not prove tools or tenant access.', { task: z.string().max(2000).optional() }, (a) => run(() => { const catalogue = discoverSkills(); return JSON.stringify(a.task ? { ...catalogue, skills: selectSkills(catalogue, a.task) } : catalogue); })),
+    tool('capability_status', 'Pre-assignment authentication, environment, licence, MCP, CLI and connector readiness; failed/unknown checks block new work.', {}, () => run(() => h.capabilityStatus?.() ?? 'Capability service unavailable')),
+    tool('implementation_templates', 'List tested starter contracts or read a platform recipe. Tenant validation status is explicit.', { platform: z.enum(['canvas', 'power-pages', 'dataverse', 'flow', 'deployment', 'copilot-studio']).optional() }, (a) => run(() => JSON.stringify(a.platform ? templateFiles(a.platform as TemplateId) : templateCatalog()))),
+    tool('review_release', 'Start the assigned QA agent on an immutable release plan. Use after create_release or once a busy reviewer becomes free; do not repeat unchanged rejected reviews.', { release_id: z.string() }, (a) => run(() => h.reviewRelease ? h.reviewRelease(a.release_id) : 'Delivery unavailable')),
+    tool('create_release', 'Pin an explicit release to the merged default-branch commit. Read docs/DELIVERY.md for the JSON plan. Assigned QA must approve it separately.', { repo_id: z.string(), plan_json: z.string() }, (a) => run(() => h.createRelease ? h.createRelease(a.repo_id, JSON.parse(a.plan_json)) : 'Delivery service unavailable')),
+    tool('delivery_status', 'Real tenant delivery status, pinned environment, blockers, app links and verification evidence. Check before reporting completion.', {}, () => run(() => h.deliveryStatus?.() ?? 'Delivery service unavailable; completion is unverified.')),
     tool(
       'company_status',
       'Everything about the company right now: settings, every floor (repo, clone path, brief, profile, QA brief), its team, backlog, pull requests and QA, pending proposals and recent decisions by the manager. Call this first.',
@@ -174,6 +188,8 @@ export function ceoSystemPrompt(o: {
     `You are ${o.name}, the CEO of ${o.company || 'an autonomous software company'}, run from an office building called cubefarm. You work from the corner office in the lobby.`,
     `Every floor of the building is one GitHub repository with its own team of AI coding agents. Developers pick up GitHub issues, each in their own git worktree, and open pull requests. QA testers review and verify every pull request (code review, tests, build, and a real browser via Playwright); when every tester is busy, a free developer who didn't write the PR covers QA. On floors with auto-merge on, the office merges a PR by itself once QA passes and GitHub's checks are green, and sends failing checks or merge conflicts back to a developer; on the others, ${manager} merges. The manager is your board: they approve hires and let-gos.`,
     '',
+    DELIVERY_CEO,
+    deliveryCapabilitiesPrompt(),
     'Your job is to run the company, not to write code:',
     '- Understand each project: what it is, its stack, how far along it is, and what kind of people it needs. Projects differ a lot. A static marketing site, a 3D browser game and a REST API need different specialists and different QA.',
     `- Shape each floor's team. Propose specialists with a specific title and a job description written for this project. Keep teams lean: agents on the same coding agent share one subscription's usage limits${o.sessionLimit ? ` and at most ${o.sessionLimit} sessions run at once` : ''}, so a floor rarely needs more than ${o.teamCap} people. Propose letting people go when a floor is clearly overstaffed or a specialty is no longer needed.`,
@@ -403,3 +419,32 @@ export function specialtySlug(s: string | undefined) {
 }
 
 export const specialtyLabel = (slug: string) => `swarm:${slug}`;
+
+/** QA-only authority: reviewer identity is captured from the session, never accepted as an argument. */
+export function createDeliveryQaTools(status: () => string, approve: (id: string, hash: string) => Promise<string>, visual?: (id: string, review: unknown) => Promise<string>): OfficeTools {
+  const run = async (fn: () => string | Promise<string>) => {
+    try { return { content: [{ type: 'text' as const, text: await fn() }] }; }
+    catch (err) { return { content: [{ type: 'text' as const, text: String((err as Error).message) }], isError: true }; }
+  };
+  const defs = [
+    tool('delivery_status', 'Read pinned releases and their immutable acceptance plans for independent QA review.', {}, () => run(status)),
+    tool('approve_backend', 'Inspect runner-owned API assertions, correlated transaction evidence and recovery rehearsal for an API-only release. Does not approve UI or permission isolation.', { run_id: z.string(), evidence_hash: z.string(), notes: z.string().min(40), recovery_reviewed: z.literal(true) }, (a) => run(() => visual ? visual(a.run_id, { evidenceHash: a.evidence_hash, scores: [], notes: a.notes, recoveryReviewed: a.recovery_reviewed }) : 'Backend review unavailable')),
+    tool('approve_visual', 'Inspect actual screenshots, accessibility/UX evidence and recovery rehearsal. Scores are hierarchy, readability, consistency, responsiveness and task clarity (each 4 or 5).', { run_id: z.string(), evidence_hash: z.string(), scores: z.array(z.number()).length(5), notes: z.string().min(40), recovery_reviewed: z.literal(true) }, (a) => run(() => visual ? visual(a.run_id, { evidenceHash: a.evidence_hash, scores: a.scores, notes: a.notes, recoveryReviewed: a.recovery_reviewed }) : 'Visual review unavailable')),
+    tool('approve_release', 'Approve the exact release head and plan after inspecting its coverage and assertions. No self-approval.', { release_id: z.string(), plan_hash: z.string() }, (a) => run(() => approve(a.release_id, a.plan_hash))),
+  ];
+  return { server: createSdkMcpServer({ name: 'office', tools: defs }), serve: () => createSdkMcpServer({ name: 'office', tools: defs }).instance,
+    async call(name, args) { const def = defs.find((d) => d.name === name); if (!def) throw new Error('Unknown QA tool'); const result = await def.handler(args as never, undefined); return JSON.stringify(result); } };
+}
+
+/** Developer sessions can discover starters/readiness without obtaining release approval authority. */
+export function createEngineeringTools(capabilities: () => string, authoring?: { acquire(app: string, owner: string): Promise<unknown>; release(token: string): Promise<void> }): OfficeTools {
+  const defs = [
+    tool('installed_skills', 'Discover installed Power Platform skills and hashes; verify their tools inside your session before using them.', { task: z.string().max(2000).optional() }, async (a) => { const catalogue = discoverSkills(); return { content: [{ type: 'text' as const, text: JSON.stringify(a.task ? { ...catalogue, skills: selectSkills(catalogue, a.task) } : catalogue) }] }; }),
+    tool('capability_status', 'Read verified project capabilities and actionable blockers.', {}, async () => ({ content: [{ type: 'text' as const, text: capabilities() }] })),
+    tool('canvas_authoring_acquire', 'Acquire exclusive local Canvas ownership before Studio/MCP edits. Keep the token until saving and closing your session. This does not force a remote Studio unlock.', { app: z.uuid(), owner: z.string().min(1).max(80) }, async (a) => { if (!authoring) throw new Error('Canvas ownership unavailable'); return { content: [{ type: 'text' as const, text: JSON.stringify(await authoring.acquire(a.app, a.owner)) }] }; }),
+    tool('canvas_authoring_release', 'Release only your saved/closed Canvas authoring session using its ownership token.', { token: z.uuid() }, async (a) => { if (!authoring) throw new Error('Canvas ownership unavailable'); await authoring.release(a.token); return { content: [{ type: 'text' as const, text: 'Released local Canvas ownership.' }] }; }),
+    tool('implementation_templates', 'Read a supported, versioned starter recipe. Copy/adapt files inside your own worktree; tenant verification remains required.', { platform: z.enum(['canvas', 'power-pages', 'dataverse', 'flow', 'deployment', 'copilot-studio']).optional() }, async (a) => ({ content: [{ type: 'text' as const, text: JSON.stringify(a.platform ? templateFiles(a.platform) : templateCatalog()) }] })),
+  ];
+  return { server: createSdkMcpServer({ name: 'office', tools: defs }), serve: () => createSdkMcpServer({ name: 'office', tools: defs }).instance,
+    async call(name, args) { const def = defs.find((d) => d.name === name); if (!def) throw new Error('Unknown engineering tool'); return JSON.stringify(await def.handler(args as never, undefined)); } };
+}

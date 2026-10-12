@@ -1,3 +1,4 @@
+import type { DeliveryView } from '../../shared/delivery';
 import { useStore } from './store';
 import type { AgentCli, GhRepoSummary, OfficeUpdateView, PreviewView, ProjectFolderView, RepoView, SwarmSettings } from '../../shared/types';
 import type { ParsedSolution } from '../../shared/solutionTypes';
@@ -46,6 +47,19 @@ export interface FloorOptions {
 }
 
 export const api = {
+  capabilities: () => call<{ results: import('../../server/capabilityChecks').CapabilityResult[]; configuredProjects: string[] }>('GET', '/api/capabilities'),
+  installedSkills: () => call<import('../../server/skillRegistry').SkillCatalogue>('GET', '/api/installed-skills'),
+  configureCapabilities: (repoId: string, config: unknown) => call('POST', `${r(repoId)}/capabilities/configure`, config),
+  checkCapabilities: (repoId: string) => call('POST', `${r(repoId)}/capabilities/check`, {}),
+  templates: () => call<{ id: string; version: number; skill: string; validation: string }[]>('GET', '/api/implementation-templates'),
+  installTemplate: (repoId: string, template: string) => call('POST', `${r(repoId)}/implementation-templates/${encodeURIComponent(template)}`, {}),
+  monitorDelivery: (repoId: string, run: string) => call('POST', `${r(repoId)}/delivery/monitor/${encodeURIComponent(run)}`, {}),
+  delivery: (repoId?: string) => call<DeliveryView>('GET', `/api/delivery${scope(repoId)}`),
+  configureDelivery: (enabled: boolean) => call<DeliveryView>('POST', '/api/delivery/configure', { enabled }),
+  reviewRelease: (id: string) => call('POST', `/api/delivery/releases/${encodeURIComponent(id)}/review`, {}),
+  createRelease: (repoId: string, plan: unknown) => call('POST', `${r(repoId)}/delivery/releases`, plan),
+  runDelivery: (repoId: string, releaseId?: string) => call<DeliveryView>('POST', `${r(repoId)}/delivery/run`, { releaseId }),
+
   githubRepos: (owner?: string) => call<GhRepoSummary[]>('GET', `/api/github/repos${owner ? `?owner=${encodeURIComponent(owner)}` : ''}`),
   connectRepo: (fullName: string, floor: FloorOptions = {}) => call<RepoView>('POST', '/api/repos', { fullName, ...floor }),
   createRepo: (body: FloorOptions & { name: string; description: string; visibility: 'private' | 'public'; owner?: string }) =>

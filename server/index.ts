@@ -15,17 +15,74 @@ import { generateHld } from './hldAgent.ts';
 import { parseSolutionFolder } from '../shared/solutionParser.ts';
 import { scanDirectoryDlp } from './dlpScanner.ts';
 import { FeatureStore } from './features.ts';
-import { HOME_DIR } from './config.ts';
+import { CapabilityService, capabilityConfigSchema } from './capabilityChecks.ts';
+import { templateCatalog, templateFiles, installTemplate, type TemplateId } from './implementationTemplates.ts';
+import { DeliveryService, containedFile } from './delivery.ts';
+import { createDeliveryQaTools, createEngineeringTools } from './ceo.ts';
+import { releasePlanSchema } from './releasePlan.ts';
+import { discoverSkills, selectSkills } from './skillRegistry.ts';
+import { HOME_DIR, RESOURCE_LEASE_ROOT } from './config.ts';
 import { createBrowserAuth } from './browserAuth.ts';
+import { CanvasOwnership } from './canvasOwnership.ts';
+import { z } from 'zod';
 import { parseBody, proposalSchema, hldSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
+const runtimeStartedAt = new Date().toISOString();
+const canvasOwnership = new CanvasOwnership(RESOURCE_LEASE_ROOT);
 const swarm = new Swarm(backend);
+swarm.taskPaused = (title) => !!delivery.view().policy?.copilotPaused && /\bcopilot\b|\bpva\b/i.test(title);
 const features = new FeatureStore(path.join(HOME_DIR, backend.demo ? 'demo-features.json' : 'features.json'), backend.demo, process.env.TEAMS_INCOMING_WEBHOOK_URL);
 await features.init();
+const delivery = new DeliveryService(HOME_DIR, backend.demo, undefined, RESOURCE_LEASE_ROOT);
+await delivery.init();
+const capabilities = new CapabilityService(HOME_DIR, backend.demo);
+await capabilities.init();
+swarm.capabilityStatus = () => JSON.stringify(capabilities.view());
+swarm.engineeringTools = () => createEngineeringTools(swarm.capabilityStatus, {
+  async acquire(app, owner) {
+    if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
+    const tenancy = await backend.tenancy.info(); const target = tenancy.environments.find((environment) => environment.active);
+    if (!target || tenancy.status !== 'connected') throw new HttpError(409, 'Connect the authoring environment first');
+    return canvasOwnership.acquire(target.url, app, owner);
+  }, release: (token) => canvasOwnership.release(token),
+});
+swarm.capabilityFingerprint = () => JSON.stringify(capabilities.view().results.map((r) => [r.repoId, r.status, r.configHash, r.checks]));
+swarm.capabilityPreflight = async (repoId, cli) => {
+  const repo = swarm.snapshot().repos.find((r) => r.id === repoId);
+  if (!repo) return 'Project not connected';
+  const result = await capabilities.check(repoId, repo.checkoutPath, repo.targetTenancy?.environmentUrl ?? (fs.existsSync(path.join(repo.checkoutPath, 'cubefarm.delivery.json')) ? delivery.view().policy?.environmentUrl : undefined), cli);
+  return result.status === 'ready' ? null : result.checks.filter((c) => !c.passed).map((c) => `${c.id}: ${c.remedy}`).join('; ');
+};
+delivery.checkCapabilities = (repoId, cwd, environment, force) => capabilities.check(repoId, cwd, environment, 'git', force);
+swarm.deliveryStatus = () => JSON.stringify({ ...delivery.view(), projects: swarm.snapshot().repos.map((repo) => ({ repo: repo.fullName, manifest: fs.existsSync(path.join(repo.checkoutPath, 'cubefarm.delivery.json')) ? 'present in checkout; release validates committed copy' : 'missing: plan real build, test, deployment and live verification scripts' })) });
 // Sessions the office picks back up while it starts need the address their CLIs call back on before it listens.
 if (PORT) setOfficeUrl(`http://127.0.0.1:${PORT}`);
+swarm.deliveryRevision = () => delivery.view().revision;
+swarm.createDeliveryRelease = async (repoId, input) => {
+  const plan = parseBody(releasePlanSchema, input);
+  const snapshot = swarm.snapshot();
+  const repo = snapshot.repos.find((r) => r.id === repoId);
+  if (!repo) throw new HttpError(404, 'Repository is not connected');
+  if (!snapshot.agents.some((a) => a.id === plan.owner && a.repoId === repoId && a.role === 'dev') || !snapshot.agents.some((a) => a.id === plan.qaOwner && a.repoId === repoId && a.role === 'qa')) throw new HttpError(400, 'Assign a developer and a separate QA agent from this project');
+  return JSON.stringify(await delivery.createRelease(repo, plan));
+};
+swarm.deliveryQaTools = (agentId, repoId) => createDeliveryQaTools(() => JSON.stringify(delivery.view(repoId)), async (id, hash) => {
+  if (!delivery.view(repoId).releases.some((r) => r.id === id)) throw new HttpError(403, 'Release belongs to another project');
+  return JSON.stringify(await delivery.approveRelease(id, agentId, hash));
+}, async (id, review) => {
+  if (!delivery.view(repoId).runs.some((r) => r.id === id)) throw new HttpError(403, 'Run belongs to another project');
+  return JSON.stringify(await delivery.approveVisual(id, agentId, review));
+});
+swarm.requestDeliveryReview = async (id) => {
+  const release = delivery.view().releases.find((r) => r.id === id);
+  if (!release) throw new HttpError(404, 'Release not found');
+  if (release.approvedAt && !delivery.view().runs.some((r) => r.releaseId === id && r.phase === 'reviewing')) return 'Release plan approved; visual review becomes available after verification';
+  return swarm.reviewDeliveryRelease(release.plan.qaOwner, release.repoId, id);
+};
 await swarm.init();
+delivery.onChange = () => { if (swarm.snapshot().repos.length) swarm.requestReview(); };
+capabilities.onChange = delivery.onChange;
 
 const app = express();
 // Agent CLIs calling back: hooks (a tool result can be a large screenshot, hence the limit) and the CEO's office tools.
@@ -67,6 +124,53 @@ const featureScope = async (req: Request, repo?: string) => {
 };
 
 app.get('/api/state', route(() => swarm.snapshot()));
+app.get('/api/capabilities', route(() => capabilities.view()));
+app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
+app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, demo: backend.demo, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+app.post('/api/authoring/canvas/:app/lease', route(async (req) => {
+  if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
+  const { app: appId } = parseBody(z.object({ app: z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i) }), req.params);
+  const { owner } = parseBody(z.object({ owner: z.string().trim().min(1).max(80) }).strict(), req.body);
+  const tenancy = await backend.tenancy.info(); const target = tenancy.environments.find((environment) => environment.active);
+  if (!target || tenancy.status !== 'connected') throw new HttpError(409, 'Connect the authoring environment first');
+  return canvasOwnership.acquire(target.url, appId, owner);
+}));
+app.post('/api/authoring/canvas/lease/release', route(async (req) => {
+  const { token } = parseBody(z.object({ token: z.uuid() }).strict(), req.body);
+  await canvasOwnership.release(token); return { released: true };
+}));
+app.post('/api/repos/:repo/capabilities/configure', route(async (req) => { connectedRepo(repoId(req)); await capabilities.configure(repoId(req), parseBody(capabilityConfigSchema, req.body)); return capabilities.view(); }));
+app.post('/api/repos/:repo/capabilities/check', route((req) => { const repo = connectedRepo(repoId(req)); return capabilities.check(repo.id, repo.checkoutPath, repo.targetTenancy?.environmentUrl ?? delivery.view().policy?.environmentUrl, 'git', true); }));
+app.get('/api/implementation-templates', route(() => templateCatalog()));
+app.get('/api/implementation-templates/:template', route((req) => templateFiles(String(req.params.template) as TemplateId)));
+app.post('/api/repos/:repo/implementation-templates/:template', route((req) => { if (backend.demo) throw new HttpError(409, 'Demo cannot install into a real project'); return installTemplate(connectedRepo(repoId(req)).checkoutPath, String(req.params.template) as TemplateId); }));
+app.post('/api/repos/:repo/delivery/monitor/:run', route(async (req) => { await delivery.monitor(connectedRepo(repoId(req)), String(req.params.run)); return delivery.view(repoId(req)); }));
+app.get('/api/delivery', route((req) => delivery.view(typeof req.query.repo === 'string' ? req.query.repo : undefined)));
+app.post('/api/delivery/platforms', route((req) => {
+  const { copilotPaused } = parseBody(z.object({ copilotPaused: z.boolean() }).strict(), req.body);
+  return delivery.pauseCopilot(copilotPaused);
+}));
+app.post('/api/delivery/configure', route(async (req) => {
+  if (typeof req.body?.enabled !== 'boolean') throw new HttpError(400, 'enabled must be a boolean');
+  if (!req.body.enabled && delivery.view().policy) return delivery.configure(delivery.view().policy!.environmentUrl, false);
+  const tenancy = await backend.tenancy.info();
+  const target = tenancy.environments.find((env) => env.active);
+  if (!target || tenancy.status !== 'connected') throw new HttpError(409, 'Connect a current PAC development environment first');
+  return delivery.configure(target.url, req.body.enabled);
+}));
+app.post('/api/delivery/releases/:release/review', route((req) => swarm.requestDeliveryReview(String(req.params.release))));
+app.post('/api/repos/:repo/delivery/releases', route(async (req) => JSON.parse(await swarm.createDeliveryRelease(repoId(req), req.body))));
+app.post('/api/repos/:repo/delivery/run', route((req) => delivery.start(connectedRepo(repoId(req)), true, typeof req.body?.releaseId === 'string' ? req.body.releaseId : undefined)));
+app.get('/api/delivery/runs/:run/evidence', route(async (req, res) => {
+  const run = delivery.view().runs.find((run) => run.id === String(req.params.run));
+  const file = typeof req.query.file === 'string' ? req.query.file : '';
+  if (!run || !run.evidence.includes(file)) throw new HttpError(404, 'Delivery evidence not found');
+  const location = await containedFile(path.join(HOME_DIR, 'delivery-runs', run.id, 'evidence'), file);
+  res.download(location);
+}));
+const deliveryTimer = setInterval(() => { void delivery.tick(swarm.snapshot().repos).catch((err) => console.warn('delivery scheduler:', err.message)); }, 30_000);
+deliveryTimer.unref();
+
 
 app.get('/api/github/repos', route((req) => swarm.listGithubRepos(str(req.query.owner) || undefined)));
 
@@ -267,10 +371,11 @@ const shutdown = (signal: string) => {
   if (closing) return;
   closing = true;
   backend.tenancy.close();
+  clearInterval(deliveryTimer);
   console.log(`\n  ${signal}: stopping floor previews…`);
   const force = setTimeout(() => process.exit(0), 15_000);
-  void swarm
-    .shutdown(signal === 'restart')
+  void capabilities.close().then(() => delivery.close()).then(() => swarm
+    .shutdown(signal === 'restart'))
     .catch((err) => console.error(err))
     .finally(() => {
       clearTimeout(force);

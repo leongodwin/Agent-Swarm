@@ -18,6 +18,18 @@ test('browser API enforces sessions, schemas and connected repository IDs', asyn
   const refreshed = await (await request.get(`/api/repos/${repo}/flow-runs`)).json();
   expect(refreshed[0].id).toBe(resubmitted.resubmitted.id);
   expect((await request.post(`/api/repos/${repo}/flow-runs/missing/resubmit`)).status()).toBe(404);
+  expect((await request.post('/api/delivery/configure', { data: { enabled: true } })).status()).toBe(409);
+  expect((await request.post(`/api/repos/${repo}/delivery/run`, { data: {} })).status()).toBe(409);
+  expect((await request.get('/api/implementation-templates')).ok()).toBe(true);
+  expect((await request.get('/api/implementation-templates/unknown')).status()).toBe(404);
+  expect((await request.post(`/api/repos/${repo}/implementation-templates/canvas`, { data: {} })).status()).toBe(409);
+  expect((await request.post(`/api/repos/${repo}/capabilities/configure`, { data: {} })).status()).toBe(400);
+  expect((await request.get('/api/capabilities')).ok()).toBe(true);
+  const catalogue = await (await request.get('/api/installed-skills')).json();
+  expect(catalogue.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  expect(Array.isArray(catalogue.skills)).toBe(true);
+  for (const skill of catalogue.skills) expect(skill.toolStatus).toBe('unverified');
+  expect((await (await request.post(`/api/repos/${repo}/capabilities/check`, { data: {} })).json()).status).toBe('ready');
   const login = await (await request.post('/api/tenancy/login', { data: { interactive: true } })).json();
   expect(login.status).toBe('completed'); expect(login.message).toContain('Demo');
 

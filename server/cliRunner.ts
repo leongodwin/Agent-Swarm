@@ -1,3 +1,4 @@
+import { playwrightMcp } from './browserTools.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -125,10 +126,7 @@ const shellArg = (p: string) => `"${p.replaceAll('\\', '/')}"`;
 const HOOK_EVENTS = ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'StopFailure', 'Notification'];
 
 /** The browser for a session. Its snapshots and unnamed screenshots go to the session's folder, not the worktree. */
-function playwrightServer(outputDir: string) {
-  const args = ['-y', '@playwright/mcp@latest', '--headless', '--isolated', '--output-dir', outputDir, '--init-script', path.join(import.meta.dirname, 'browser-init.js')];
-  return process.platform === 'win32' ? { command: 'cmd', args: ['/c', 'npx', ...args] } : { command: 'npx', args };
-}
+const playwrightServer = playwrightMcp;
 
 /** What a tool call returned, as text, and any images in it (Playwright screenshots). */
 function toolOutput(response: unknown): { text: string; images: { data: string; mime: string }[] } {
@@ -654,6 +652,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     clearTimeout(live.idleTimer);
     term.releaseIdle = null;
     live.session = { hook, exited };
+    // Reattach session-scoped MCP handlers after a server restart, including release QA.
+    wire(live, opts.office);
     Object.assign(live, { statusLine });
     remember(live);
     if (live.resumeId) cb.sessionId(live.resumeId);
@@ -727,6 +727,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     codexHook: path.join(BIN_DIR, 'codex-hook.cjs'),
     plugin: pathToFileURL(path.join(BIN_DIR, 'opencode-plugin.mjs')).href,
     browser,
+    officeUrl: opts.office ? `${officeUrl}/api/mcp/${token}` : undefined,
   });
 
   // Each agent must be a clean instance on the account its CLI is logged into: no API keys (they would switch Claude
@@ -737,6 +738,14 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     if (/^(ANTHROPIC_|CLAUDE)/i.test(k) && k !== 'CLAUDE_CONFIG_DIR') continue;
     if (/^(NO_COLOR|FORCE_COLOR|TERM_PROGRAM|TERM_PROGRAM_VERSION|CODEX_THREAD_ID|OPENCODE_CONFIG_CONTENT)$/i.test(k)) continue;
     env[k] = v;
+  }
+  // Optional office-local SDK for installed plugins that use file-based C# hooks.
+  // Keep the machine's SDK and the manager's own shell environment unchanged.
+  const dotnetDir = path.join(HOME_DIR, 'tools', 'dotnet');
+  if (fs.existsSync(path.join(dotnetDir, process.platform === 'win32' ? 'dotnet.exe' : 'dotnet'))) {
+    const pathKey = Object.keys(env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
+    env[pathKey] = `${dotnetDir}${path.delimiter}${env[pathKey] ?? ''}`;
+    env.DOTNET_ROOT = dotnetDir;
   }
   Object.assign(env, { TERM: 'xterm-256color', COLORTERM: 'truecolor' }, launch.env);
 

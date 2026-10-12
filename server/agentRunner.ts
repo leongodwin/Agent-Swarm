@@ -1,3 +1,4 @@
+import { playwrightMcp } from './browserTools.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { query, type CanUseTool, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -316,8 +317,7 @@ export function startSession(opts: SessionOptions, callbacks: SessionCallbacks):
   const mcpServers: Options['mcpServers'] = {};
   if (opts.browserTesting) {
     // browser-init.js keeps pages from taking the real mouse with pointer lock (headless Chrome does on Windows).
-    const args = ['-y', '@playwright/mcp@latest', '--headless', '--isolated', '--init-script', path.join(import.meta.dirname, 'browser-init.js')];
-    mcpServers.playwright = process.platform === 'win32' ? { command: 'cmd', args: ['/c', 'npx', ...args] } : { command: 'npx', args };
+    mcpServers.playwright = playwrightMcp();
   }
   if (opts.office) mcpServers.office = opts.office.server;
   // The CEO reads repositories and acts through the office tools; it never runs commands.

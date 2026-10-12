@@ -119,6 +119,21 @@ describe('launchArgs', () => {
     expect(resumed).toContain('--dangerously-bypass-approvals-and-sandbox');
   });
 
+  it('connects Codex and OpenCode CEOs to session-scoped office tools without losing Playwright', () => {
+    const officeUrl = 'http://127.0.0.1:4499/api/mcp/session-token';
+    const context = ctx({ role: 'ceo', officeUrl, browser: { command: 'node', args: ['playwright.js'] } });
+    for (const resumeId of [undefined, 'existing-thread']) {
+      const args = launchArgs('codex', { ...context, resumeId }).args;
+      expect(args).toContain(`mcp_servers.office={url=${JSON.stringify(officeUrl)}}`);
+      expect(args.some((arg) => arg.startsWith('mcp_servers.playwright='))).toBe(true);
+    }
+    const config = JSON.parse(launchArgs('opencode', context).env.OPENCODE_CONFIG_CONTENT);
+    expect(config.mcp.office).toEqual({ type: 'remote', url: officeUrl, enabled: true });
+    expect(config.mcp.playwright.type).toBe('local');
+    expect(launchArgs('codex', ctx()).args.some((arg) => arg.startsWith('mcp_servers.office='))).toBe(false);
+    expect(JSON.parse(launchArgs('opencode', ctx()).env.OPENCODE_CONFIG_CONTENT).mcp).toBeUndefined();
+  });
+
   it("gives Codex the office's hooks, with the office's address in its environment", () => {
     const { args, env } = launchArgs('codex', ctx());
     const hooks = args.filter((a) => a.startsWith('hooks.'));

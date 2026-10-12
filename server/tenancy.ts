@@ -12,10 +12,16 @@ export function resolveTenancyCommand(name: string): { file: string; args: strin
   const installed = name === 'pac' && process.platform === 'win32'
     ? path.join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'PowerAppsCLI', 'pac.launcher.exe') : '';
   if (installed && fs.existsSync(installed)) return { file: installed, args: [] };
-  const file = resolveCommand(name);
+  const file = path.isAbsolute(name) && fs.existsSync(name) && fs.statSync(name).isFile() ? name : resolveCommand(name);
   if (!file) throw new HttpError(503, `${name} CLI is not installed`);
   if (/\.(cmd|bat)$/i.test(file)) {
     const text = fs.readFileSync(file, 'utf8');
+    // Azure's MSI shim runs its bundled Python with module flags. Preserve those
+    // flags instead of treating python.exe as a standalone Azure executable.
+    if (name === 'az' && /-IBm azure\.cli %\*/.test(text)) {
+      const python = path.resolve(path.dirname(file), '..', 'python.exe');
+      if (fs.existsSync(python)) return { file: python, args: ['-IBm', 'azure.cli'] };
+    }
     const native = text.match(/"%~dp0([^"\r\n]+\.exe)"/i)?.[1];
     if (native) return { file: path.resolve(path.dirname(file), native), args: [] };
     const unwrapped = unwrapCmdShim(file, text);
@@ -126,7 +132,7 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       if (input.name) args.push('--name', input.name);
       if (input.environmentUrl) args.push('--environment', input.environmentUrl);
       if (input.tenantId) args.push('--tenant', input.tenantId);
-      if (input.interactive !== false) args.push('--deviceCode');
+      if (input.interactive !== false) { if (input.authMethod === 'device-code') args.push('--deviceCode'); }
       else args.push('--applicationId', input.applicationId!, '--clientSecret', input.clientSecret!);
       const secret = input.clientSecret;
       const redact = (text: string) => secret ? text.replaceAll(secret, '[redacted]') : text;
@@ -140,7 +146,7 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
         }, (error) => {
           if (value.status !== 'pending') return;
           clearTimeout(job.timer); value.status = error ? 'failed' : 'completed'; value.ok = !error;
-          value.message = error ? 'PAC authentication failed. Check the profile and credentials.' : 'Authentication profile created successfully';
+          value.message = error ? (/53003|conditional access|blocked.*device.code/i.test(transcript) ? 'Conditional Access blocked this sign-in. Use interactive sign-in; ask your administrator to inspect the failed policy if it persists.' : 'PAC authentication failed. Check the profile and credentials.') : 'Authentication profile created successfully';
           if (!error) invalidate();
         });
         if (value.status === 'pending') {

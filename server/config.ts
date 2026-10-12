@@ -10,6 +10,7 @@ export const VERSION: string = JSON.parse(fs.readFileSync(path.resolve(import.me
 // cloned repos never pick up this project's CLAUDE.md or settings by walking up the tree.
 export const HOME_DIR = process.env.SWARM_HOME ?? path.join(os.homedir(), '.cubefarm');
 export const WORKSPACE_ROOT = path.join(HOME_DIR, 'workspaces');
+export const RESOURCE_LEASE_ROOT = process.env.SWARM_LEASE_ROOT ?? path.join(HOME_DIR, 'resource-leases');
 export const DEMO = process.argv.includes('--demo') || process.env.SWARM_DEMO === '1' || process.env.SWARM_DEMO === 'true';
 export const STATE_FILE = path.join(HOME_DIR, DEMO ? 'demo-state.json' : 'state.json');
 

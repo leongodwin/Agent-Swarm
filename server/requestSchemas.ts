@@ -10,8 +10,8 @@ export const hldSchema = z.object({ solutionName: text, problemContext: text, te
 export const loginSchema = z.object({ name: z.string().trim().min(1).max(30).optional(),
   environmentUrl: z.url().refine((url) => new URL(url).protocol === 'https:', 'Environment must use HTTPS').optional(),
   tenantId: z.string().trim().min(1).max(253).regex(/^[a-zA-Z0-9.-]+$/).optional(),
-  applicationId: z.uuid().optional(), clientSecret: z.string().min(1).max(4000).optional(), interactive: z.boolean().default(true) }).strict()
-  .refine((input) => input.interactive ? !input.applicationId && !input.clientSecret : !!input.tenantId && !!input.applicationId && !!input.clientSecret,
+  applicationId: z.uuid().optional(), clientSecret: z.string().min(1).max(4000).optional(), interactive: z.boolean().default(true), authMethod: z.enum(['interactive', 'device-code']).optional() }).strict()
+  .refine((input) => input.interactive ? !input.applicationId && !input.clientSecret : !!input.tenantId && !!input.applicationId && !!input.clientSecret && !input.authMethod,
     'Service principal login requires tenant, application ID and secret; interactive login must omit credentials');
 export const selectSchema = z.object({ index: z.number().int().positive() }).strict();
 export const notifySchema = z.object({ title: text, subtitle: text.default('Office activity'), summary: text.default('Office notification'),

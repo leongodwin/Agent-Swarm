@@ -216,3 +216,70 @@ test('feature panels disclose simulation and clear empty repository results', as
   await open('solution-architecture');
   await expect(page.getByText('⚠️ SIMULATED ARCHITECTURE')).toBeVisible();
 });
+
+
+test('real delivery panel distinguishes blocked releases from verified tenant apps', async ({ page }) => {
+  let complete = false;
+  await page.route('**/api/delivery?*', (route) => route.fulfill({ json: {
+    policy: { enabled: true, environmentUrl: 'https://development.crm4.dynamics.com', approvedAt: new Date().toISOString() }, running: false, message: 'Real delivery',
+    runs: [{ id: 'fixture-run', repoId: 'fixture', head: 'abcdef123456', phase: complete ? 'complete' : 'blocked', startedAt: new Date().toISOString(), environmentUrl: 'https://development.crm4.dynamics.com', solution: 'Expenses', version: '1.0.0.1', error: complete ? undefined : 'Live verification failed', appUrls: complete ? ['https://apps.powerapps.com/play/fixture'] : [], evidence: [], log: ['testing', 'deploying', 'verifying'] }],
+  } }));
+  await page.goto('/?quality=low');
+  await expect(page.getByRole('button', { name: 'Enter the office' })).toBeEnabled();
+  const openDelivery = () => page.evaluate(() => {
+    const store = (window as any).__swarmStore;
+    store.setState({ demo: false }); store.getState().openOverlay({ kind: 'alm-kiosk' });
+  });
+  await openDelivery();
+  await expect(page.getByText('Live verification failed')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open deployed solution' })).toHaveCount(0);
+  await page.keyboard.press('Escape'); complete = true;
+  await openDelivery();
+  await expect(page.getByText('Deployed and verified', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open deployed solution' })).toHaveAttribute('href', 'https://apps.powerapps.com/play/fixture');
+});
+
+test('delivery exposes capability blockers, starter validation status and pending visual review', async ({ page }) => {
+  let repoId = '';
+  await page.route('**/api/capabilities', (route) => route.fulfill({ json: { configuredProjects: [], results: [{ repoId, status: 'blocked', checkedAt: new Date().toISOString(), expiresAt: new Date().toISOString(), checks: [{ id: 'licence', passed: false, remedy: 'Connect the required licence probe' }] }] } }));
+  await page.route('**/api/implementation-templates', (route) => route.fulfill({ json: [{ id: 'canvas', version: 1, skill: 'canvas-apps:canvas-app', validation: 'Locally tested; tenant validation required' }] }));
+  await page.route(/\/api\/delivery(?:\?|$)/, (route) => route.fulfill({ json: {
+    policy: { enabled: true, environmentUrl: 'https://development.crm4.dynamics.com' }, running: false, blockers: [], message: 'Independent quality review required',
+    releases: [{ id: 'release-1', repoId, head: 'abcdef123456', approvedAt: new Date().toISOString(), approvedBy: 'sherlock', plan: { name: 'Expense release', qaOwner: 'sherlock', requiredIssues: [1], components: ['Expenses'] } }],
+    runs: [{ id: 'run-1', releaseId: 'release-1', repoId, phase: 'reviewing', head: 'abcdef123456', startedAt: new Date().toISOString(), environmentUrl: 'https://development.crm4.dynamics.com', evidenceHash: 'verified-evidence-hash', appUrls: [], evidence: [], log: ['verifying'] }],
+  } }));
+  await page.goto('/?quality=low');
+  await expect(page.getByRole('button', { name: 'Enter the office' })).toBeEnabled();
+  repoId = await page.evaluate(() => (window as any).__swarmStore.getState().repos[0].id);
+  await page.getByRole('button', { name: 'Enter the office' }).click();
+  await expect(page.locator('.start')).toHaveCount(0);
+  await page.evaluate(() => { const store = (window as any).__swarmStore; store.setState({ demo: false }); store.getState().openOverlay({ kind: 'alm-kiosk' }); });
+  await page.getByText('Capabilities and implementation starters', { exact: true }).click();
+  await expect(page.getByText('Blocked — licence: Connect the required licence probe', { exact: false })).toBeVisible();
+  await expect(page.getByText('Locally tested; tenant validation required', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Request assigned QA review' })).toBeVisible();
+  await expect(page.getByText('Awaiting independent visual and recovery evidence review.', { exact: false })).toBeVisible();
+  await expect(page.getByText('Deployed and verified', { exact: true })).toHaveCount(0);
+});
+
+test('delivery shows installed skills separately from runtime access and limits one-account acceptance', async ({ page }) => {
+  await page.route('**/api/installed-skills', (route) => route.fulfill({ json: { fingerprint: 'a'.repeat(64), warnings: [], skills: [
+    { id: 'dataverse:dv-solution', platform: 'dataverse', version: '1.11.3', activation: 'unconfirmed', toolStatus: 'unverified' },
+  ] } }));
+  await page.route(/\/api\/delivery(?:\?|$)/, (route) => route.fulfill({ json: { policy: null, releases: [], blockers: [], running: false, message: 'Scoped development validation',
+    runs: [{ id: 'functional-run', repoId: 'fixture', phase: 'complete', head: 'abcdef123456', startedAt: new Date().toISOString(), environmentUrl: 'https://development.crm4.dynamics.com',
+      acceptance: { profile: 'functional-development', limitations: ['Functional development validation only; production readiness and employee/approver permission isolation are not certified.'] }, appUrls: [], evidence: [], log: [] }] } }));
+  await page.goto('/?quality=low');
+  await expect(page.getByRole('button', { name: 'Enter the office' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Enter the office' }).click();
+  await expect(page.locator('.start')).toHaveCount(0);
+  await page.evaluate(() => { const store = (window as any).__swarmStore; store.setState({ demo: false }); store.getState().openOverlay({ kind: 'alm-kiosk' }); });
+  await expect(page.getByText('Development functionality verified', { exact: true })).toBeVisible();
+  await expect(page.getByText('permission isolation are not certified.', { exact: false })).toBeVisible();
+  await expect(page.getByText('Deployed and verified', { exact: true })).toHaveCount(0);
+  await page.getByText('Capabilities and implementation starters', { exact: true }).click();
+  await page.getByText('Installed Power Platform skills (1)', { exact: true }).click();
+  await expect(page.getByText('dataverse:dv-solution', { exact: true })).toBeVisible();
+  await expect(page.getByText('runtime tools unverified', { exact: false })).toBeVisible();
+  await expect(page.getByText('plugin activation unconfirmed', { exact: false })).toBeVisible();
+});

@@ -33,7 +33,7 @@ await fs.writeFile(gitConfig, '[user]\n\tname = Sync Test\n\temail = sync-test@e
 process.env.GIT_CONFIG_GLOBAL = gitConfig;
 
 const { git } = await import('./exec.ts');
-const { leftoversInDesk, mainDir, prepareDesk, fixDeskBranch, syncMain: sync } = await import('./workspace.ts');
+const { leftoversInDesk, mainDir, prepareDesk, removeDesk, fixDeskBranch, syncMain: sync } = await import('./workspace.ts');
 // Most tests only care about the status line.
 const syncMain = async (...args: Parameters<typeof sync>) => (await sync(...args))?.status ?? null;
 
@@ -221,6 +221,28 @@ describe('syncMain', { timeout: 60_000 }, () => {
 });
 
 describe('PR fix worktrees', { timeout: 60_000 }, () => {
+  it('preserves unfinished work and unpublished commits during reuse and removal', async () => {
+    const r = await makeRepos();
+    const desk = await prepareDesk(r.fullName, { defaultBranch: 'main' }, 'ada', 'swarm/ada');
+    await fs.writeFile(path.join(desk, 'unfinished.txt'), 'retain this');
+    await expect(prepareDesk(r.fullName, { defaultBranch: 'main' }, 'ada', 'swarm/ada')).rejects.toThrow('local changes');
+    await expect(removeDesk(r.fullName, 'ada')).rejects.toThrow('local changes');
+    expect(await fs.readFile(path.join(desk, 'unfinished.txt'), 'utf8')).toBe('retain this');
+    await git(['add', 'unfinished.txt'], { cwd: desk });
+    await git(['commit', '-m', 'unfinished'], { cwd: desk });
+    const before = await head(desk);
+    await expect(prepareDesk(r.fullName, { defaultBranch: 'main' }, 'ada', 'swarm/ada')).rejects.toThrow('unpublished commits');
+    await expect(removeDesk(r.fullName, 'ada')).rejects.toThrow('unpublished commits');
+    expect(await head(desk)).toBe(before);
+  });
+  it('reports branch ownership without changing the original desk', async () => {
+    const r = await makeRepos();
+    const desk = await prepareDesk(r.fullName, { defaultBranch: 'main' }, 'grace', 'swarm/grace');
+    const before = await head(desk);
+    await expect(prepareDesk(r.fullName, { defaultBranch: 'main' }, 'ada', 'swarm/grace')).rejects.toThrow('already owned by worktree');
+    expect(await head(desk)).toBe(before);
+    await expect(prepareDesk(r.fullName, { defaultBranch: 'main' }, '../main', 'swarm/invalid')).rejects.toThrow('Invalid desk path');
+  });
   it('lets another developer fix a PR while preserving the author desk and remote branch', async () => {
     const r = await makeRepos();
     const remoteBranch = 'swarm/issue-8-grace';

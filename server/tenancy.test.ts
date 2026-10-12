@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { activeEnvironment, createTenancyService, parsePacProfiles, type TenancyRunner } from './tenancy.ts';
+import { activeEnvironment, createTenancyService, parsePacProfiles, resolveTenancyCommand, type TenancyRunner } from './tenancy.ts';
 import { loginSchema, parseBody, selectSchema } from './requestSchemas.ts';
 
 const profiles = '[1] * UNIVERSAL Dev Sandbox https://org.crm.dynamics.com/ user@example.com Public User';
+it('accepts an existing absolute executable without searching PATH', () => {
+  expect(resolveTenancyCommand(process.execPath)).toEqual({ file: process.execPath, args: [] });
+});
 const services: ReturnType<typeof createTenancyService>[] = [];
 afterEach(() => { for (const service of services.splice(0)) service.close(); vi.useRealTimers(); });
 function make(runner: TenancyRunner, demo = false) { const service = createTenancyService(demo, runner); services.push(service); return service; }
@@ -15,6 +18,15 @@ function runner() {
   return { run, start, stop, output: (text: string) => output(text), ended: (error?: string) => ended(error) };
 }
 describe('Tenancy service', () => {
+  it('defaults to interactive sign-in and only requests device code explicitly', () => {
+    const r = runner(); const service = make(r);
+    service.login({ interactive: true });
+    expect(r.start.mock.calls[0][0]).not.toContain('--deviceCode');
+    r.ended(); const job = service.login({ interactive: true, authMethod: 'device-code' });
+    expect(r.start.mock.calls[1][0]).toContain('--deviceCode');
+    r.output('AADSTS53003: device code blocked by Conditional Access'); r.ended('failed');
+    expect(service.loginStatus(job.id).message).toContain('Conditional Access');
+  });
   it('uses PAC profile identity and returns unknown tenant metadata without invention', () => {
     const info = parsePacProfiles(profiles);
     expect(info.user).toBe('user@example.com'); expect(info.tenantId).toBe(''); expect(info.tenantDomain).toBe('');
