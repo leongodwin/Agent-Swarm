@@ -47,3 +47,16 @@ it('reuses one bounded inventory for multiple declarations',async()=>{
   const read=request([index,{...index,SchemaName:'exp_Other_Key',MetadataId:'22222222-2222-4222-8222-222222222222'}]);
   await verifyTableStructure({keys:[key,{...key,schemaName:'exp_Other_Key'}]},'exp_report',read);expect(read).toHaveBeenCalledOnce();
 });
+it.each([
+  ['Delete','NoCascade'],['Delete','Active'],['Delete','UserOwned'],
+  ...['Assign','Share','Unshare','Reparent'].flatMap(action=>[[action,'RemoveLink'],[action,'Restrict']]),
+  ...['Active','UserOwned','RemoveLink','Restrict'].map(value=>['Merge',value]),
+])('rejects the invalid %s=%s contract before metadata or manifest admission',async(action,value)=>{
+  const invalid={...relation,cascade:{...relation.cascade,[action]:value}},read=request([]);
+  expect(tableStructureContract.safeParse({relationships:[invalid]}).success).toBe(false);
+  expect(targetActionSchema.safeParse({id:'schema',type:'schema-check',component:'table',columns:[{name:'exp_code',type:'String',required:'None'}],structure:{relationships:[invalid]}}).success).toBe(false);
+  await expect(verifyTableStructure({relationships:[invalid]} as any,'exp_report',read)).rejects.toThrow();expect(read).not.toHaveBeenCalled();
+});
+it.each(['Cascade','RemoveLink','Restrict'])('preserves documented Delete=%s contracts',value=>{
+  expect(tableStructureContract.safeParse({relationships:[{...relation,cascade:{Delete:value,Assign:'Active',Share:'UserOwned',Unshare:'NoCascade',Reparent:'Cascade',Merge:'NoCascade'}}]}).success).toBe(true);
+});

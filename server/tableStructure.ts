@@ -5,7 +5,10 @@ const logical=z.string().regex(/^[a-z_][a-z0-9_]*$/);
 const schemaName=z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(200);
 const guid=z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i);
 const cascade=z.enum(['NoCascade','Cascade','Active','UserOwned','RemoveLink','Restrict']);
-const cascadeContract=z.strictObject({Delete:cascade,Assign:cascade.optional(),Share:cascade.optional(),Unshare:cascade.optional(),Reparent:cascade.optional(),Merge:cascade.optional(),Archive:cascade.optional(),RollupView:cascade.optional()});
+// Microsoft documents different legal values for each public cascade action.
+// A value being in CascadeType does not make it valid for Delete/Assign/etc.
+const publicCascade=z.enum(['NoCascade','Cascade','Active','UserOwned']);
+const cascadeContract=z.strictObject({Delete:z.enum(['Cascade','RemoveLink','Restrict']),Assign:publicCascade.optional(),Share:publicCascade.optional(),Unshare:publicCascade.optional(),Reparent:publicCascade.optional(),Merge:z.enum(['NoCascade','Cascade']).optional(),Archive:cascade.optional(),RollupView:cascade.optional()});
 export const relationshipContract=z.discriminatedUnion('kind',[
   z.strictObject({kind:z.literal('one-to-many'),schemaName,referencedEntity:logical,referencedAttribute:logical,referencingEntity:logical,referencingAttribute:logical,cascade:cascadeContract}),
   z.strictObject({kind:z.literal('many-to-many'),schemaName,entity1:logical,entity2:logical,intersectEntity:logical}),
