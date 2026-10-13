@@ -359,6 +359,14 @@ export function codexCapacityIdle(screen:string):boolean {
     && !/esc to interrupt|\bWorking\s*\(|\bThinking\s*\(/i.test(plain);
 }
 
+/** Recovery observation only: an idle retained CLI does not prove task success. */
+export function codexRecoveredIdle(screen:string):boolean {
+  const plain=screen.replace(ANSI,'').replace(/\r/g,'');
+  return /^\s*Worked for \d[^\n]*$/m.test(plain)
+    && /^\s*›\s*Ask Codex to do anything\s*$/m.test(plain)
+    && !/esc to interrupt|\bWorking\s*\(|\bThinking\s*\(/i.test(plain);
+}
+
 export function startCliSession(opts: SessionOptions, callbacks: SessionCallbacks): SessionHandle {
   const term = opts.terminal!;
   // A follow-up to the session a CLI is still waiting in picks that CLI up again, and so does an office that restarted
@@ -389,6 +397,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   let lastText = '';
   let turnError: string | null = null; // the turn failed (OpenCode reports errors separately from going idle)
   let begun = false; // the CLI took its first prompt
+  let recoveryPending = false;
   let finishTimer: NodeJS.Timeout | undefined;
   let bootTimer: NodeJS.Timeout | undefined;
   let screenTimer: NodeJS.Timeout | undefined;
@@ -416,7 +425,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   };
 
   /** The session is over. A developer's CLI that ended its turn normally stays at its prompt (keep); others close. */
-  const finish = (r: Omit<SessionResult, 'costUsd' | 'turns'>, keep = false) => {
+  const finish = (r: Omit<SessionResult, 'costUsd' | 'turns'>, keep = false, preserveRecovery = false) => {
     if (done) return;
     done = true;
     for (const t of [finishTimer, bootTimer]) clearTimeout(t);
@@ -428,7 +437,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     const l = live;
     if (l && lives.get(term) === l) {
       l.session = null;
-      if (keep && opts.keepAlive && l.proc) waitAtPrompt(l);
+      if (keep && (opts.keepAlive || preserveRecovery) && l.proc) waitAtPrompt(l);
       else endLive(l);
     }
     cb.tool(null);
@@ -437,22 +446,35 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
 
   /** A turn ended: finished, unless the CLI picks up another prompt within the grace period. */
   const turnEnded = (text: string) => {
+    recoveryPending = false;
     lastText = text;
     cb.tool(null);
     clearTimeout(finishTimer);
     finishTimer = setTimeout(() => finish({ ok: !turnError, text: lastText, errors: turnError ? [turnError] : [] }, true), FINISH_GRACE_MS);
   };
   const busy = () => {
+    recoveryPending = false;
     begun = true;
     clearTimeout(finishTimer);
   };
   const monitorCapacity=()=>{
     if(cli!=='codex')return;
     let previous='';
+    let idleSince=0;
     capacityTimer=setInterval(()=>{
       if(done){clearInterval(capacityTimer);return;}
       const screen=term.screen();
-      if(!codexCapacityIdle(screen)){previous='';return;}
+      if(!codexCapacityIdle(screen)){
+        if(recoveryPending && codexRecoveredIdle(screen)){
+          if(screen!==previous){previous=screen;idleSince=Date.now();return;}
+          if(Date.now()-idleSince>=FINISH_GRACE_MS){
+            const error='Retained Codex terminal is idle after restart without a completion signal. Task outcome is unverified; review its artifacts before retrying.';
+            log([{kind:'error',text:error}]);
+            finish({ok:false,text:'',errors:[error]},true,true);
+          }
+        }else{previous='';idleSince=0;}
+        return;
+      }
       if(screen!==previous){previous=screen;return;}
       const error='Codex selected model is at capacity; the task did not complete. Retry when capacity is available or choose a model in the agent settings.';
       log([{kind:'error',text:error}]);
@@ -686,6 +708,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     if (live.resumeId) cb.sessionId(live.resumeId);
     if (opts.typed || opts.reattach) busy(); // typed at the prompt, or still at it after a restart: already running
     else handle.send(opts.prompt);
+    recoveryPending = !!opts.reattach;
     shotTimer = setInterval(collectShots, 2000);
     monitorCapacity();
     return handle;

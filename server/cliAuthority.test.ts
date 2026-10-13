@@ -60,6 +60,35 @@ it('denies an actual CLI hook when task authority is revoked during asynchronous
   handle.stop();
 });
 
+it.each(['idle','changing','active','follow-up','completion'] as const)('reconciles retained idle Codex conservatively: %s',async mode=>{
+  vi.useFakeTimers();native.kill.mockClear();
+  let screen='';
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>screen} as unknown as AgentTerminal;
+  const options:SessionOptions={cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'qa',agentId:'synthetic-recovery',cli:'codex',terminal:term,keepAlive:true,authorizeTool:()=>null};
+  const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
+  startCliSession(options,callbacks);
+  await handleHook(native.token,{hook_event_name:'Stop',last_assistant_message:'previous result'});
+  await vi.advanceTimersByTimeAsync(3000);callbacks.finished.mockClear();
+  const handle=startCliSession({...options,keepAlive:false,reattach:true},callbacks);
+  screen='Worked for 19m 44s • 12:06\n› Ask Codex to do anything';
+  await vi.advanceTimersByTimeAsync(1000);expect(callbacks.finished).not.toHaveBeenCalled();
+  if(mode==='active')screen+='\nWorking (1s)';
+  if(mode==='follow-up')handle.send('authorized synthetic follow-up');
+  if(mode==='completion')await handleHook(native.token,{hook_event_name:'Stop',last_assistant_message:'actual recovered result'});
+  if(mode==='changing'){
+    for(let i=0;i<4;i++){screen+=' ';await vi.advanceTimersByTimeAsync(1000);}
+  }else await vi.advanceTimersByTimeAsync(3000);
+  if(mode==='idle'){
+    expect(callbacks.finished).toHaveBeenCalledOnce();
+    expect(callbacks.finished.mock.calls[0][0]).toMatchObject({ok:false,text:'',errors:[expect.stringContaining('outcome is unverified')]});
+    expect(native.kill).not.toHaveBeenCalled();
+    const denied=await handleHook(native.token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});
+    expect(JSON.stringify(denied)).toContain('No active admitted task');
+  }else if(mode==='completion')expect(callbacks.finished.mock.calls[0][0]).toMatchObject({ok:true,text:'actual recovered result'});
+  else expect(callbacks.finished).not.toHaveBeenCalled();
+  handle.stop();
+});
+
 it('denies pre-tool execution from an idle CLI even when request-local governance would allow it', async () => {
   setToolGovernanceGate(async()=>({status:'allowed',reason:'synthetic'}));
   session(()=>null);

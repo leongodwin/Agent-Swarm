@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codexCapacityIdle,copilotResponse, lostConversation, resumableSession } from './cliRunner.ts';
+import { codexCapacityIdle,codexRecoveredIdle,copilotResponse, lostConversation, resumableSession } from './cliRunner.ts';
 
 describe('copilotResponse', () => {
   it('returns plain text without terminal styling', () => {
@@ -38,4 +38,10 @@ describe('Codex capacity idle observation',()=>{
   const failed='■ Selected model is at capacity. Please try a different model.\n› Ask Codex to do anything\n(the office restarted)';
   it('recognizes a native failure at its idle prompt after restart',()=>expect(codexCapacityIdle(failed)).toBe(true));
   it.each(['Selected model is at capacity.\n› Ask Codex to do anything',failed+'\nesc to interrupt',failed+'\nWorking (10s)',failed.replace('› Ask Codex to do anything','Sign in')])('rejects task text, active work and non-idle screens',screen=>expect(codexCapacityIdle(screen)).toBe(false));
+});
+
+describe('retained Codex idle recovery observation',()=>{
+  const idle='• Work finished\n  Worked for 19m 44s • 12:06\n› Ask Codex to do anything\n(the office restarted)';
+  it('recognizes native completed-turn footer and idle prompt',()=>expect(codexRecoveredIdle(idle)).toBe(true));
+  it.each([idle+'\nesc to interrupt',idle+'\nWorking (10s)',idle+'\nThinking (2s)',idle.replace('Worked for 19m 44s','Task says completed'),idle.replace('› Ask Codex to do anything','› pending prompt')])('rejects active and incomplete observations',screen=>expect(codexRecoveredIdle(screen)).toBe(false));
 });
