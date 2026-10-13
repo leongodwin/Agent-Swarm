@@ -14,19 +14,27 @@ it('denies missing, invalid and failed session authorization before issuing poli
  for(const authorize of [undefined,()=>'',()=>{throw new Error('secret failure');}]) {
    expect((await governSessionTool('Read',{},checkpoint,authorize)).status).not.toBe('allowed');
  }
- expect(calls).toBe(0); expect(sessionAuthority(()=>null)).toBeNull();
- expect(JSON.stringify(sessionAuthority(()=>{throw new Error('secret failure');}))).not.toContain('secret failure');
+ expect(calls).toBe(0); expect(await sessionAuthority(()=>null)).toBeNull();
+ expect(JSON.stringify(await sessionAuthority(()=>{throw new Error('secret failure');}))).not.toContain('secret failure');
 });
 
 it('checks session ownership again after asynchronous governance before granting execution', async () => {
  let active=true;let finish!:()=>void;
  setToolGovernanceGate(()=>new Promise(resolve=>{finish=()=>resolve({status:'allowed',reason:'synthetic'});}));
  const pending=governSessionTool('Read',{},checkpoint,()=>active?null:'Task was cancelled');
+ for(let i=0;i<20&&!finish;i++)await Promise.resolve();
  active=false; finish(); expect(await pending).toEqual({status:'blocked',reason:'Task was cancelled'});
  setToolGovernanceGate(async()=>({status:'blocked',reason:'Policy denied'}));
  expect(await governSessionTool('Read',{},checkpoint,()=>null)).toEqual({status:'blocked',reason:'Policy denied'});
  setToolGovernanceGate(async()=>({status:'allowed',reason:'synthetic'}));
  expect((await governSessionTool('Read',{},checkpoint,()=>null)).status).toBe('allowed');
+});
+
+it('awaits asynchronous session readiness and denies failed promises without exposing diagnostics',async()=>{
+ expect(await sessionAuthority(async()=>null)).toBeNull();
+ expect(await sessionAuthority(async()=> 'Authentication expired')).toEqual({status:'blocked',reason:'Authentication expired'});
+ const failed=await sessionAuthority(async()=>{throw new Error('secret provider diagnostic');});
+ expect(failed?.status).toBe('unavailable');expect(JSON.stringify(failed)).not.toContain('secret provider diagnostic');
 });
 afterEach(async () => {setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'}));await Promise.all(roots.splice(0).map(root=>fs.rm(root,{recursive:true,force:true})));});
 

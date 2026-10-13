@@ -171,16 +171,19 @@ export class CapabilityService {
   async configure(repoId: string, input: unknown) {
     if (this.stop.signal.aborted) throw new Error('Capability service is closing');
     if (this.demo) throw new HttpError(409, 'Demo cannot configure live capability probes');
-    this.configs[repoId] = capabilityConfigSchema.parse(input); this.cache.delete(repoId); delete this.results[repoId]; await this.save(); this.onChange();
+    this.configs[repoId] = capabilityConfigSchema.parse(input);
+    for (const [key, entry] of this.cache) if (entry.result.repoId === repoId) this.cache.delete(key);
+    delete this.results[repoId]; await this.save(); this.onChange();
   }
   async check(repoId: string, cwd: string, environmentUrl: string | undefined, cli = 'git', force = false): Promise<CapabilityResult> {
     if (this.stop.signal.aborted) throw new Error('Capability service is closing');
     if (this.demo) return { repoId, status: 'ready', checkedAt: new Date().toISOString(), expiresAt: new Date().toISOString(), checks: [] };
     const config = this.configs[repoId];
-    const hash = crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl, cli })).digest('hex');
-    const cache = this.cache.get(repoId);
-    if (!force && cache?.key === hash && Date.parse(cache.result.expiresAt) > Date.now()) return structuredClone(cache.result);
+    const hash = crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl, cli, cwd: path.resolve(cwd) })).digest('hex');
     const pendingKey = `${repoId}:${hash}`;
+    for (const [key, entry] of this.cache) if (Date.parse(entry.result.expiresAt) <= Date.now()) this.cache.delete(key);
+    const cache = this.cache.get(pendingKey);
+    if (!force && cache?.key === hash && Date.parse(cache.result.expiresAt) > Date.now()) return structuredClone(cache.result);
     if (this.pending.has(pendingKey)) return this.pending.get(pendingKey)!;
     const work = (async () => {
       const checks: CapabilityResult['checks'] = [];
@@ -198,7 +201,9 @@ export class CapabilityService {
       if (JSON.stringify(config) !== JSON.stringify(this.configs[repoId])) checks.push({ id: 'configuration-changed', category: 'environment', passed: false, detail: 'Configuration changed during the check', remedy: 'Refresh readiness with the latest configuration' });
       const result: CapabilityResult = { repoId, configHash: crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl })).digest('hex'), checkedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), status: checks.every((c) => c.passed) ? 'ready' : 'blocked', checks };
       const changed = JSON.stringify(this.results[repoId]?.checks) !== JSON.stringify(result.checks);
-      this.results[repoId] = result; this.cache.set(repoId, { key: hash, result }); await this.save(); if (changed) this.onChange(); return structuredClone(result);
+      this.results[repoId] = result;
+      if (this.cache.size >= 1024) {const oldest = this.cache.keys().next().value; if (oldest !== undefined) this.cache.delete(oldest);}
+      this.cache.set(pendingKey, { key: hash, result }); await this.save(); if (changed) this.onChange(); return structuredClone(result);
     })().finally(() => this.pending.delete(pendingKey));
     this.pending.set(pendingKey, work); return work;
   }

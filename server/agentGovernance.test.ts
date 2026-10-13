@@ -25,7 +25,9 @@ it('revokes SDK hook and permission grants when the task ends during governance 
  let active=true; let complete!: () => void;
  setToolGovernanceGate(()=>new Promise(resolve=>{complete=()=>resolve({status:'allowed',reason:'Synthetic gate passed'});}));
  const opts=await options(()=>active?null:'Task revoked');
- const pending=opts.canUseTool('Read',{},{}); active=false; complete();
+ const pending=opts.canUseTool('Read',{},{});
+ for(let i=0;i<20&&!complete;i++)await Promise.resolve();
+ active=false; complete();
  expect(await pending).toMatchObject({behavior:'deny',message:'Task revoked'});
  const result=await opts.hooks.PreToolUse[0].hooks[0]({hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}},'tool-4',{});
  expect(result.hookSpecificOutput.permissionDecision).toBe('deny');

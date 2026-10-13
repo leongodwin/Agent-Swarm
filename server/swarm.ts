@@ -360,6 +360,7 @@ export class Swarm {
   private messageSeq = 1;
   private agentRt = new Map<string, AgentRuntime>();
   private taskGenerations = new Map<string, number>();
+  private taskStops = new Map<string, AbortController>();
   private workerAdmissions = new Map<string, { generation: number; context: string; resume?: string; retainedCli?: AgentCli }>();
   private deskWriters = new Map<string, SerialWriter>();
   private deskOperation<T>(a: PersistedAgent, action: () => Promise<T>): Promise<T> {
@@ -370,6 +371,8 @@ export class Swarm {
 
   private taskGeneration(a: PersistedAgent) { return this.taskGenerations.get(a.id) ?? 0; }
   private reserveTask(a: PersistedAgent) {
+    this.taskStops.get(a.id)?.abort();
+    this.taskStops.set(a.id, new AbortController());
     this.workerAdmissions.delete(a.id);
     const generation = this.taskGeneration(a) + 1; this.taskGenerations.set(a.id, generation); return generation;
   }
@@ -1448,6 +1451,7 @@ export class Swarm {
     if (!force && a.role === 'qa' && this.state.agents.filter((x) => x.repoId === a.repoId && x.role === 'qa').length <= 1) {
       throw new HttpError(409, `${a.name} is the only QA tester on this floor, and every floor needs at least one.`);
     }
+    this.reserveTask(a);
     for (const r of this.state.requests.filter((x) => x.kind === 'let-go' && x.agentId === id && x.status === 'pending')) {
       this.decide(r, { status: 'approved', note: 'They were let go directly.', decidedBy: 'manager' });
     }
@@ -1794,16 +1798,20 @@ export class Swarm {
     const cli = retainedCli ?? (!terminal ? 'node' : resume && a.sessionCli && a.role !== 'ceo' ? a.sessionCli : a.cli || this.state.settings.defaultCli);
     const projects = [repo, ...this.linkedRepos(repo)];
     if (projects.length !== repo.links.length + 1) return 'A linked project is no longer connected';
-    const blocker = this.backend.demo ? null : await this.boundedReadiness(async () => {
+    const blocker = await this.projectReadiness(projects, cli, this.taskStops.get(a.id)?.signal);
+    if (context !== this.workerContext(a, repo, resume, retainedCli)) return 'Execution context changed during readiness verification; retry with fresh capability checks';
+    if (blocker === null && this.ownsTask(a, generation)) this.workerAdmissions.set(a.id, {generation, context, resume, retainedCli});
+    return blocker;
+  }
+
+  private projectReadiness(projects: PersistedRepo[], cli: string, signal?: AbortSignal) {
+    return this.backend.demo ? Promise.resolve(null) : this.boundedReadiness(async () => {
       const checks = await Promise.all(projects.map(async project => {
         const result = await this.capabilityPreflight(project.id, cli);
         return result === null ? null : `${projects.length > 1 ? `${project.id}: ` : ''}${result || 'Capability decision is unavailable'}`;
       }));
       return checks.find(result => result !== null) ?? null;
-    }, 'Capability');
-    if (context !== this.workerContext(a, repo, resume, retainedCli)) return 'Execution context changed during readiness verification; retry with fresh capability checks';
-    if (blocker === null && this.ownsTask(a, generation)) this.workerAdmissions.set(a.id, {generation, context, resume, retainedCli});
-    return blocker;
+    }, 'Capability', signal);
   }
 
   private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo, resume?: string, generation = this.taskGeneration(a)) {
@@ -1865,13 +1873,22 @@ export class Swarm {
     const live = () => !completed && this.ownsTask(a, generation);
     const admission = this.workerAdmissions.get(a.id)!;
     const checkpointCli = a.sessionCli;
-    const authorizeTool: SessionAuthorization = () => {
+    const authority = () => {
       if (!live() || a.status !== 'working') return 'This task no longer owns the session; execution denied';
       return admission.context === this.workerContext(a, repo, admission.resume, admission.retainedCli, checkpointCli)
         ? null : 'Execution configuration changed; stop and retry with fresh readiness';
     };
     a.status = 'working';
     const how = this.sessionRuntime(a, resumeSessionId, mode === 'reattach' ? a.sessionCli ?? undefined : undefined);
+    const projects = [repo, ...this.linkedRepos(repo)];
+    let refreshing: Promise<string | null> | undefined;
+    const signal = this.taskStops.get(a.id)?.signal;
+    const authorizeTool: SessionAuthorization = async () => {
+      const denied = authority(); if (denied) return denied;
+      refreshing ??= this.projectReadiness(projects, how.cli ?? 'node', signal).finally(() => {refreshing = undefined;});
+      const blocker = await refreshing;
+      return authority() ?? blocker;
+    };
     this.emitAgent(a);
     const handle = this.backend.startSession(
       {
@@ -3066,7 +3083,7 @@ export class Swarm {
     if (!this.backend.demo) {
       if (!this.backend.terminals) blocker = 'CEO terminal runtime is unavailable; install the supported terminal runtime and refresh readiness';
       else {
-        blocker = await this.boundedReadiness(() => this.ceoPreflight([...scopeIds]), 'CEO');
+        blocker = await this.boundedReadiness(() => this.ceoPreflight([...scopeIds]), 'CEO', this.taskStops.get(a.id)?.signal);
       }
     }
     if (this.closed) return;
@@ -3093,8 +3110,16 @@ export class Swarm {
     const how = this.sessionRuntime(a, job.kind === 'chat' ? (a.sessionId ?? undefined) : undefined);
     let completed = false;
     const live = () => !completed && ownsJob() && a.status === 'working';
-    const authorizeTool: SessionAuthorization = () => live()
+    const authority = () => live()
       ? null : 'This CEO job no longer owns the session; execution denied';
+    const signal = this.taskStops.get(a.id)?.signal;
+    let refreshing: Promise<string | null> | undefined;
+    const authorizeTool: SessionAuthorization = async () => {
+      const denied = authority(); if (denied) return denied;
+      refreshing ??= (this.backend.demo ? Promise.resolve(null) : this.boundedReadiness(() => this.ceoPreflight(scopeIds), 'CEO tool', signal)).finally(() => {refreshing = undefined;});
+      const blocker = await refreshing;
+      return authority() ?? blocker;
+    };
     const handle = this.backend.startSession(
       {
         cwd: CEO_DIR,
@@ -3163,15 +3188,15 @@ export class Swarm {
     this.emitAgent(a); this.emitCeo(); this.save();
   }
 
-  private boundedReadiness(check: () => Promise<string | null>, label: string): Promise<string | null> {
+  private boundedReadiness(check: () => Promise<string | null>, label: string, taskSignal?: AbortSignal): Promise<string | null> {
     return new Promise(resolve => {
       let settled = false;
-      const signal = this.lifecycleStop.signal;
+      const signal = taskSignal ? AbortSignal.any([this.lifecycleStop.signal, taskSignal]) : this.lifecycleStop.signal;
       const finish = (result: string | null) => {
         if (settled) return;
         settled = true; clearTimeout(timer); signal.removeEventListener('abort', aborted); resolve(result);
       };
-      const aborted = () => finish(`${label} readiness cancelled by office shutdown`);
+      const aborted = () => finish(`${label} readiness cancelled by ${this.lifecycleStop.signal.aborted ? 'office shutdown' : 'task cancellation'}`);
       const timer = setTimeout(() => finish(`${label} readiness expired after 90 seconds; refresh capabilities before retrying`), 90_000);
       timer.unref(); signal.addEventListener('abort', aborted, {once: true});
       if (signal.aborted) {aborted(); return;}

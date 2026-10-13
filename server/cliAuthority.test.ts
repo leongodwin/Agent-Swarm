@@ -35,6 +35,7 @@ it('denies an actual CLI hook when task authority is revoked during asynchronous
   setToolGovernanceGate(()=>new Promise(resolve=>{finish=()=>resolve({status:'allowed',reason:'synthetic'});}));
   const handle=session(()=>active?null:'Task revoked');
   const pending=handleHook(native.token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});
+  for(let i=0;i<20&&!finish;i++)await Promise.resolve();
   active=false;finish();
   expect(await pending).toMatchObject({hookSpecificOutput:{permissionDecision:'deny'}});
   handle.stop();

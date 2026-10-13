@@ -25,7 +25,7 @@ function backend() {
     demo: false, terminals: false,
     user: vi.fn(async () => 'synthetic-user'), reconnectClis: vi.fn<Backend['reconnectClis']>(async () => []), hooksReady: vi.fn(),
     detectClis: vi.fn(async () => []), releaseClis: vi.fn(async () => {}),
-    setLocalPath: vi.fn(), ensureClone: vi.fn(async () => {}), releaseDesk: vi.fn(async () => {}),
+    setLocalPath: vi.fn(), ensureClone: vi.fn(async () => {}), releaseDesk: vi.fn(async () => {}), removeDesk: vi.fn(async () => {}),
     listIssues: vi.fn(async () => [issue]), listPulls: vi.fn(async (): Promise<PullInfo[]> => []), syncMain: vi.fn(async () => null),
     prDetails: vi.fn(async () => ({state: 'OPEN'})),
     commentPull: vi.fn(async () => 'https://example.test/comment'), mergePull: vi.fn(async () => {}),
@@ -386,10 +386,10 @@ it('keeps tool authority through a legitimate checkpoint update and revokes it o
   await swarm.assign(agent.id,1);for(let i=0;i<60&&!fake.startSession.mock.calls.length;i++)await Promise.resolve();
   const opts=fake.startSession.mock.calls[0][0] as SessionOptions;
   const callbacks=fake.startSession.mock.calls[0][1];
-  expect(opts.authorizeTool?.()).toBeNull();callbacks.sessionId('synthetic-runtime-checkpoint');
-  expect(opts.authorizeTool?.()).toBeNull();
-  swarm.updateAgent(agent.id,{model:'claude-changed'});expect(opts.authorizeTool?.()).toContain('configuration changed');
-  swarm.stopAgent(agent.id);expect(opts.authorizeTool?.()).toContain('no longer owns');
+  expect(await opts.authorizeTool?.()).toBeNull();callbacks.sessionId('synthetic-runtime-checkpoint');
+  expect(await opts.authorizeTool?.()).toBeNull();
+  swarm.updateAgent(agent.id,{model:'claude-changed'});expect(await opts.authorizeTool?.()).toContain('configuration changed');
+  swarm.stopAgent(agent.id);expect(await opts.authorizeTool?.()).toContain('no longer owns');
 });
 
 it('revokes worker authority on completion before a replacement is dispatched', async () => {
@@ -397,7 +397,52 @@ it('revokes worker authority on completion before a replacement is dispatched', 
   await swarm.assign(agent.id,1);for(let i=0;i<60&&!fake.startSession.mock.calls.length;i++)await Promise.resolve();
   const opts=fake.startSession.mock.calls[0][0] as SessionOptions;
   fake.startSession.mock.calls[0][1].finished({ok:false,text:'synthetic',costUsd:0,turns:1,errors:['synthetic failure']});
-  expect(opts.authorizeTool?.()).toContain('no longer owns');
+  expect(await opts.authorizeTool?.()).toContain('no longer owns');
+});
+
+it('rechecks running worker prerequisites, shares concurrent refreshes and recovers after a transient blocker',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  await swarm.assign(agent.id,1);for(let i=0;i<60&&!fake.startSession.mock.calls.length;i++)await Promise.resolve();
+  const authorize=(fake.startSession.mock.calls[0][0] as SessionOptions).authorizeTool!;
+  let checked!:(value:string|null)=>void;
+  const preflight=vi.fn(()=>new Promise<string|null>(resolve=>{checked=resolve;}));swarm.capabilityPreflight=preflight;
+  const first=authorize();const second=authorize();
+  for(let i=0;i<20&&!checked;i++)await Promise.resolve();
+  expect(preflight).toHaveBeenCalledExactlyOnceWith('synthetic/repo','node');checked('Synthetic authentication expired');
+  expect(await first).toContain('authentication expired');expect(await second).toContain('authentication expired');
+  swarm.capabilityPreflight=vi.fn(async()=>null);expect(await authorize()).toBeNull();
+  expect(fake.startSession).toHaveBeenCalledOnce();
+});
+
+it.each(['stop','fire'])('cancels a pending tool refresh immediately on worker %s and cannot grant from a late reply',async action=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  await swarm.assign(agent.id,1);for(let i=0;i<60&&!fake.startSession.mock.calls.length;i++)await Promise.resolve();
+  const authorize=(fake.startSession.mock.calls[0][0] as SessionOptions).authorizeTool!;
+  let checked!:(value:string|null)=>void;swarm.capabilityPreflight=()=>new Promise(resolve=>{checked=resolve;});
+  const pending=authorize();for(let i=0;i<20&&!checked;i++)await Promise.resolve();
+  expect(checked).toBeTypeOf('function');if(action==='stop')swarm.stopAgent(agent.id);else swarm.fireAgent(agent.id);
+  expect(await pending).toContain('no longer owns');checked(null);
+  expect(await authorize()).toContain('no longer owns');
+});
+
+it('denies changed worker configuration while a tool refresh is pending',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  await swarm.assign(agent.id,1);for(let i=0;i<60&&!fake.startSession.mock.calls.length;i++)await Promise.resolve();
+  const authorize=(fake.startSession.mock.calls[0][0] as SessionOptions).authorizeTool!;
+  let checked!:(value:string|null)=>void;swarm.capabilityPreflight=()=>new Promise(resolve=>{checked=resolve;});
+  const pending=authorize();for(let i=0;i<20&&!checked;i++)await Promise.resolve();
+  swarm.updateAgent(agent.id,{model:'claude-changed'});checked(null);
+  expect(await pending).toContain('configuration changed');
+});
+
+it('bounds a stalled worker tool refresh and ignores its late successful response',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  await swarm.assign(agent.id,1);for(let i=0;i<60&&!fake.startSession.mock.calls.length;i++)await Promise.resolve();
+  const authorize=(fake.startSession.mock.calls[0][0] as SessionOptions).authorizeTool!;
+  let checked!:(value:string|null)=>void;swarm.capabilityPreflight=()=>new Promise(resolve=>{checked=resolve;});
+  const pending=authorize();for(let i=0;i<20&&!checked;i++)await Promise.resolve();
+  await vi.advanceTimersByTimeAsync(90001);expect(await pending).toContain('expired after 90 seconds');
+  checked(null);swarm.capabilityPreflight=async()=>null;expect(await authorize()).toBeNull();
 });
 
 it('does not send a checked follow-up after shutdown changes its session', async () => {
@@ -526,10 +571,22 @@ it('binds CEO tool authority to its active job and revokes it when stopped', asy
   swarm.messageCeo('Synthetic company review');await vi.advanceTimersByTimeAsync(150);
   await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
   const opts=fake.startSession.mock.calls[0][0] as SessionOptions;
-  expect(opts.authorizeTool?.()).toBeNull();swarm.stopAgent(CEO_ID);
-  expect(opts.authorizeTool?.()).toContain('no longer owns');
+  expect(await opts.authorizeTool?.()).toBeNull();swarm.stopAgent(CEO_ID);
+  expect(await opts.authorizeTool?.()).toContain('no longer owns');
   const result=await opts.office!.call('company_status',{});
   expect(result).toContain('no longer owns');
+});
+
+it('rechecks running CEO prerequisites and cancels pending refresh when its job stops',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  swarm.messageCeo('Synthetic CEO readiness');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  const authorize=(fake.startSession.mock.calls[0][0] as SessionOptions).authorizeTool!;
+  swarm.ceoPreflight=async()=> 'Synthetic Copilot prerequisites unavailable';
+  expect(await authorize()).toContain('prerequisites unavailable');
+  let checked!:(value:string|null)=>void;swarm.ceoPreflight=()=>new Promise(resolve=>{checked=resolve;});
+  const pending=authorize();for(let i=0;i<20&&!checked;i++)await Promise.resolve();
+  swarm.stopAgent(CEO_ID);expect(await pending).toContain('no longer owns');checked(null);
 });
 
 it.each(['missing', 'empty', 'blocked'])('blocks %s CEO readiness without dropping the job or spamming retries', async mode => {

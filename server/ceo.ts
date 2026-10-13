@@ -58,7 +58,7 @@ const EFFORT = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 type OfficeToolDefinition = NonNullable<Parameters<typeof createSdkMcpServer>[0]['tools']>[number];
 function authorizeDefinitions<T extends OfficeToolDefinition>(defs: T[], authorize?: SessionAuthorization): T[] {
   return defs.map(def => ({...def, handler: async (args: Parameters<OfficeToolDefinition['handler']>[0], extra: Parameters<OfficeToolDefinition['handler']>[1]) => {
-    const denied = authorize ? sessionAuthority(authorize) : null;
+    const denied = authorize ? await sessionAuthority(authorize) : null;
     if (denied) return {isError: true, content: [{type: 'text', text: denied.reason}]};
     return def.handler(args, extra);
   }}));

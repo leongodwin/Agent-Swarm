@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Tool-time prerequisite refresh
+
+Worker and CEO session authorization now supports asynchronous capability refresh before supported tool dispatch. Workers check their launch runtime and directly linked projects; the CEO checks its host and captured project scope. Concurrent requests share one in-flight refresh, then recheck task ownership and worker configuration before granting authority. Supported SDK/CLI hooks check authorization around request-local governance, and office MCP handlers await it before calling their handler.
+
+The production capability service retains its 60-second observation TTL. Cache/pending keys include project, configuration, environment, runtime and resolved workspace path. Mixed runtimes retain independent cache entries; configuration changes invalidate all entries for the project. Expired observations are removed, and the cache is bounded to 1,024 entries. This avoids repeated authentication/MCP probes on every tool while preventing reuse from a different workspace.
+
+Per-task abort signals wake admission/refresh waiters on cancellation, replacement or deletion; office shutdown also aborts them. Refreshes expire at the existing 90-second boundary, cannot grant from late replies and can recover after a transient blocker without starting a duplicate session. Provider operations already issued may continue; aborting the waiter does not prove native process termination. These are configured prerequisite checks, not complete model-account licensing, tenant schema/DLP certification or persistent authentication. No Copilot Studio work was resumed. Evidence: `.swarm-reliability/tool-readiness-coverage-2026-10-13.txt`, `tool-readiness-coverage-exit-2026-10-13.txt`, `tool-readiness-api-e2e-2026-10-13.txt`, and `tool-readiness-live-runtime-2026-10-13.json`.
+
 ## CEO callback ownership
 
 Every CEO dispatch receives a task generation in addition to its job identity. Stopping the CEO invalidates that generation, clears the active session/tool pointers and cancels the active job immediately. Late logs, tool/checkpoint updates, phone replies, usage limits and completion from that generation cannot change a replacement job. Completion is processed once, including when a backend completes synchronously before returning its handle. Failed-launch callbacks also remain invalid if the same queued job object is retried.

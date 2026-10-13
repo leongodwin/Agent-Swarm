@@ -68,6 +68,38 @@ it('binds scoped admission to configuration without invalidation from probe resu
   await service.configure('repo', {...config, environmentUrl: 'https://changed.crm4.dynamics.com'});
   expect(service.configurationFingerprint(['repo'])).not.toBe(bound);
 });
+
+it('does not reuse capability evidence from another workspace for the same project and runtime',async()=>{
+  const {root,service,probe}=await fixture();await service.configure('repo',config);
+  await service.check('repo',root,target,'node');const checked=probe.mock.calls.length;
+  await service.check('repo',path.join(root,'.'),target,'node');expect(probe).toHaveBeenCalledTimes(checked);
+  const moved=path.join(root,'moved-workspace');await service.check('repo',moved,target,'node');
+  expect(probe.mock.calls.length).toBeGreaterThan(checked);
+  expect(probe.mock.calls.at(-1)?.[1]).toBe(moved);
+});
+
+it('retains independent cached prerequisites for mixed runtimes and invalidates every scope on configuration change',async()=>{
+  const {root,service,probe}=await fixture();await service.configure('repo',config);
+  await service.check('repo',root,target,'node');await service.check('repo',root,target,'codex');
+  const count=probe.mock.calls.length;
+  await service.check('repo',root,target,'node');await service.check('repo',root,target,'codex');
+  expect(probe).toHaveBeenCalledTimes(count);
+  await service.configure('repo',config);
+  await service.check('repo',root,target,'node');await service.check('repo',root,target,'codex');
+  expect(probe.mock.calls.length).toBe(count*2);
+});
+
+it('refreshes expired capability evidence instead of authorizing with an old cached observation',async()=>{
+  const {root,service,probe}=await fixture();await service.configure('repo',config);
+  vi.useFakeTimers();
+  try {
+    await service.check('repo',root,target,'node');const count=probe.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60001);
+    probe.mockImplementation(async()=>{throw new Error('Synthetic credentials expired');});
+    const expired=await service.check('repo',root,target,'node');
+    expect(expired.status).toBe('blocked');expect(probe.mock.calls.length).toBeGreaterThan(count);
+  } finally {vi.useRealTimers();}
+});
 it('rejects incomplete plans, ambiguous MCP transports and workflow checks without freshness', () => {
   expect(capabilityConfigSchema.safeParse({ ...config, checks: config.checks.slice(1) }).success).toBe(false);
   expect(capabilityConfigSchema.safeParse({ ...config, checks: [...config.checks, { id: 'flow', category: 'workflow', remedy: 'Repair flow and inspect run history', probe: { kind: 'http', url: 'https://provider.test/status', pointer: ['ok'], equals: true } }] }).success).toBe(false);
