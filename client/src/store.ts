@@ -156,7 +156,7 @@ export const TOUR_WAYPOINTS: TourWaypoint[] = [
     z: 6.2,
     yaw: -Math.PI / 3,
     pitch: -0.08,
-    description: 'Principal Architect workstation synthesizing Well-Architected Framework HLDs with embedded Mermaid schematics.',
+    description: 'Requirements-derived architecture drafts, declared component scope and implementation review gates. Model synthesis remains pending.',
   },
 ];
 

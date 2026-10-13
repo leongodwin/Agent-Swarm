@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Architecture drafts and review boundaries
+
+The HLD generator no longer inserts a fixed field-service/Copilot architecture or labels generated text approved. It preserves supplied component scope and deliverables, marks output as a deterministic unreviewed draft, lists missing entity/workflow/security/licensing/runtime evidence and builds a review-required implementation outline. Topology edges group declared scope; they do not assert integrations. Missing data and workflow contracts remain explicit. Mermaid labels cannot introduce new statements through quotes, control characters or backslashes.
+
+The editor uses the selected project's recorded brief and declared tenant, with no Contoso/incident defaults. Users can declare components, inspect the outline and gaps, navigate tabs by keyboard and open it directly from the project console. Saving confirms a server-returned path and retains the returned draft for unchanged input. Long briefs collapse for readability. The 3D station/tour also identify this as draft work, rather than claiming deployed security, automatic synchronization or backlog integration.
+
+The authenticated route resolves filesystem paths from connected repositories and rejects caller paths, unknown/unavailable checkouts and Demo project writes. An isolated non-demo HTTP/filesystem regression verifies actual persistence; the Demo browser regression verifies editing, keyboard navigation and write denial. Neither proves tenant deployment or model synthesis. Actual synthesis/architecture review, durable structured draft reload, measured full-HLD-and-plan latency and the legacy commercial pricing/ROI model remain open. No real project HLD was overwritten during validation. Evidence: `.swarm-reliability/architecture-draft-coverage-2026-10-13.txt`, `architecture-draft-coverage-exit-2026-10-13.txt`, `architecture-draft-e2e-2026-10-13.txt`, `architecture-draft-ui-2026-10-13.png`, and `architecture-draft-live-ui-2026-10-13.png`.
+
 ## Restored capability evidence
 
 Capability startup validates saved plans with the same probe/schema rules as new configuration and validates result identities, timestamps, lifetimes, check IDs and status/check consistency. Reserved dictionary keys are rejected before parsing, avoiding silent prototype-key removal. State is bounded by file size and project/check limits. Only a genuinely missing file initializes empty state; malformed, oversized, contradictory or disappearing files fail closed and retain their original bytes. An uninitialized/failed service cannot configure probes or execute checks.

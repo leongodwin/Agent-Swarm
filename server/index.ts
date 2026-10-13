@@ -11,7 +11,7 @@ import { createDemoBackend } from './demo.ts';
 import { underLauncher } from './officeUpdate.ts';
 import { HttpError, Swarm } from './swarm.ts';
 import { generateProposal } from './proposalAgent.ts';
-import { generateHld } from './hldAgent.ts';
+import { registerArchitectureRoutes } from './architectureRoutes.ts';
 import { parseSolutionFolder } from '../shared/solutionParser.ts';
 import { scanDirectoryDlp } from './dlpScanner.ts';
 import { FeatureStore } from './features.ts';
@@ -29,7 +29,7 @@ import { ToolGovernanceService, setToolGovernanceGate } from './toolGovernance.t
 import { TenantDlpService } from './tenantDlp.ts';
 import { createDeliveryGovernance } from './deliveryGovernance.ts';
 import { OfficeShutdown } from './officeShutdown.ts';
-import { parseBody, proposalSchema, hldSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
+import { parseBody, proposalSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
 const runtimeStartedAt = new Date().toISOString();
@@ -296,12 +296,7 @@ app.post('/api/repos/:repo/onboard', route((req) => swarm.onboardFloor(repoId(re
 
 // Validated document generation; filesystem targets come from the connected repo.
 app.post('/api/proposals/generate', route((req) => generateProposal(parseBody(proposalSchema, req.body))));
-app.post('/api/hld/generate', route((req) => {
-  const { repoId: id, ...input } = parseBody(hldSchema, req.body);
-  const repo = id ? connectedRepo(id) : undefined;
-  if (repo && DEMO) throw new HttpError(409, 'Demo mode does not write project files');
-  return generateHld({ ...input, repoPath: repo?.checkoutPath || undefined });
-}));
+registerArchitectureRoutes(app,{demo:DEMO,connectedRepo});
 app.get('/api/repos/:repo/solution-architecture', route((req) => {
   const repo = connectedRepo(repoId(req));
   return parseSolutionFolder(repo.checkoutPath ?? null, DEMO);

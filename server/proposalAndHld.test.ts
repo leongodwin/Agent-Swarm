@@ -67,7 +67,7 @@ describe('Proposal Generator Agent', () => {
 });
 
 describe('High-Level Design (HLD) Document Generator Agent', () => {
-  it('generates Well-Architected Framework HLD and Mermaid schematics', async () => {
+  it('generates a declared-scope draft with unresolved schema and workflow evidence', async () => {
     const res = await generateHld({
       solutionName: 'Contoso Claims Fusion Accelerator',
       problemContext: 'Automating multi-point claim inspection.',
@@ -93,19 +93,13 @@ describe('High-Level Design (HLD) Document Generator Agent', () => {
     expect(res.docId).toMatch(/^HLD-/);
     expect(res.solutionName).toBe('Contoso Claims Fusion Accelerator');
 
-    // Verify Mermaid diagrams
-    expect(res.mermaidDiagrams.topology).toContain('graph TB');
-    expect(res.mermaidDiagrams.topology).toContain('Copilot Studio Autonomous Bot');
-    expect(res.mermaidDiagrams.erd).toContain('erDiagram');
-    expect(res.mermaidDiagrams.erd).toContain('CR_INCIDENT');
-    expect(res.mermaidDiagrams.sequence).toContain('sequenceDiagram');
-    expect(res.mermaidDiagrams.sequence).toContain('Copilot Studio');
-
-    // Verify Well-Architected sections
-    expect(res.markdownContent).toContain('Executive Architecture Overview');
-    expect(res.markdownContent).toContain('Logical Component Architecture');
-    expect(res.markdownContent).toContain('Data Architecture & Dataverse Entity Model (ERD)');
-    expect(res.markdownContent).toContain('Security, Identity & Data Loss Prevention (DLP)');
-    expect(res.markdownContent).toContain('Application Lifecycle Management (ALM)');
+    expect(res).toMatchObject({status:'draft',generationMethod:'requirements-template'});
+    expect(res.mermaidDiagrams.topology).toContain('Field Inspection Topic');
+    expect(res.mermaidDiagrams.topology).toContain('Incident Table Schema');
+    expect(res.mermaidDiagrams.erd).toContain('Data model pending');
+    expect(res.mermaidDiagrams.sequence).toContain('Workflow pending');
+    expect(res.markdownContent).toContain('Topics/Inspection.yaml');
+    expect(res.markdownContent).toContain('Implementation plan — review required');
+    expect(res.markdownContent).not.toContain('Approved for Implementation');
   });
 });

@@ -22,7 +22,7 @@ export function HldStation({
   const ref = useInteractable<THREE.Group>(
     {
       id: `hld-station-${repoId ?? 'main'}`,
-      label: 'Open High-Level Design (HLD) Document & Architecture Blueprints',
+      label: 'Open architecture draft & implementation plan',
       action: { kind: 'hld', repoId },
     },
     3.2,
@@ -60,7 +60,7 @@ export function HldStation({
       ctx.textAlign = 'right';
       ctx.font = `700 16px ${SANS}`;
       ctx.fillStyle = '#f5d0fe';
-      ctx.fillText('MICROSOFT WELL-ARCHITECTED FRAMEWORK', texW - 36, 46);
+      ctx.fillText('DRAFT · REVIEW REQUIRED', texW - 36, 46);
       ctx.textAlign = 'left';
 
       // Blueprint Grid Lines
@@ -88,14 +88,14 @@ export function HldStation({
 
       ctx.fillStyle = '#c084fc';
       ctx.font = `700 18px ${SANS}`;
-      ctx.fillText('🏛️ Well-Architected Pillars & Topology', 54, 130);
+      ctx.fillText('🏛️ Architecture Review Topics', 54, 130);
 
       const pillars = [
-        { name: '1. Reliability & Resilience', desc: 'Exponential backoff & dead-letter queue' },
-        { name: '2. Zero Trust Security', desc: 'Entra ID OBO & Dataverse column security' },
-        { name: '3. Cost Optimization', desc: 'Standard vs Premium connector tiers' },
-        { name: '4. Operational Excellence', desc: 'pac solution unpack & automated ALM' },
-        { name: '5. Performance Efficiency', desc: 'Dataverse Elastic Tables for high scale' },
+        { name: '1. Reliability & Resilience', desc: 'Define failure paths and recovery evidence' },
+        { name: '2. Identity & Security', desc: 'Verify permissions and tenant DLP policies' },
+        { name: '3. Licensing & Capacity', desc: 'Confirm entitlement and approved budget' },
+        { name: '4. Operational Readiness', desc: 'Require documented, verified release gates' },
+        { name: '5. Performance & Experience', desc: 'Define measurable usability and load checks' },
       ];
 
       pillars.forEach((p, i) => {
@@ -131,11 +131,11 @@ export function HldStation({
       ctx.fillStyle = '#38bdf8';
       ctx.font = `600 13px Consolas, monospace`;
       ctx.fillText('graph TB', 544, 190);
-      ctx.fillText('  Teams --> Copilot["Copilot Studio"]', 544, 215);
-      ctx.fillText('  Copilot --> GenAI["Azure OpenAI"]', 544, 240);
-      ctx.fillText('  Copilot --> Flows["Power Automate"]', 544, 265);
-      ctx.fillText('  Flows --> Dataverse["Dataverse Schema"]', 544, 290);
-      ctx.fillText('  Entra ID -.-> Security & DLP', 544, 315);
+      ctx.fillText('  Scope --> DeclaredComponents', 544, 215);
+      ctx.fillText('  DataModel: contracts pending', 544, 240);
+      ctx.fillText('  Workflow: transitions pending', 544, 265);
+      ctx.fillText('  Review: independent evidence required', 544, 290);
+      ctx.fillText('  Release: gated, not approved', 544, 315);
 
       // Call to action button
       roundRect(ctx, 524, 370, 440, 80, 12);
@@ -145,14 +145,14 @@ export function HldStation({
       ctx.fillStyle = '#ffffff';
       ctx.font = `800 20px ${SANS}`;
       ctx.textAlign = 'center';
-      ctx.fillText('PRESS [E] TO INSPECT HLD BLUEPRINT', 524 + 220, 412);
+      ctx.fillText('PRESS [E] TO INSPECT ARCHITECTURE DRAFT', 524 + 220, 412);
       ctx.textAlign = 'left';
 
       ctx.fillStyle = '#94a3b8';
       ctx.font = `500 13px ${SANS}`;
-      ctx.fillText('• Auto-synced to docs/architecture/HLD.md', 534, 484);
-      ctx.fillText('• Multi-diagram interactive tabs (Topology, ERD, Sequence)', 534, 514);
-      ctx.fillText('• Direct bridge to Swarm Sprint Backlog', 534, 544);
+      ctx.fillText('• Save an unreviewed draft explicitly to the repository', 534, 484);
+      ctx.fillText('• Declare scope and inspect evidence gaps', 534, 514);
+      ctx.fillText('• Model synthesis and approval remain pending', 534, 544);
     },
     [],
   );
