@@ -2,10 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DeliveryService, deliveryManifest, containedFile, installedSolution, pacReportedError, importJobId, type DeliveryDependencies } from './delivery.ts';
 import type { RepoView } from '../shared/types.ts';
 import { manifestDigest } from './lifecycleGovernance.ts';
+import {generateHldContent} from '../shared/hld.ts';
 
 const directories: string[] = [];
 it('recognizes PAC import failures printed to stdout even when its exit code is zero', () => {
@@ -25,7 +28,12 @@ afterEach(async () => { for (const service of services.splice(0)) await service.
 const sha = 'a'.repeat(40), target = 'https://development.crm4.dynamics.com';
 const categories = ['journey', 'authorization', 'persistence', 'error-handling', 'journey', 'journey'];
 const states = ['loading', 'empty', 'success', 'failure', 'validation', 'recovery'];
-const plan = { name: 'Expenses release', owner: 'ada', qaOwner: 'sherlock', requiredIssues: [1], components: ['Expenses'], acceptanceCriteria: ['Users can create and view expenses'],
+const architectureInput={solutionName:'Synthetic expenses',problemContext:'Synthetic receipt processing',components:[]};
+const architectureResult=generateHldContent(architectureInput);
+const architectureHash=crypto.createHash('sha256').update(JSON.stringify({repoId:'owner/repo',input:architectureInput,result:architectureResult})).digest('hex');
+const architectureArtifact={schemaVersion:1,repoId:'owner/repo',input:architectureInput,result:architectureResult,sha256:architectureHash};
+const architectureAssessment={artifactSha256:architectureHash,decision:'approved',notes:'Synthetic independent review of the requirements, architecture decisions, implementation plan and remaining evidence boundaries.'};
+const plan = { architecture:{docId:architectureResult.docId,sha256:architectureHash},name: 'Expenses release', owner: 'ada', qaOwner: 'sherlock', requiredIssues: [1], components: ['Expenses'], acceptanceCriteria: ['Users can create and view expenses'],
   quality: { maxTaskDurationMs: 30000, maxSeriousAccessibilityIssues: 0 }, monitoring: { intervalMinutes: 15, criticalProbeIds: ['critical-flow'] },
   verification: { baseUrl: 'https://expenses.example.test', identities: ['employee', 'manager'].map((id) => ({ id, expectedUser: `${id}@example.test`, userSelector: '#user' })),
     scenarios: categories.map((category, i) => ({ name: `${category} ${i}`, category, identity: i === 1 ? 'manager' : 'employee', criterion: 0, states: [states[i]],
@@ -56,7 +64,11 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
       if (command.executable === 'gh') return JSON.stringify({ state: 'CLOSED' });
       if (command.executable === 'git') {
         if (command.args[0] === 'rev-parse') return sha;
-        if (command.args[0] === 'show') return JSON.stringify(manifest);
+        if (command.args[0] === 'show') {
+          if(command.args[1].endsWith(`${architectureResult.docId}.json`))return JSON.stringify(architectureArtifact);
+          if(command.args[1].endsWith(`${architectureResult.docId}.md`))return architectureResult.markdownContent;
+          return JSON.stringify(manifest);
+        }
         if (command.args[0] === 'worktree') {
           const checkout = command.args[3]; await fs.mkdir(checkout, { recursive: true });
           await fs.writeFile(path.join(checkout, 'cubefarm.delivery.json'), JSON.stringify(manifest));
@@ -84,10 +96,70 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   service.checkCapabilities = async () => ({ status: 'ready', configHash: 'config-v1', checks: [{ id: 'critical-flow', category: 'workflow', passed: true, remedy: 'Repair critical flow' }] });
   await service.configure(target, true);
   const repo = { id: 'owner/repo', checkoutPath: root, defaultBranch: 'main', cloneStatus: 'ready', issues: [], pulls: [] } as unknown as RepoView;
-  const release = await service.createRelease(repo, plan); await service.approveRelease(release.id, 'sherlock', release.planHash);
+  const release = await service.createRelease(repo, plan); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
   return { service, repo, calls, root, deps, release };
 }
 const storedRun={id:'synthetic-run',repoId:'synthetic/repo',head:'historical-commit',environmentUrl:target,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:[],log:[]};
+it('requires a committed architecture version before creating a new release',async()=>{
+  const {service,repo,calls}=await fixture();const before=calls.length;
+  const {architecture:_binding,...unbound}=plan;
+  await expect(service.createRelease(repo,unbound)).rejects.toThrow('commit an architecture');expect(calls).toHaveLength(before);
+});
+it('reads architecture from a real pinned Git commit and denies an uncommitted draft',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'architecture-git-'));directories.push(root);
+  const execute=promisify(execFile);
+  const git=async(args:string[])=>(await execute('git',args,{cwd:root,windowsHide:true,maxBuffer:10*1024*1024})).stdout;
+  await git(['init','--initial-branch=main']);await git(['config','user.email','synthetic@example.test']);await git(['config','user.name','Synthetic']);
+  await fs.writeFile(path.join(root,'README.md'),'Synthetic architecture gate integration test');await git(['add','README.md']);await git(['commit','-m','Synthetic baseline']);await git(['remote','add','origin',root]);
+  const dir=path.join(root,'docs','architecture','drafts');await fs.mkdir(dir,{recursive:true});
+  await fs.writeFile(path.join(dir,`${architectureResult.docId}.json`),JSON.stringify(architectureArtifact));await fs.writeFile(path.join(dir,`${architectureResult.docId}.md`),architectureResult.markdownContent);
+  const service=new DeliveryService(root,false,{async run(command){if(command.executable!=='git')throw new Error('Tenant commands denied in local architecture test');return git(command.args);}});services.push(service);await service.init();await service.configure(target,true);
+  const repo={id:'owner/repo',checkoutPath:root,defaultBranch:'main'} as RepoView;
+  await expect(service.createRelease(repo,plan)).rejects.toThrow();expect(service.view().releases).toHaveLength(0);
+  await git(['add','docs']);await git(['commit','-m','Commit synthetic architecture']);const head=(await git(['rev-parse','HEAD'])).trim();
+  // A later uncommitted edit must not replace the immutable reviewed version.
+  await fs.writeFile(path.join(dir,`${architectureResult.docId}.md`),'Uncommitted working-copy change');
+  const release=await service.createRelease(repo,plan);expect(release.head).toBe(head);expect(release.plan.architecture?.sha256).toBe(architectureHash);
+  await expect(service.approveRelease(release.id,'sherlock',release.planHash)).rejects.toThrow('Independent review');
+  await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);
+  await service.close();const restored=new DeliveryService(root,false,{async run(){throw new Error('No command allowed during restored-state check');}});services.push(restored);await restored.init();expect(restored.view().releases[0].architectureReview?.artifactSha256).toBe(architectureHash);
+});
+it('rejects committed architecture drift before recording a release',async()=>{
+  const {service,repo,deps}=await fixture();const original=deps.run;
+  deps.run=async(...args)=>args[0].executable==='git'&&args[0].args[0]==='show'&&args[0].args[1].endsWith('.md')?'Changed architecture':original(...args);
+  await expect(service.createRelease(repo,{...plan,name:'Changed release'})).rejects.toThrow('Committed architecture differs');expect(service.view().releases).toHaveLength(1);
+});
+it('revokes release approval on an architecture rejection and denies delivery',async()=>{
+  const {service,repo,release,calls}=await fixture();
+  await expect(service.reviewArchitecture(release.id,'ada',release.planHash,architectureAssessment)).rejects.toThrow('independent');
+  await expect(service.reviewArchitecture(release.id,'sherlock','changed',architectureAssessment)).rejects.toThrow('independent');
+  await expect(service.reviewArchitecture(release.id,'sherlock',release.planHash,{...architectureAssessment,artifactSha256:'0'.repeat(64)})).rejects.toThrow('pinned version');
+  await service.reviewArchitecture(release.id,'sherlock',release.planHash,{...architectureAssessment,decision:'rejected'});
+  expect(service.view().releases[0].approvedAt).toBeUndefined();
+  await expect(service.approveRelease(release.id,'sherlock',release.planHash)).rejects.toThrow('Independent review');
+  const before=calls.length;await expect(service.start(repo)).rejects.toThrow('Awaiting independent');expect(calls).toHaveLength(before);
+});
+it('preserves historical releases but denies execution without an architecture review',async()=>{
+  const {service,repo,deps,root,calls}=await fixture();await service.close();
+  const file=path.join(root,'delivery.json'),state=JSON.parse(await fs.readFile(file,'utf8'));
+  const historical=state.releases[0];delete historical.plan.architecture;delete historical.architectureReview;
+  historical.planHash=crypto.createHash('sha256').update(JSON.stringify({plan:historical.plan,head:historical.head,environmentUrl:historical.environmentUrl,skillLock:historical.skillLock})).digest('hex');
+  await fs.writeFile(file,JSON.stringify(state));
+  const restored=new DeliveryService(root,false,deps);services.push(restored);await restored.init();
+  expect(restored.view().releases[0].planHash).toBe(historical.planHash);
+  const before=calls.length;await expect(restored.start(repo)).rejects.toThrow('Independent review');expect(calls).toHaveLength(before);
+});
+it('rechecks committed architecture before dispatching any deployment command',async()=>{
+  const {service,repo,deps,calls}=await fixture();const original=deps.run;
+  deps.run=async(...args)=>args[0].executable==='git'&&args[0].args[0]==='show'&&args[0].args[1].endsWith('.md')?'Changed architecture':original(...args);
+  await expect(service.start(repo)).rejects.toThrow('Committed architecture differs');expect(calls.some(call=>call.startsWith('pac '))).toBe(false);
+});
+it('keeps architecture review immutable after a run has captured its release',async()=>{
+  const {service,repo,release}=await fixture();await service.start(repo);await service.waitForIdle();
+  const before=service.view().releases[0];
+  await expect(service.reviewArchitecture(release.id,'sherlock',release.planHash,{...architectureAssessment,decision:'rejected'})).rejects.toThrow('immutable');
+  expect(service.view().releases[0]).toEqual(before);
+});
 const storedBase={policy:null,runs:[],releases:[],blockers:[],revision:0};
 const badStates: [string,string][]=[
   ['broken JSON','{'],['null','null'],['array','[]'],['missing policy','{"runs":[]}'],
@@ -241,7 +313,7 @@ describe('Real solution delivery', () => {
     const { service, repo, root, deps, calls } = await fixture(); const original = deps.run;
     const id = '11111111-1111-4111-8111-111111111111';
     deps.run = async (...args) => {
-      if (args[0].executable === 'git' && args[0].args[0] === 'show') return JSON.stringify({ ...manifest, hasUi: false, targetBinding: { organizationId: id, userId: id } });
+      if (args[0].executable === 'git' && args[0].args[0] === 'show' && args[0].args[1].endsWith(':cubefarm.delivery.json')) return JSON.stringify({ ...manifest, hasUi: false, targetBinding: { organizationId: id, userId: id } });
       if (args[0].executable === 'dataverse') {
         const resource = args[0].args[args[0].args.indexOf('--path') + 1];
         if (resource.includes('/solutions?')) return JSON.stringify({ value: [{ solutionid: id }] });
@@ -255,7 +327,7 @@ describe('Real solution delivery', () => {
     const backend = { ...plan, acceptanceProfile: 'functional-development', verification: { baseUrl: target, identities: [], scenarios: [], api: {
       binding: { organizationId: id, userId: id }, checks: ['journey', 'authorization', 'persistence', 'error-handling'].map((category) => ({ name: 'Observe ' + category, category, criterion: 0, resource: 'WhoAmI', assertions: [{ pointer: ['UserId'], equals: id }] })),
     } } };
-    const release = await service.createRelease(repo, backend); await service.approveRelease(release.id, 'sherlock', release.planHash);
+    const release = await service.createRelease(repo, backend); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
     await service.start(repo, false, release.id); await service.waitForIdle();
     const run = service.view().runs[0]; expect(run.phase, run.error).toBe('reviewing'); expect(calls).not.toContain('independent');
     expect(run.appUrls).toEqual([]); expect(run.evidence).toContain('independent-api.json');
@@ -270,7 +342,7 @@ describe('Real solution delivery', () => {
     deps.run = async (...args) => { const output = await original(...args); if (args[0].executable === 'verify') { const file = args[2].SWARM_DELIVERY_REPORT; const report = JSON.parse(await fs.readFile(file, 'utf8')); report.security = 'not-verified'; await fs.writeFile(file, JSON.stringify(report)); } return output; };
     const development = { ...plan, acceptanceProfile: 'functional-development', verification: { ...plan.verification,
       identities: [plan.verification.identities[0]], scenarios: plan.verification.scenarios.map((scenario) => ({ ...scenario, identity: 'employee' })) } };
-    const release = await service.createRelease(repo, development); await service.approveRelease(release.id, 'sherlock', release.planHash);
+    const release = await service.createRelease(repo, development); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
     await service.start(repo, false, release.id); await service.waitForIdle();
     const run = service.view().runs[0]; expect(run.phase).toBe('reviewing');
     const scope = JSON.parse(await fs.readFile(path.join(root, 'delivery-runs', run.id, 'evidence', 'acceptance-scope.json'), 'utf8'));
@@ -322,7 +394,7 @@ describe('Release reliability', () => {
     let published: string | null = null;
     deps.run = async (...args) => {
       const cmd = args[0];
-      if (cmd.executable === 'git' && cmd.args[0] === 'show') return JSON.stringify({ ...manifest, targetBinding: { organizationId: id, userId: id }, platformIdentity: { tenantId: id, username: 'maker@example.com', environmentId: id },
+      if (cmd.executable === 'git' && cmd.args[0] === 'show' && cmd.args[1].endsWith(':cubefarm.delivery.json')) return JSON.stringify({ ...manifest, targetBinding: { organizationId: id, userId: id }, platformIdentity: { tenantId: id, username: 'maker@example.com', environmentId: id },
         targetComponents: [{ key: 'agent', kind: 'copilot', logicalName: 'expense_assistant' }], postDeployActions: [{ id: 'publish-agent', type: 'copilot-publish', component: 'agent' }] });
       if (cmd.executable === 'pac' && cmd.args[0] === 'org') return `Org ID: ${id}\nUser ID: ${id}\nOrg URL: ${target}\nEnvironment ID: ${id}\nUser Email: maker@example.com`;
       if (cmd.executable === 'pac' && cmd.args[0] === 'copilot') { expect(cmd.args).toContain(target); expect(cmd.args).toContain(id); published = new Date().toISOString(); }
@@ -346,7 +418,7 @@ describe('Release reliability', () => {
     const scenarios = plan.verification.scenarios.map((scenario) => ({ ...scenario, steps: [{ action: 'fill', selector: '#prompt', value: 'Synthetic question' }, ...scenario.steps,
       { action: 'fill', selector: '#prompt', value: 'Follow-up' }, { action: 'text', selector: '#reply', contains: 'Expected follow-up' }] }));
     const release = await service.createRelease(repo, { ...plan, verification: { ...plan.verification, scenarios, copilotChecks: [{ component: 'agent', channelUrl: plan.verification.baseUrl, cases: kinds.map((kind, i) => ({ kind, scenario: scenarios[i].name })) }] } });
-    await service.approveRelease(release.id, 'sherlock', release.planHash);
+    await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
     await service.start(repo, false, release.id); await service.waitForIdle();
     const run = service.view().runs[0]; expect(run.phase).toBe('reviewing');
     expect(calls.filter((call) => call.startsWith('pac copilot publish'))).toHaveLength(1);
@@ -382,7 +454,7 @@ describe('Release reliability', () => {
     deps.flow = async () => flow;
     deps.run = async (...args) => {
       const cmd = args[0];
-      if (cmd.executable === 'git' && cmd.args[0] === 'show') return JSON.stringify(targetManifest);
+      if (cmd.executable === 'git' && cmd.args[0] === 'show' && cmd.args[1].endsWith(':cubefarm.delivery.json')) return JSON.stringify(targetManifest);
       if (cmd.executable === 'pac' && cmd.args[0] === 'org') return `Org ID: ${id}\nUser ID: ${id}\nOrg URL: ${target}\nEnvironment ID: ${id}\nUser Email: maker@example.com`;
       if (cmd.executable === 'dataverse') {
         if (cmd.args[0] === 'auth') return `Tenant: ${id}\nUser: maker@example.com\nEnvironment: ${target}`;
@@ -398,7 +470,7 @@ describe('Release reliability', () => {
       return original(...args);
     };
     const release = await service.createRelease(repo, { ...plan, verification: { ...plan.verification, cloudFlowChecks: [{ component: 'approval', action: 'Audit', correlationPointer: ['body', 'releaseId'], assertions: [{ pointer: ['body', 'saved'], equals: true }] }] } });
-    await service.approveRelease(release.id, 'sherlock', release.planHash);
+    await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
     const warn=ownership==='replaced'?vi.spyOn(console,'warn').mockImplementation(()=>{}):undefined;
     try{await service.start(repo, false, release.id); await service.waitForIdle();}finally{warn?.mockRestore();}
     if(ownership==='replaced'){
@@ -419,7 +491,7 @@ describe('Release reliability', () => {
     let active = false; let writes = 0;
     deps.run = async (...args) => {
       const cmd = args[0];
-      if (cmd.executable === 'git' && cmd.args[0] === 'show') return JSON.stringify({ ...manifest,
+      if (cmd.executable === 'git' && cmd.args[0] === 'show' && cmd.args[1].endsWith(':cubefarm.delivery.json')) return JSON.stringify({ ...manifest,
         targetBinding: { organizationId: id, userId: id }, targetComponents: [{ key: 'approval', kind: 'workflow', logicalName: 'expense_approval' }],
         postDeployActions: [{ id: 'activate', type: 'workflow-state', component: 'approval', state: 'active' }] });
       if (cmd.executable === 'dataverse') {
@@ -464,7 +536,7 @@ describe('Release reliability', () => {
   });
   it('records missing manifest failures before importing', async () => {
     const { service, repo, deps, calls } = await fixture(); const original = deps.run;
-    deps.run = async (...args) => { if (args[0].args[0] === 'show') throw new Error('Manifest is missing'); return original(...args); };
+    deps.run = async (...args) => { if (args[0].args[0] === 'show' && args[0].args[1].endsWith(':cubefarm.delivery.json')) throw new Error('Manifest is missing'); return original(...args); };
     await service.tick([repo]); expect(service.view().blockers[0].error).toBe('Manifest is missing'); expect(calls.some((c) => c.includes('solution import'))).toBe(false);
   });
   for (const checkpoint of ['import-started', 'post-started', 'deployed'] as const) it(`recovers ${checkpoint} without a duplicate import`, async () => {
@@ -527,7 +599,8 @@ describe('Quality, recovery and monitoring', () => {
     const before = calls.length; const approvedFiles=[...run.evidence];await service.monitor(repo, run.id);
     expect(service.view().runs[0].health?.status).toBe('healthy');
     expect(calls.slice(before)).toContain(`git show ${run.head}:cubefarm.delivery.json`);
-    expect(calls.slice(before).every((c) => c.includes('solution list')||c===`git show ${run.head}:cubefarm.delivery.json`)).toBe(true);
+    const architectureReads=['json','md'].map(extension=>`git show ${run.head}:docs/architecture/drafts/${architectureResult.docId}.${extension}`);
+    expect(calls.slice(before).every((c) => c.includes('solution list')||c===`git show ${run.head}:cubefarm.delivery.json`||architectureReads.includes(c))).toBe(true);
     expect(service.view().runs[0].evidence).toEqual(approvedFiles);
     expect(service.view().runs[0].health?.governanceEvidence).toMatch(/^health\/governance-\d+-health.json$/);
     service.checkCapabilities = async () => ({ status: 'ready', configHash: 'changed', checks: [{ id: 'critical-flow', category: 'workflow', passed: true, remedy: '' }] });
@@ -538,7 +611,7 @@ describe('Quality, recovery and monitoring', () => {
   it('retains the previous verified deployment and recovery artifacts', async () => {
     const { service, repo, release } = await fixture(); await service.start(repo); await service.waitForIdle();
     const first = service.view().runs[0]; await service.approveVisual(first.id, 'sherlock', review(first.evidenceHash!));
-    const next = await service.createRelease(repo, { ...release.plan, name: 'Next release' }); await service.approveRelease(next.id, 'sherlock', next.planHash);
+    const next = await service.createRelease(repo, { ...release.plan, name: 'Next release' }); await service.reviewArchitecture(next.id, 'sherlock', next.planHash, architectureAssessment); await service.approveRelease(next.id, 'sherlock', next.planHash);
     await service.start(repo); await service.waitForIdle(); const second = service.view().runs[0];
     expect(second.previousRunId).toBe(first.id); expect(second.recovery?.packageSha256).toHaveLength(64);
     expect(second.evidence).toContain('previous-inventory.json'); expect(second.evidence).toContain('recovery-rehearsal.json');

@@ -28,7 +28,7 @@ it('exposes only status and session-bound release approval to QA', async () => {
   await tools.server.instance.connect(serverTransport); await client.connect(clientTransport);
   try {
     const listed = await client.listTools();
-    expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['approve_backend', 'approve_release', 'approve_visual', 'delivery_status']);
+    expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['approve_backend', 'approve_release', 'approve_visual', 'delivery_status', 'review_architecture']);
     await client.callTool({ name: 'approve_release', arguments: { release_id: 'release', plan_hash: 'hash' } });
     expect(approved).toEqual([['release', 'hash']]);
   } finally { await client.close(); await tools.server.instance.close(); }
@@ -49,6 +49,15 @@ it.each(['sdk', 'http'])('revokes QA tools at handler dispatch in the %s server'
     expect(approve).toHaveBeenCalledOnce();
     expect(JSON.parse(await tools.call('approve_release',{release_id:'release',plan_hash:'hash'})).isError).toBe(true);
   } finally {await client.close();await server.close();}
+});
+
+it('binds architecture review to the QA session and revokes its handler authority',async()=>{
+  let active=true;const review=vi.fn(async()=> 'reviewed');
+  const tools=createDeliveryQaTools(()=> 'status',async()=> 'approved',undefined,()=>active?null:'Task cancelled',review);
+  const args={release_id:'release',plan_hash:'hash',artifact_sha256:'a'.repeat(64),decision:'rejected',notes:'Independent assessment found missing authorization decisions and unresolved requirements; approval is denied until resolved.'};
+  expect(JSON.parse(await tools.call('review_architecture',args)).isError).toBeUndefined();
+  expect(review).toHaveBeenCalledWith('release','hash',{artifactSha256:args.artifact_sha256,decision:'rejected',notes:args.notes});
+  active=false;expect(JSON.parse(await tools.call('review_architecture',args)).isError).toBe(true);expect(review).toHaveBeenCalledOnce();
 });
 
 it('does not acquire Canvas authority after a developer session is revoked',async()=>{

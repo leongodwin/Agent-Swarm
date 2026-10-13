@@ -91,7 +91,10 @@ swarm.deliveryQaTools = (agentId, repoId, authorize) => createDeliveryQaTools(()
 }, async (id, review) => {
   if (!delivery.view(repoId).runs.some((r) => r.id === id)) throw new HttpError(403, 'Run belongs to another project');
   return JSON.stringify(await delivery.approveVisual(id, agentId, review));
-}, authorize);
+}, authorize,async(id,hash,review)=>{
+  if(!delivery.view(repoId).releases.some(r=>r.id===id))throw new HttpError(403,'Architecture belongs to another project');
+  return JSON.stringify(await delivery.reviewArchitecture(id,agentId,hash,review));
+});
 swarm.requestDeliveryReview = async (id) => {
   const release = delivery.view().releases.find((r) => r.id === id);
   if (!release) throw new HttpError(404, 'Release not found');

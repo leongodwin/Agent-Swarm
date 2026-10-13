@@ -17,6 +17,7 @@ export interface DeliveryRun {
   appUrls: string[]; evidence: string[]; log: string[];
 }
 export interface DeliveryRelease { id: string; repoId: string; head: string; environmentUrl: string; plan: ReleasePlan; planHash: string; createdAt: string; approvedAt?: string; approvedBy?: string;
+  architectureReview?: {reviewer:string;artifactSha256:string;decision:'approved'|'rejected';notes:string;reviewedAt:string};
   skillLock?: { id: string; sha256: string; version?: string; file: string }[] }
 export interface DeliveryBlocker { repoId: string; releaseId?: string; owner: string; error: string; recovery: string; at: string }
 export interface DeliveryView { releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number; policy: DeliveryPolicy | null; running: boolean; runs: DeliveryRun[]; message: string }

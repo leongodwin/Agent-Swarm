@@ -15,6 +15,7 @@ import type { RepoView } from '../shared/types.ts';
 import type { DeliveryRun, DeliveryView, DeliveryRelease } from '../shared/delivery.ts';
 
 import { releasePlanSchema, acceptanceScope } from './releasePlan.ts';
+import {architectureReviewSchema,verifyCommittedArchitecture,requireArchitectureReview} from './architectureGate.ts';
 import { verifyIndependently } from './independentVerification.ts';
 import { verifyApiIndependently } from './apiVerification.ts';
 import { discoverSkills, selectSkills } from './skillRegistry.ts';
@@ -222,11 +223,16 @@ export class DeliveryService {
     this.requireReady();
     if (this.demo || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Enable real delivery and wait for the active run');
     const plan = releasePlanSchema.parse(input);
+    if(!plan.architecture)throw new HttpError(409,'Save and commit an architecture version, then pin its document ID and content hash in the release plan');
     const controller = new AbortController();
     await this.command({ executable: 'git', args: ['fetch', 'origin', repo.defaultBranch] }, repo.checkoutPath, {}, controller.signal);
     this.requireReady();
     const head = (await this.command({ executable: 'git', args: ['rev-parse', `origin/${repo.defaultBranch}`] }, repo.checkoutPath, {}, controller.signal)).trim();
     if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error('Cannot pin release commit');
+    const architecturePath=`docs/architecture/drafts/${plan.architecture.docId}`;
+    const artifactJson=await this.command({executable:'git',args:['show',`${head}:${architecturePath}.json`]},repo.checkoutPath,{},controller.signal);
+    const artifactMarkdown=await this.command({executable:'git',args:['show',`${head}:${architecturePath}.md`]},repo.checkoutPath,{},controller.signal);
+    verifyCommittedArchitecture(artifactJson,artifactMarkdown,repo.id,plan.architecture);
     if (this.closed || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Delivery state changed during release preparation; retry');
     const environmentUrl = this.state.policy.environmentUrl;
     const skillLock = selectSkills(discoverSkills(), `${plan.name} ${plan.components.join(' ')} ${plan.acceptanceCriteria.join(' ')}`)
@@ -242,8 +248,22 @@ export class DeliveryService {
     if (this.demo) throw new HttpError(409, 'Delivery approval unavailable');
     const release = this.state.releases.find((r) => r.id === id);
     if (!release || release.plan.qaOwner !== reviewer || release.plan.owner === reviewer || release.planHash !== hash) throw new HttpError(403, 'Only the assigned independent QA agent can approve this exact release hash');
+    requireArchitectureReview(release);
     if (!release.approvedAt) { release.approvedAt = new Date().toISOString(); release.approvedBy = reviewer; await this.changed(); }
     return structuredClone(release);
+  }
+  async reviewArchitecture(id:string,reviewer:string,hash:string,input:unknown){
+    this.requireReady();
+    if(this.demo||this.active)throw new HttpError(409,'Architecture review is unavailable during delivery or in demo mode');
+    const release=this.state.releases.find(item=>item.id===id);
+    if(!release||release.plan.qaOwner!==reviewer||release.plan.owner===reviewer||release.planHash!==hash)throw new HttpError(403,'Only the assigned independent QA session may review this release architecture');
+    if(this.state.runs.some(run=>run.releaseId===id))throw new HttpError(409,'Architecture review is immutable once a delivery run exists; create a new release for changes');
+    const review=architectureReviewSchema.parse(input);
+    if(!release.plan.architecture||review.artifactSha256!==release.plan.architecture.sha256)throw new HttpError(409,'Architecture review differs from its pinned version');
+    release.architectureReview={...review,reviewer,reviewedAt:new Date().toISOString()};
+    // Any changed review requires a fresh release approval, including rejection.
+    delete release.approvedAt;delete release.approvedBy;
+    await this.changed();return structuredClone(release);
   }
   // Exclusive process lease prevents two office processes from importing simultaneously.
   private async acquire(): Promise<void> {
@@ -267,12 +287,14 @@ export class DeliveryService {
       if (!release) throw new Error('Create a scoped release with required issues, components, acceptance criteria and an independent QA owner');
       if (!releasePlanSchema.safeParse(release.plan).success) throw new Error('Release plan does not satisfy the current UX and monitoring contract; create an updated release and obtain fresh QA approval');
       if (!release.approvedAt) throw new Error(`Awaiting independent QA approval from ${release.plan.qaOwner} for release ${release.id}`);
+      requireArchitectureReview(release);
       if (release.skillLock?.length) {
         const current = discoverSkills();
         for (const skill of release.skillLock) if (!current.skills.some((item) => item.id === skill.id && item.sha256 === skill.sha256 && item.file === skill.file && item.version === skill.version)) throw new Error(`Pinned skill ${skill.id} changed or is unavailable; create a new release for QA review`);
       }
       if (release.environmentUrl !== this.state.policy.environmentUrl) throw new Error('Release target differs from the approved environment; create a new release');
       if (repo.cloneStatus !== 'ready' || repo.syncError) throw new Error('Resolve repository sync errors before delivery');
+      await this.verifyArchitecture(repo,release,controller.signal);
       const prior = this.state.runs.find((r) => r.releaseId === release.id);
       if (prior && (prior.phase === 'complete' || !retry)) { this.active = null; return this.view(repo.id); }
       await this.requireCapabilities(repo, release);
@@ -311,6 +333,14 @@ export class DeliveryService {
     for (const id of release.plan.monitoring.criticalProbeIds) if (!result.checks.some((c) => c.id === id && c.category === 'workflow' && c.passed)) throw new Error(`Critical workflow probe ${id} is missing`);
     return result.configHash ?? crypto.createHash('sha256').update(JSON.stringify(result.checks.map((c) => ({ id: c.id, category: c.category })))).digest('hex');
   }
+  private async verifyArchitecture(repo:RepoView,release:DeliveryRelease,signal:AbortSignal){
+    const reference=release.plan.architecture;
+    if(!reference)throw new HttpError(409,'Release has no pinned architecture; create a reviewed release');
+    const location=`docs/architecture/drafts/${reference.docId}`;
+    const json=await this.command({executable:'git',args:['show',`${release.head}:${location}.json`]},repo.checkoutPath,{},signal);
+    const markdown=await this.command({executable:'git',args:['show',`${release.head}:${location}.md`]},repo.checkoutPath,{},signal);
+    verifyCommittedArchitecture(json,markdown,repo.id,reference);
+  }
   private async evidenceHash(run: DeliveryRun) {
     const hash = crypto.createHash('sha256');
     for (const name of [...new Set(run.evidence)].sort()) { hash.update(name); hash.update(await fs.readFile(await containedFile(path.join(this.root, 'delivery-runs', run.id, 'evidence'), name))); }
@@ -334,6 +364,8 @@ export class DeliveryService {
     this.pending = (async () => {
       const previous = run.health?.status;
       try {
+        requireArchitectureReview(release);
+        await this.verifyArchitecture(repo,release,controller.signal);
         const inventory = await this.command({ executable: 'pac', args: ['solution', 'list', '--environment', run.environmentUrl, '--json'] }, repo.checkoutPath, {}, controller.signal);
         if (!installedSolution(inventory, run.solution!, run.version!)) throw new Error('Installed solution/version drift detected');
         const capabilityHash = await this.requireCapabilities(repo, release);

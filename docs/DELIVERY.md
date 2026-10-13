@@ -18,6 +18,14 @@ Use the supported authoring path for each component:
 
 All deliverables belong to a named, versioned Power Platform solution. The manager authorizes the connected development environment in **Solution delivery**. The runner pins its URL; changing PAC profiles does not change that approval. Production and other environments require their own authorization. Demo never deploys.
 
+## Architecture version and independent review
+
+New release plans must include `architecture: { docId, sha256 }` from the saved structured architecture result. Commit both `docs/architecture/drafts/<docId>.json` and `<docId>.md` before creating the release. The server reads these files from the pinned default-branch commit, validates their content digest and repository ownership, and rechecks them before delivery and health monitoring. A current draft pointer or an uncommitted document cannot substitute for that version. Historical release state remains readable; missing architecture or review blocks execution.
+
+The assigned independent QA session receives `review_architecture`. Inspect the pinned requirements, diagrams, implementation plan, permissions, tradeoffs, risks and missing evidence using `git show <release.head>:<path>`. Submit the exact release ID, plan hash, artifact hash, `approved` or `rejected` decision, and specific review notes. The server supplies reviewer identity from that session; the author cannot approve. Architecture approval is separate from `approve_release` and runtime evidence review. A rejected or changed architecture review revokes prior release approval. Once a run exists, the review is immutable: changes require a new release. The delivery panel exposes the version, decision, reviewer and notes.
+
+A requirements template remains a draft even after an independent assessment. This gate establishes review of exact committed content; it does not establish actual model synthesis, comprehensive governance compliance, tenant deployment or runtime acceptance. Do not approve missing decisions merely to unblock the gate. Record gaps and reject the architecture until they are addressed.
+
 ## UX and design gate
 
 Before building, record a short experience brief: audience, core tasks, navigation, brand, typography, color/spacing tokens and responsive behavior. Use a task-first layout for internal apps and a purposeful page narrative for public sites. Provide clear primary actions and useful loading, empty, error, validation and success states.

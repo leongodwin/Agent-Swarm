@@ -47,3 +47,18 @@ test('reloads stored requirements and plan without calling the template model sy
   await page.getByRole('button',{name:'Use current project brief',exact:true}).click();await page.getByRole('tab',{name:'Requirements & gaps',exact:true}).click();await expect(page.getByText('Current project scope differs.',{exact:true})).toBeVisible();
   await page.screenshot({path:'.swarm-reliability/architecture-reload-ui-2026-10-13.png'});
 });
+
+test('delivery exposes the pinned architecture and keeps an unreviewed or rejected release disabled',async({page})=>{
+  const docId='HLD-11111111-1111-4111-8111-111111111111';
+  let rejected=false;
+  await page.route(/\/api\/delivery(?:\?|$)/,route=>route.fulfill({json:{policy:{enabled:true,environmentUrl:'https://development.crm4.dynamics.com',copilotPaused:true},running:false,message:'Independent architecture review required',runs:[],blockers:[],releases:[{id:'synthetic-release',repoId:'synthetic/project',head:'a'.repeat(40),approvedAt:new Date().toISOString(),approvedBy:'qa',plan:{name:'Synthetic architecture-bound release',owner:'dev',qaOwner:'qa',architecture:{docId,sha256:'b'.repeat(64)},requiredIssues:[1],components:['Receipt capture']},architectureReview:rejected?{reviewer:'qa',artifactSha256:'b'.repeat(64),decision:'rejected',notes:'Permission boundaries and recovery decisions remain unresolved; the architecture is rejected.'}:undefined}]}}));
+  await page.goto('/');await expect(page.getByRole('button',{name:'Enter the office'})).toBeEnabled();
+  const open=()=>page.evaluate(()=>{const store=(window as any).__swarmStore;store.setState({demo:false});store.getState().openOverlay({kind:'alm-kiosk'});});
+  await open();await expect(page.getByText(`Architecture: ${docId} · independent review pending`,{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Run / resume this release',exact:true})).toBeDisabled();
+  await page.keyboard.press('Escape');rejected=true;await open();
+  await expect(page.getByText(`Architecture: ${docId} · rejected by qa`,{exact:true})).toBeVisible();
+  await expect(page.getByText('Permission boundaries and recovery decisions remain unresolved; the architecture is rejected.',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Run / resume this release',exact:true})).toBeDisabled();
+  await page.screenshot({path:'.swarm-reliability/architecture-gate-ui-2026-10-13.png'});
+});

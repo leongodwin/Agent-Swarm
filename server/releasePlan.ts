@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { cloudFlowCheckSchema } from './flowAdapter.ts';
 import { apiVerificationSchema } from './apiVerification.ts';
+import {hldResultSchema} from '../shared/hldArtifact.ts';
 const text = z.string().trim().min(1).max(500);
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
 const step = z.discriminatedUnion('action', [
@@ -15,6 +16,8 @@ const step = z.discriminatedUnion('action', [
 export const releasePlanSchema = z.object({
   // Absent means the original strict contract; do not alter legacy plan hashes.
   acceptanceProfile: z.enum(['production', 'functional-development']).optional(),
+  // Optional only for loading historical state. New release creation requires it.
+  architecture: z.strictObject({docId:hldResultSchema.shape.docId,sha256:z.string().regex(/^[a-f0-9]{64}$/)}).optional(),
   name: text, owner: id, qaOwner: id, requiredIssues: z.array(z.number().int().positive()).min(1).max(100),
   components: z.array(text).min(1).max(100), acceptanceCriteria: z.array(text).min(1).max(100),
   quality: z.object({ maxTaskDurationMs: z.number().int().min(1000).max(120000), maxSeriousAccessibilityIssues: z.literal(0) }).strict(),

@@ -432,13 +432,14 @@ export function specialtySlug(s: string | undefined) {
 export const specialtyLabel = (slug: string) => `swarm:${slug}`;
 
 /** QA-only authority: reviewer identity is captured from the session, never accepted as an argument. */
-export function createDeliveryQaTools(status: () => string, approve: (id: string, hash: string) => Promise<string>, visual?: (id: string, review: unknown) => Promise<string>, authorize?: SessionAuthorization): OfficeTools {
+export function createDeliveryQaTools(status: () => string, approve: (id: string, hash: string) => Promise<string>, visual?: (id: string, review: unknown) => Promise<string>, authorize?: SessionAuthorization, architecture?: (id:string,hash:string,review:unknown)=>Promise<string>): OfficeTools {
   const run = async (fn: () => string | Promise<string>) => {
     try { return { content: [{ type: 'text' as const, text: await fn() }] }; }
     catch (err) { return { content: [{ type: 'text' as const, text: String((err as Error).message) }], isError: true }; }
   };
   let defs = [
     tool('delivery_status', 'Read pinned releases and their immutable acceptance plans for independent QA review.', {}, () => run(status)),
+    tool('review_architecture','Independently assess the committed HLD and implementation plan at the exact release head. Inspect requirements, decisions, risks and missing evidence. This does not certify model synthesis or tenant governance.',{release_id:z.string(),plan_hash:z.string(),artifact_sha256:z.string().regex(/^[a-f0-9]{64}$/),decision:z.enum(['approved','rejected']),notes:z.string().trim().min(80).max(8000)},a=>run(()=>architecture?architecture(a.release_id,a.plan_hash,{artifactSha256:a.artifact_sha256,decision:a.decision,notes:a.notes}):'Architecture review unavailable')),
     tool('approve_backend', 'Inspect runner-owned API assertions, correlated transaction evidence and recovery rehearsal for an API-only release. Does not approve UI or permission isolation.', { run_id: z.string(), evidence_hash: z.string(), notes: z.string().min(40), recovery_reviewed: z.literal(true) }, (a) => run(() => visual ? visual(a.run_id, { evidenceHash: a.evidence_hash, scores: [], notes: a.notes, recoveryReviewed: a.recovery_reviewed }) : 'Backend review unavailable')),
     tool('approve_visual', 'Inspect actual screenshots, accessibility/UX evidence and recovery rehearsal. Scores are hierarchy, readability, consistency, responsiveness and task clarity (each 4 or 5).', { run_id: z.string(), evidence_hash: z.string(), scores: z.array(z.number()).length(5), notes: z.string().min(40), recovery_reviewed: z.literal(true) }, (a) => run(() => visual ? visual(a.run_id, { evidenceHash: a.evidence_hash, scores: a.scores, notes: a.notes, recoveryReviewed: a.recovery_reviewed }) : 'Visual review unavailable')),
     tool('approve_release', 'Approve the exact release head and plan after inspecting its coverage and assertions. No self-approval.', { release_id: z.string(), plan_hash: z.string() }, (a) => run(() => approve(a.release_id, a.plan_hash))),

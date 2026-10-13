@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { releasePlanSchema } from './releasePlan.ts';
+import {architectureReviewSchema} from './architectureGate.ts';
 import type { DeliveryPolicy, DeliveryRun, DeliveryRelease, DeliveryBlocker } from '../shared/delivery.ts';
 
 export interface DeliveryStoredState { schemaVersion: 1; policy: DeliveryPolicy | null; runs: DeliveryRun[]; releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number }
@@ -14,6 +15,7 @@ const relative = z.string().min(1).max(4096).refine(value => !/[\x00-\x1f:]/.tes
 const when = z.iso.datetime();
 const operation = z.object({ id:text,kind:z.enum(['import','post-deploy']),status:z.enum(['intent','reported-success','verified','unknown']),commandSha256:hash,startedAt:when,endedAt:when.optional(),platformJobId:z.string().max(200).optional() }).strict();
 const release = z.object({id:identity,repoId:repo,head:commit,environmentUrl:https,plan:releasePlanSchema,planHash:hash,createdAt:when,approvedAt:when.optional(),approvedBy:text.optional(),
+  architectureReview:architectureReviewSchema.extend({reviewer:text,reviewedAt:when}).optional(),
   skillLock:z.array(z.object({id:text,sha256:hash,version:z.string().max(200).optional(),file:z.string().min(1).max(4096)}).strict()).max(1000).optional(),
 }).strict();
 const run = z.object({id:identity,repoId:repo,head:z.string().min(1).max(128),environmentUrl:https,phase:z.enum(['disabled','waiting','building','testing','deploying','verifying','reviewing','complete','blocked']),
@@ -42,6 +44,7 @@ export function validateDeliveryState(input: unknown): DeliveryStoredState {
     const digest=crypto.createHash('sha256').update(JSON.stringify({plan:item.plan,head:item.head,environmentUrl:item.environmentUrl,skillLock:item.skillLock})).digest('hex');
     if (digest !== item.planHash) throw new Error('Release hash differs from its saved contract');
     if (!!item.approvedAt !== !!item.approvedBy || item.approvedBy && item.approvedBy !== item.plan.qaOwner) throw new Error('Release approval is not bound to its independent reviewer');
+    if(item.architectureReview&&(!item.plan.architecture||item.architectureReview.artifactSha256!==item.plan.architecture.sha256||item.architectureReview.reviewer!==item.plan.qaOwner||item.architectureReview.reviewer===item.plan.owner||item.approvedAt&&item.architectureReview.decision!=='approved'))throw new Error('Architecture review differs from its pinned independent contract');
     if (item.skillLock && new Set(item.skillLock.map(skill=>skill.id)).size !== item.skillLock.length) throw new Error('Duplicate release skill identities');
   }
   for (const item of state.runs) {
