@@ -56,6 +56,20 @@ it('chooses deterministic default commands and isolates inherited office/provide
   expect(defaultCommand(null)).toBeNull();expect(defaultCommand({scripts:{dev:'vite'}})).toBe('npm run dev -- --port {port} --strictPort');expect(defaultCommand({scripts:{dev:'vite --port 123',start:'node app'}})).toBe('npm run dev');expect(defaultCommand({scripts:{start:'node app'}})).toBe('npm run start');
   vi.stubEnv('SWARM_HOME','private-office');vi.stubEnv('ANTHROPIC_API_KEY','private-key');const env=previewEnv({VALUE:'{port}:{tmp}'},123,'fixture');expect(env.SWARM_HOME).toBeUndefined();expect(env.ANTHROPIC_API_KEY).toBeUndefined();expect(env.VALUE).toBe('123:fixture');expect(env.PORT).toBe('123');
 });
+it('does not implicitly transfer arbitrary secrets, authentication sockets or Node preload configuration',()=>{
+  for(const key of ['GH_TOKEN','GITHUB_TOKEN','OPENAI_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY','AZURE_CLIENT_SECRET','ARM_CLIENT_SECRET','DATAVERSE_TOKEN','NPM_TOKEN','AWS_SECRET_ACCESS_KEY','SSH_AUTH_SOCK','NODE_OPTIONS','UNRECOGNISED_PRIVATE_SETTING','LC_PRIVATE_SECRET'])vi.stubEnv(key,'synthetic-private-value');
+  vi.stubEnv('PATH','synthetic-runtime-path');vi.stubEnv('SystemRoot','synthetic-system-root');
+  const env=previewEnv({},123,mock.root);expect(env.PATH).toBe('synthetic-runtime-path');expect(Object.entries(env).find(([key])=>key.toLowerCase()==='systemroot')?.[1]).toBe('synthetic-system-root');
+  expect(Object.values(env)).not.toContain('synthetic-private-value');expect(env.HOME).toBe(path.join(mock.root,'profile'));expect(env.USERPROFILE).toBe(env.HOME);expect(env.TEMP).toBe(path.join(env.HOME,'tmp'));
+});
+it('accepts explicitly configured project values but rejects retired provider credentials even through direct callers',()=>{
+  expect(previewEnv({PROJECT_API_KEY:'project-specific',XDG_CONFIG_HOME:'{tmp}/project-config'},123,mock.root)).toMatchObject({PROJECT_API_KEY:'project-specific',XDG_CONFIG_HOME:mock.root+'/project-config'});
+  expect(()=>previewEnv({ANTHROPIC_API_KEY:'synthetic'},123,mock.root)).toThrow('not permitted');expect(()=>previewEnv({CLAUDE_CONFIG_DIR:'synthetic'},123,mock.root)).toThrow('not permitted');
+});
+it.runIf(process.platform==='win32')('merges explicit Windows environment keys case-insensitively and reserves PORT',()=>{
+  vi.stubEnv('PATH','synthetic-inherited-path');const env=previewEnv({Path:'project-runtime-path',port:'9999'},123,mock.root);
+  expect(Object.entries(env).filter(([key])=>key.toLowerCase()==='path')).toEqual([['Path','project-runtime-path']]);expect(Object.entries(env).filter(([key])=>key.toLowerCase()==='port')).toEqual([['PORT','123']]);
+});
 it('does not turn a cleanup timeout into root-exit acknowledgement and permits a later verified retry',async()=>{
   vi.useFakeTimers();vi.mocked(process.kill).mockImplementation(()=>true);mock.launch.mockImplementation((cmd:string)=>{if(cmd==='taskkill'){const task=new Child();queueMicrotask(()=>task.finish(1));return task;}active=new Child();return active;});
   const cb=callbacks(),handle=realPreviews.start(job(),cb);await vi.waitFor(()=>expect(active).toBeDefined());const pending=expect(handle.stop()).rejects.toThrow('root exit is unverified');

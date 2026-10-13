@@ -6,6 +6,7 @@ import path from 'node:path';
 import { git } from './exec.ts';
 import * as workspace from './workspace.ts';
 import {terminalCallback} from './terminalCallbacks.ts';
+import {HOME_DIR} from './config.ts';
 
 // A floor's app, run for the preview monitor: checked out in its own worktree (never the floor's main checkout,
 // which for floor 1 is the folder the live office runs from), installed, started, and watched until its port answers.
@@ -52,18 +53,25 @@ export interface PreviewBackend {
 export const fillPlaceholders = (s: string, port: number, tmp: string) => s.replaceAll('{port}', String(port)).replaceAll('{tmp}', tmp);
 
 /**
- * The environment a preview runs with: the office's, minus Claude credentials and config (same rule as the agents,
- * with no exceptions) and minus the office's own SWARM_* settings, so an app that is itself an office never
- * inherits the live office's home or port. Then the floor's env, then PORT.
+ * Runtime essentials only, with private profile/cache/temp defaults. Project-specific
+ * environment is explicit; this is not filesystem or OS-account sandboxing.
  */
-export function previewEnv(extra: Record<string, string>, port: number, tmp: string): Record<string, string> {
+export function previewEnv(extra: Record<string, string>, port: number, tmp: string,profile=path.join(tmp,'profile')): Record<string, string> {
   const env: Record<string, string> = {};
+  const essential=/^(?:PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|SYSTEMDRIVE|PROGRAMDATA|PROGRAMFILES(?:\(X86\))?|OS|NUMBER_OF_PROCESSORS|PROCESSOR_ARCHITECTURE|LANG|LC_(?:ALL|CTYPE|NUMERIC|TIME|COLLATE|MONETARY|MESSAGES|PAPER|NAME|ADDRESS|TELEPHONE|MEASUREMENT|IDENTIFICATION)|TERM|COLORTERM|NO_COLOR|FORCE_COLOR|CI|DOTNET_ROOT(?:_X64|_X86)?)$/i;
   for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined || /^(ANTHROPIC_|CLAUDE|SWARM_)/i.test(k)) continue;
+    if (v === undefined || !essential.test(k)) continue;
     env[k] = v;
   }
+  Object.assign(env,{HOME:profile,USERPROFILE:profile,APPDATA:path.join(profile,'appdata'),LOCALAPPDATA:path.join(profile,'localappdata'),XDG_CONFIG_HOME:path.join(profile,'config'),XDG_CACHE_HOME:path.join(profile,'cache'),XDG_DATA_HOME:path.join(profile,'data'),TEMP:path.join(profile,'tmp'),TMP:path.join(profile,'tmp'),TMPDIR:path.join(profile,'tmp')});
+  if(process.platform==='win32'){env.HOMEDRIVE=path.parse(profile).root.replace(/[\\/]$/,'');env.HOMEPATH=profile.slice(env.HOMEDRIVE.length);}
   env.BROWSER = 'none'; // dev servers that open a browser tab on start shouldn't
-  for (const [k, v] of Object.entries(extra)) env[k] = fillPlaceholders(v, port, tmp);
+  for (const [k, v] of Object.entries(extra)) {
+    if(/^(ANTHROPIC_|CLAUDE)/i.test(k))throw new Error('Claude credentials and configuration are not permitted in previews');
+    if(process.platform==='win32')for(const existing of Object.keys(env))if(existing.toLowerCase()===k.toLowerCase())delete env[existing];
+    env[k] = fillPlaceholders(v, port, tmp);
+  }
+  if(process.platform==='win32')for(const existing of Object.keys(env))if(existing.toUpperCase()==='PORT')delete env[existing];
   env.PORT = String(port);
   return env;
 }
@@ -194,7 +202,10 @@ class RealPreview implements PreviewHandle {
       );
       return;
     }
-    const env = previewEnv(job.env, job.port, tmp);
+    const profile=path.join(HOME_DIR,'preview-profiles',crypto.createHash('sha256').update(job.fullName).digest('hex'));
+    const env = previewEnv(job.env, job.port, tmp,profile);
+    for(const folder of ['','appdata','localappdata','config','cache','data','tmp']){this.check();await fs.mkdir(path.join(profile,folder),{recursive:true,mode:0o700});}
+    this.check();
 
     if (pkg) {
       cb.status('installing');
