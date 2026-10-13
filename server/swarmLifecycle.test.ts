@@ -353,3 +353,64 @@ it('checks the owning CLI before restart recovery resumes a saved session', asyn
   const recovered = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
   expect(recovered.agents.find((a: {id: string}) => a.id === agent.id).sessionId).toBe('synthetic-session');
 });
+
+it('persists session ID and CLI together when a developer hands its PR to QA', async () => {
+  const {swarm, fake} = await office(true); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  await swarm.assign(agent.id, 1); for (let i = 0; i < 30 && !fake.startSession.mock.calls.length; i++) await Promise.resolve();
+  const callbacks = fake.startSession.mock.calls[0][1]; callbacks.sessionId('original-sdk-session');
+  callbacks.finished({ok: true, text: 'https://github.com/synthetic/repo/pull/7', costUsd: 0, turns: 1, errors: []});
+  for (let i = 0; i < 30; i++) await Promise.resolve(); await swarm.shutdown(true);
+  const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  expect(saved.qa[0]).toMatchObject({devAgentId: agent.id, devSessionId: 'original-sdk-session', devSessionCli: 'claude'});
+});
+
+async function repairOffice(checkpointCli: string | null, terminal: boolean, blocked: boolean) {
+  const {swarm} = await office(true); const developer = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'}); await swarm.shutdown(true);
+  const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  saved.settings.runtime = terminal ? 'terminal' : 'sdk'; saved.settings.defaultCli = 'copilot';
+  Object.assign(saved.agents.find((a: {id: string}) => a.id === developer.id), {status: 'done', task: 'issue', prNumber: 7, sessionId: 'newer-unrelated-session', sessionCli: 'copilot'});
+  saved.qa = [{repoId: 'synthetic/repo', prNumber: 7, status: 'failed', round: 1, devAgentId: developer.id, qaAgentId: null, summary: 'Synthetic failure', checks: [{name: 'Acceptance', result: 'fail', details: 'Synthetic incorrect response'}], issueNumber: 1, devSessionId: 'original-repair-session', devSessionCli: checkpointCli, fixInstructions: 'Fix the synthetic response', sessionFailures: 0, fixReason: 'qa', mergeFixes: 0, retests: 0}];
+  await fs.writeFile(STATE_FILE, JSON.stringify(saved));
+  const fake = backend(); fake.terminals = terminal; fake.listPulls.mockResolvedValue([pull]);
+  const restored = new Swarm(fake as unknown as Backend); offices.push(restored);
+  const preflight = vi.fn(async () => blocked ? 'Synthetic runtime blocked' : null); restored.capabilityPreflight = preflight;
+  await restored.init(); await vi.advanceTimersByTimeAsync(1000);
+  return {swarm: restored, fake, preflight, developer};
+}
+
+it('uses the repair checkpoint CLI even when the developer has a newer unrelated session', async () => {
+  const {swarm, fake, preflight, developer} = await repairOffice('codex', true, true);
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'codex'); expect(fake.startSession).not.toHaveBeenCalled();
+  await swarm.shutdown(true); const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  expect(saved.agents.find((a: {id: string}) => a.id === developer.id)).toMatchObject({sessionId: 'original-repair-session', sessionCli: 'codex'});
+  expect(saved.qa[0]).toMatchObject({devSessionId: 'original-repair-session', devSessionCli: 'codex'});
+});
+
+it.each([null, 'unknown-runtime'])('never guesses a CLI for legacy repair checkpoint %s', async cli => {
+  const {swarm, fake, preflight} = await repairOffice(cli, true, true);
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'copilot'); expect(fake.startSession).not.toHaveBeenCalled();
+  await swarm.shutdown(true); const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  expect(saved.qa[0]).toMatchObject({devSessionId: null, devSessionCli: null});
+});
+
+it.each(['claude', 'codex'])('dispatches the compatible %s repair and stores the new checkpoint pair on completion', async cli => {
+  const terminal = cli === 'codex'; const {swarm, fake} = await repairOffice(cli, terminal, false);
+  expect(fake.startSession).toHaveBeenCalledOnce();
+  const options = fake.startSession.mock.calls[0][0] as {cli?: string; resumeSessionId?: string};
+  expect(options.resumeSessionId).toBe('original-repair-session'); expect(options.cli ?? 'claude').toBe(cli);
+  const callbacks = fake.startSession.mock.calls[0][1]; callbacks.sessionId('completed-repair-session');
+  callbacks.finished({ok: true, text: 'Synthetic repair completed', costUsd: 0, turns: 1, errors: []});
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  vi.useRealTimers(); // xterm's asynchronous flush during terminal persistence must run
+  await swarm.shutdown(true);
+  const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  expect(saved.qa[0]).toMatchObject({status: 'queued', devSessionId: 'completed-repair-session', devSessionCli: cli});
+});
+
+it('starts fresh rather than giving a Codex checkpoint to the SDK', async () => {
+  const {swarm, fake, preflight} = await repairOffice('codex', false, false);
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'node'); expect(fake.startSession).toHaveBeenCalledOnce();
+  expect((fake.startSession.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBeUndefined();
+  await swarm.shutdown(true); const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  expect(saved.qa[0]).toMatchObject({devSessionId: null, devSessionCli: null});
+});

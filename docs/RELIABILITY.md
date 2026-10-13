@@ -1,12 +1,20 @@
 # Reliability priorities 5–8
 
+## Repair checkpoint ownership
+
+QA records persist the developer session ID and its owning CLI together. Handoff, requeue and repair completion update the pair as one state change; an agent's newer unrelated session cannot change the runtime owner of an earlier repair checkpoint. Repair preparation copies the selected checkpoint into the active task before readiness checks, so blocked dispatch retains the intended checkpoint.
+
+A checkpoint resumes only for its original developer and a compatible runtime. SDK repairs can resume Claude checkpoints; terminal repairs use the recorded CLI. Unknown legacy CLI provenance, incompatible SDK checkpoints and developer takeovers start a fresh session with the current PR and QA instructions. Unknown agent-level CLI provenance is also no longer inferred as Claude. This may create a fresh session for legacy offices, while preserving the repository work and avoiding an incorrectly routed resume.
+
+Actual Swarm regressions exercise handoff, a newer unrelated agent session, blocked readiness, migration, compatible repair dispatch and checkpoint replacement on completion. The terminal-path test includes real emulator persistence with a synthetic backend, not a native CLI process. Native reconnect/retention, CEO admission and authoritative full policy/schema enforcement remain separate requirements. Evidence: `.swarm-reliability/repair-checkpoint-coverage-2026-10-13.txt`, `repair-checkpoint-coverage-exit-2026-10-13.txt` and `repair-checkpoint-api-e2e-2026-10-13.txt`.
+
 ## Follow-up and release-review readiness
 
 Non-demo Swarm instances deny readiness when no capability provider is configured or its reply is empty/unknown. The server adapter requires a nonempty ready result with every check passing; a blocked result with no failed-check remedies still returns a blocker. Providers are installed before Swarm initialization and restart recovery.
 
 Worker follow-up prompts to active sessions and resumed worker sessions now check readiness. Resume checks use the effective runtime: the saved session's CLI for terminal continuation, or Node for SDK execution (including terminal configurations where native terminals are unavailable). New continuations reserve their agent before awaiting checks, retain their saved checkpoint when blocked, and cannot start after cancellation or shutdown. Workspace preparation also stops if the assignment was cancelled during readiness checks.
 
-Release reviews reserve their assigned QA agent, run the same capability check, and revalidate the agent/session before dispatch. Failed readiness can be retried without resetting the reviewer; a live session or reserved reviewer still blocks concurrent review. Fix sessions preflight the runtime selected by their current dispatch context; historic QA fix-checkpoint CLI provenance still needs validation.
+Release reviews reserve their assigned QA agent, run the same capability check, and revalidate the agent/session before dispatch. Failed readiness can be retried without resetting the reviewer; a live session or reserved reviewer still blocks concurrent review. Fix sessions preflight the runtime selected by their recorded repair checkpoint and dispatch context.
 
 These changes cover capability admission, not comprehensive policy/schema approval. Retained CLI processes, directly typed native execution, CEO dispatch, and full governance across all runtime paths remain unverified or incomplete. Existing authenticated policy inventory does not authorize these paths. Evidence: `.swarm-reliability/session-admission-coverage-2026-10-13.txt`, `session-admission-coverage-exit-2026-10-13.txt`, and `session-admission-api-e2e-2026-10-13.txt`.
 

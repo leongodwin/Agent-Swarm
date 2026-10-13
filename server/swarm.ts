@@ -120,6 +120,7 @@ interface PersistedAgent {
 interface QaRecord extends QaView {
   issueNumber: number | null;
   devSessionId: string | null; // the dev's Claude Code session, resumed to fix QA findings
+  devSessionCli: AgentCli | null; // belongs to this checkpoint, not the agent's later sessions
   fixInstructions: string | null;
   sessionFailures: number;
   testedSha: string | null; // the head commit QA is testing
@@ -136,6 +137,12 @@ interface QaRecord extends QaView {
 interface FloorOptions {
   mission?: string; // brief for the CEO to plan from
   autoAssign?: boolean; // free developers pick up backlog issues as soon as they're filed
+}
+
+function developerCheckpoint(dev: Pick<PersistedAgent, 'id' | 'sessionId' | 'sessionCli'> | null, previous?: Pick<QaRecord, 'devAgentId' | 'devSessionId' | 'devSessionCli'>): Pick<QaRecord, 'devSessionId' | 'devSessionCli'> {
+  if (dev?.sessionId) return {devSessionId: dev.sessionId, devSessionCli: isCli(dev.sessionCli) ? dev.sessionCli : null};
+  if (previous && (!dev || dev.id === previous.devAgentId)) return {devSessionId: previous.devSessionId, devSessionCli: previous.devSessionCli};
+  return {devSessionId: null, devSessionCli: null};
 }
 
 interface CeoState {
@@ -415,10 +422,11 @@ export class Swarm {
           look: a.look ?? lookFor(a.name),
           task: a.task ?? (a.issueNumber ? 'issue' : null),
           cli: isCli(a.cli) ? a.cli : '',
-          sessionCli: a.sessionCli ?? (a.sessionId ? 'claude' : null),
+          sessionCli: isCli(a.sessionCli) ? a.sessionCli : null,
         })),
         qa: (loaded.qa ?? []).map((q) => ({
           ...q,
+          devSessionCli: isCli(q.devSessionCli) ? q.devSessionCli : null,
           testedSha: q.testedSha ?? null,
           passedSha: q.passedSha ?? null,
           fixReason: q.fixReason ?? null,
@@ -1525,6 +1533,7 @@ export class Swarm {
    * only be resumed by the CLI that made it, so a follow-up stays with that CLI.
    */
   private sessionRuntime(a: PersistedAgent, resume?: string): { terminal?: AgentTerminal; cli?: AgentCli; label?: string; resumeSessionId?: string } {
+    if (resume && !isCli(a.sessionCli)) resume = undefined; // legacy IDs do not establish a runtime owner
     const inTerminal = a.role === 'ceo' || (this.state.settings.runtime === 'terminal' && this.backend.terminals);
     let cli: AgentCli = a.cli || this.state.settings.defaultCli;
     if (resume && a.sessionCli && a.sessionCli !== cli) {
@@ -1963,7 +1972,7 @@ export class Swarm {
     let rec = this.state.qa.find((q) => q.repoId === repo.id && q.prNumber === prNumber);
     if (rec) {
       if (rec.status === 'testing') return;
-      this.setQa(rec, { status: 'queued', passedSha: null, testedSha: null, devAgentId: dev?.id ?? rec.devAgentId, devSessionId: dev?.sessionId ?? rec.devSessionId });
+      this.setQa(rec, { status: 'queued', passedSha: null, testedSha: null, ...developerCheckpoint(dev, rec), devAgentId: dev?.id ?? rec.devAgentId });
     } else {
       rec = {
         repoId: repo.id,
@@ -1977,7 +1986,7 @@ export class Swarm {
         commentUrl: null,
         updatedAt: Date.now(),
         issueNumber,
-        devSessionId: dev && dev.prNumber === prNumber ? dev.sessionId : null,
+        ...developerCheckpoint(dev && dev.prNumber === prNumber ? dev : null),
         fixInstructions: null,
         sessionFailures: 0,
         mergeNote: null,
@@ -2232,11 +2241,14 @@ export class Swarm {
     const pull = this.repoRt.get(repo.id)?.pulls.find((p) => p.number === rec.prNumber);
     const headRef = pull?.headRefName ?? (await this.backend.prDetails(repo.fullName, rec.prNumber)).headRefName;
     const branch = fixDeskBranch(rec.prNumber, this.agentSlug(dev));
+    const terminal = this.state.settings.runtime === 'terminal' && this.backend.terminals;
+    const resume = original && rec.devSessionId && isCli(rec.devSessionCli) && (terminal || rec.devSessionCli === 'claude') ? rec.devSessionId : undefined;
+    if (original && rec.devSessionId && !resume) this.appendLog(dev, [{kind: 'system', text: 'Repair checkpoint runtime is unknown or incompatible; starting a fresh session with the current PR and QA context.'}]);
     const qaAgent = rec.qaAgentId ? this.state.agents.find((x) => x.id === rec.qaAgentId) : null;
-    this.setQa(rec, { status: 'fixing', devAgentId: dev.id });
+    this.setQa(rec, { status: 'fixing', devAgentId: dev.id, devSessionId: resume ?? null, devSessionCli: resume ? rec.devSessionCli : null });
     this.beginTask(
       dev,
-      { task: 'fix', issueNumber: rec.issueNumber, issueTitle: pull?.title ?? `PR #${rec.prNumber}`, branch, prNumber: rec.prNumber, prUrl: pull?.url ?? null },
+      { task: 'fix', issueNumber: rec.issueNumber, issueTitle: pull?.title ?? `PR #${rec.prNumber}`, branch, prNumber: rec.prNumber, prUrl: pull?.url ?? null, sessionId: resume ?? null, sessionCli: resume ? rec.devSessionCli : null },
       rec.fixReason === 'conflict'
         ? `Resolving conflicts on PR #${rec.prNumber}`
         : rec.fixReason === 'checks'
@@ -2246,7 +2258,6 @@ export class Swarm {
             : `Fixing PR #${rec.prNumber} after QA round ${rec.round}`,
       `Checking out PR #${rec.prNumber}…`,
     );
-    const resume = original && rec.devSessionId ? rec.devSessionId : undefined;
     if (!await this.checkTaskCapabilities(dev, repo, resume)) { this.setQa(rec, { status: 'failed' }); return; }
     const cwd = await this.prepare(dev, repo, { pr: rec.prNumber }, branch);
     if (!cwd) {
@@ -2316,13 +2327,13 @@ export class Swarm {
     if (rec && (rec.fixReason === 'checks' || rec.fixReason === 'conflict')) {
       // Back in line to merge: new commits go through QA again first, a re-run of flaky checks doesn't.
       this.appendLog(a, [{ kind: 'done', text: `✔ PR #${a.prNumber} fixed in ${this.minutes(a)}m. Back in line to merge.` }]);
-      this.setQa(rec, { status: 'passed', devSessionId: a.sessionId ?? rec.devSessionId, mergeNote: 'waiting for fresh checks' });
+      this.setQa(rec, { status: 'passed', ...developerCheckpoint(a, rec), mergeNote: 'waiting for fresh checks' });
       this.toast('info', `${a.name} fixed PR #${rec.prNumber}; it merges once it passes again`);
       return;
     }
     this.appendLog(a, [{ kind: 'done', text: `✔ Fix pushed for PR #${a.prNumber} in ${this.minutes(a)}m. Back to QA.` }]);
     if (rec) {
-      this.setQa(rec, { status: 'queued', round: rec.round + 1, devSessionId: a.sessionId ?? rec.devSessionId });
+      this.setQa(rec, { status: 'queued', round: rec.round + 1, ...developerCheckpoint(a, rec) });
       this.toast('info', `${a.name} pushed fixes for PR #${rec.prNumber}; QA round ${rec.round} is queued`);
     }
   }
