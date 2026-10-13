@@ -165,6 +165,32 @@ it('waits for an initializing lease write before shutdown cleanup without resett
     expect(await fs.readFile(file,'utf8')).toBe(raw);expect(await fs.stat(path.join(root,'delivery.lock')).then(()=>true,()=>false)).toBe(false);
   } finally {release();spy.mockRestore();await closing;}
 });
+it.each(['configuration','first command','between commands'] as const)('quarantines lost delivery ownership during %s without writing over its successor',async point=>{
+  const {service,root,deps,repo,release,calls}=await fixture();
+  const file=path.join(root,'delivery.json'),lock=path.join(root,'delivery.lock');const before=await fs.readFile(file,'utf8');
+  const successor={...JSON.parse(await fs.readFile(lock,'utf8')),token:crypto.randomUUID()};const marker=JSON.stringify(successor);
+  calls.length=0;
+  if(point==='between commands'){
+    const original=deps.run;deps.run=async(command,cwd,env,signal)=>{const result=await original(command,cwd,env,signal);if(command.executable==='git'&&command.args[0]==='fetch')await fs.writeFile(lock,marker);return result;};
+  }else await fs.writeFile(lock,marker);
+  const request=point==='configuration'?service.configure(target,false):service.createRelease(repo,{...release.plan,name:'Synthetic replacement release'});
+  await expect(request).rejects.toThrow('ownership lost');
+  expect(calls).toHaveLength(point==='between commands'?1:0);expect(await fs.readFile(file,'utf8')).toBe(before);expect(await fs.readFile(lock,'utf8')).toBe(marker);
+  expect(()=>service.view()).toThrow('ownership lost');await expect(service.configure(target,true)).rejects.toThrow('closed');
+  await expect(service.close()).rejects.toThrow('ownership lost');services.splice(services.indexOf(service),1);
+  expect(await fs.readFile(lock,'utf8')).toBe(marker);
+});
+it('does not accept independent verification after its delivery owner is replaced',async()=>{
+  const {service,root,deps,repo}=await fixture();const lock=path.join(root,'delivery.lock');
+  const successor={...JSON.parse(await fs.readFile(lock,'utf8')),token:crypto.randomUUID()};const marker=JSON.stringify(successor);
+  const original=deps.verify!;deps.verify=async(...args)=>{const result=await original(...args);await fs.writeFile(lock,marker);return result;};
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  try{
+    await service.start(repo);await service.waitForIdle();expect(()=>service.view()).toThrow('ownership lost');
+    const saved=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));expect(saved.runs[0].phase).not.toBe('complete');expect(saved.runs[0].phase).not.toBe('reviewing');
+    expect(await fs.readFile(lock,'utf8')).toBe(marker);await expect(service.close()).rejects.toThrow('ownership lost');services.splice(services.indexOf(service),1);
+  }finally{warn.mockRestore();}
+});
 const validReview = (hash: string) => ({ evidenceHash: hash, scores: [4, 4, 4, 4, 4], notes: 'Inspected desktop/mobile hierarchy, accessibility, task clarity and recovery evidence.', recoveryReviewed: true });
 describe('Real solution delivery', () => {
   it('blocks an unconfigured governance provider before executing project build commands',async()=>{

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { atomicWrite, SerialWriter } from './atomicFile.ts';
 import { readBoundedJson } from './boundedJson.ts';
 import { validateDeliveryState, type DeliveryStoredState } from './deliveryState.ts';
+import {acquireDeliveryLease,type DeliveryLease} from './deliveryLease.ts';
 import { resolveTenancyCommand } from './tenancy.ts';
 import { HttpError } from './httpError.ts';
 import type { RepoView } from '../shared/types.ts';
@@ -130,11 +131,12 @@ export class DeliveryService {
   onChange: () => void = () => {};
   checkCapabilities: (repoId: string, cwd: string, environment: string, force: boolean) => Promise<{ status: string; configHash?: string; checks: { id: string; category: string; passed: boolean; remedy: string }[] }> = async () => { throw new Error('Configure capability checks before delivery'); };
   checkGovernance?: LifecycleCheck;
-  private lease: string | null = null;
+  private lease: DeliveryLease | null = null;
   private writer = new SerialWriter();
   private active: AbortController | null = null;
   private closed = false;
   private stateFailed = false;
+  private ownershipLost = false;
   private ready = false;
   private initializing: Promise<void> | null = null;
   private preparing: Promise<void> | null = null;
@@ -173,9 +175,16 @@ export class DeliveryService {
       throw new Error('Cannot load delivery state; preserve and repair it before restarting', {cause:err});
     }
   }
-  private save() { return this.writer.write(() => atomicWrite(path.join(this.root, 'delivery.json'), JSON.stringify(this.state, null, 2))); }
+  private save() { return this.writer.write(async()=>{await this.assertLeaseOwned();await atomicWrite(path.join(this.root,'delivery.json'),JSON.stringify(this.state,null,2));}); }
+  private async assertLeaseOwned(){
+    if(this.ownershipLost)throw new HttpError(409,'Delivery ownership lost');
+    try{if(!this.lease)throw new HttpError(409,'Delivery ownership is unavailable');await this.lease.assertOwned();}
+    catch(error){this.ownershipLost=true;this.closed=true;this.active?.abort();throw error;}
+  }
+  private async command(command:DeliveryCommand,cwd:string,env:Record<string,string>,signal:AbortSignal){await this.assertLeaseOwned();signal.throwIfAborted();return this.deps.run(command,cwd,env,signal);}
   private requireReady() { if (this.closed || !this.ready) throw new HttpError(409, 'Delivery service is not ready or is closed'); }
   view(repoId?: string): DeliveryView {
+    if(this.ownershipLost)throw new HttpError(409,'Delivery ownership lost; inspect the current owner before restarting');
     if (this.stateFailed || !this.ready) throw new HttpError(409, 'Delivery state is unavailable; preserve and repair it before restarting');
     return structuredClone({ ...this.state, running: !!this.active, releases: this.state.releases.filter((r) => !repoId || r.repoId === repoId), blockers: this.state.blockers.filter((r) => !repoId || r.repoId === repoId), runs: this.state.runs.filter((r) => !repoId || r.repoId === repoId).map((r) => ({ ...r, evidenceDirectory: path.join(this.root, 'delivery-runs', r.id, 'evidence') })),
       message: this.demo ? 'Real delivery is disabled in demo mode.' : !this.state.policy?.enabled ? 'Choose the development environment to enable real delivery.' : 'A scoped, QA-approved release pins the commit, target and acceptance tests. Missing evidence blocks completion.' });
@@ -210,9 +219,9 @@ export class DeliveryService {
     if (this.demo || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Enable real delivery and wait for the active run');
     const plan = releasePlanSchema.parse(input);
     const controller = new AbortController();
-    await this.deps.run({ executable: 'git', args: ['fetch', 'origin', repo.defaultBranch] }, repo.checkoutPath, {}, controller.signal);
+    await this.command({ executable: 'git', args: ['fetch', 'origin', repo.defaultBranch] }, repo.checkoutPath, {}, controller.signal);
     this.requireReady();
-    const head = (await this.deps.run({ executable: 'git', args: ['rev-parse', `origin/${repo.defaultBranch}`] }, repo.checkoutPath, {}, controller.signal)).trim();
+    const head = (await this.command({ executable: 'git', args: ['rev-parse', `origin/${repo.defaultBranch}`] }, repo.checkoutPath, {}, controller.signal)).trim();
     if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error('Cannot pin release commit');
     if (this.closed || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Delivery state changed during release preparation; retry');
     const environmentUrl = this.state.policy.environmentUrl;
@@ -234,22 +243,11 @@ export class DeliveryService {
   }
   // Exclusive process lease prevents two office processes from importing simultaneously.
   private async acquire(): Promise<void> {
-    const file = path.join(this.root, 'delivery.lock');
-    try { const handle = await fs.open(file, 'wx'); this.lease = crypto.randomUUID(); await handle.writeFile(JSON.stringify({ pid: process.pid, token: this.lease })); await handle.close(); }
-    catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      const lock = JSON.parse(await fs.readFile(file, 'utf8'));
-      try { process.kill(lock.pid, 0); } catch (check) {
-        if ((check as NodeJS.ErrnoException).code === 'ESRCH') { await fs.unlink(file); return this.acquire(); }
-      }
-      throw new HttpError(409, 'Another delivery process owns the deployment lease');
-    }
+    this.lease=await acquireDeliveryLease(this.root);
   }
   private async releaseLease() {
     if (!this.lease) return;
-    const file = path.join(this.root, 'delivery.lock');
-    const lock = JSON.parse(await fs.readFile(file, 'utf8'));
-    if (lock.token === this.lease) await fs.unlink(file);
+    await this.lease.release();
     this.lease = null;
   }
   async start(repo: RepoView, retry = false, releaseId?: string) {
@@ -273,9 +271,9 @@ export class DeliveryService {
       const prior = this.state.runs.find((r) => r.releaseId === release.id);
       if (prior && (prior.phase === 'complete' || !retry)) { this.active = null; return this.view(repo.id); }
       await this.requireCapabilities(repo, release);
-      const git = (args: string[]) => this.deps.run({ executable: 'git', args }, repo.checkoutPath, {}, controller.signal);
+      const git = (args: string[]) => this.command({ executable: 'git', args }, repo.checkoutPath, {}, controller.signal);
       for (const number of release.plan.requiredIssues) {
-        const issue = JSON.parse(await this.deps.run({ executable: 'gh', args: ['issue', 'view', String(number), '--repo', repo.fullName ?? repo.id, '--json', 'state'] }, repo.checkoutPath, {}, controller.signal));
+        const issue = JSON.parse(await this.command({ executable: 'gh', args: ['issue', 'view', String(number), '--repo', repo.fullName ?? repo.id, '--json', 'state'] }, repo.checkoutPath, {}, controller.signal));
         if (issue.state !== 'CLOSED') throw new Error(`Required issue #${number} is still open`);
       }
       await git(['fetch', 'origin', repo.defaultBranch]);
@@ -331,10 +329,10 @@ export class DeliveryService {
     this.pending = (async () => {
       const previous = run.health?.status;
       try {
-        const inventory = await this.deps.run({ executable: 'pac', args: ['solution', 'list', '--environment', run.environmentUrl, '--json'] }, repo.checkoutPath, {}, controller.signal);
+        const inventory = await this.command({ executable: 'pac', args: ['solution', 'list', '--environment', run.environmentUrl, '--json'] }, repo.checkoutPath, {}, controller.signal);
         if (!installedSolution(inventory, run.solution!, run.version!)) throw new Error('Installed solution/version drift detected');
         const capabilityHash = await this.requireCapabilities(repo, release);
-        const manifest=deliveryManifest.parse(JSON.parse(await this.deps.run({executable:'git',args:['show',`${run.head}:cubefarm.delivery.json`]},repo.checkoutPath,{},controller.signal)));
+        const manifest=deliveryManifest.parse(JSON.parse(await this.command({executable:'git',args:['show',`${run.head}:cubefarm.delivery.json`]},repo.checkoutPath,{},controller.signal)));
         await this.governance(run,manifest,'health');
         if (run.health?.capabilityHash && run.health.capabilityHash !== capabilityHash) throw new Error('Capability configuration drift detected; review and issue a new release');
         run.health = { status: 'healthy', checkedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + release.plan.monitoring.intervalMinutes * 60000).toISOString(), capabilityHash, governanceEvidence:run.health?.governanceEvidence };
@@ -382,7 +380,7 @@ export class DeliveryService {
       const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
       env[pathKey] = `${dotnetDir}${path.delimiter}${process.env[pathKey] ?? ''}`; env.DOTNET_ROOT = dotnetDir;
     }
-    const command = (executable: string, args: string[], cwd = checkout) => this.deps.run({ executable, args }, cwd, env, controller.signal);
+    const command = (executable: string, args: string[], cwd = checkout) => this.command({ executable, args }, cwd, env, controller.signal);
     const step = async (phase: DeliveryRun['phase'], fn: () => Promise<unknown>) => {
       run.phase = phase; run.log.push(`${new Date().toISOString()} ${phase}`); await this.save(); await fn();
     };
@@ -510,7 +508,7 @@ export class DeliveryService {
               await this.governance(run,manifest,'post-deploy');
               await checkAuthentication();
               const component = mapping.find((c) => c.key === action.component)!;
-              const save = () => this.save(), owned = () => targetLease!.assertOwned();
+              const save = () => this.save(), owned = async () => {await this.assertLeaseOwned();await targetLease!.assertOwned();};
               if (action.type === 'workflow-state') await reconcileWorkflowAction(action, component, request, run, save, owned);
               else if (action.type === 'cloud-flow-state') {
                 if (action.state === 'active') await verifyCloudFlowActivationBindings(flow!, manifest.platformIdentity!.environmentId, component.id, manifest.targetComponents, manifest.postDeployActions, async (check) => {
@@ -551,7 +549,7 @@ export class DeliveryService {
           await this.governance(run,manifest,'verify');
           if (!run.operations?.some((op) => op.id === `typed:${action.id}` && op.status === 'verified')) throw new Error(`Post-deployment action ${action.id} lacks a verified journal entry`);
           const component = verifiedMapping.find((item) => item.key === action.component)!;
-          const save = () => this.save(), owned = () => targetLease!.assertOwned();
+          const save = () => this.save(), owned = async () => {await this.assertLeaseOwned();await targetLease!.assertOwned();};
           if (action.type === 'workflow-state') await reconcileWorkflowAction(action, component, request, run, save, owned);
           else if (action.type === 'cloud-flow-state') {
             if (action.state === 'active') await verifyCloudFlowBindings(flow!, manifest.platformIdentity!.environmentId, component.id, manifest.targetComponents, manifest.postDeployActions);
@@ -581,9 +579,11 @@ export class DeliveryService {
         if (manifest.hasUi && !report.ui) throw new Error('Desktop/mobile, accessibility and design evidence is required');
         const files = [...report.tests.map((t) => t.evidence), ...(report.ui ? [report.ui.desktop, report.ui.mobile, report.ui.trace] : [])];
         for (const file of files) await containedFile(evidence, file);
+        await this.assertLeaseOwned();await targetLease!.assertOwned();
         const independent = release.plan.verification.api
           ? await verifyApiIndependently(release.plan.verification.api, request, evidence, controller.signal)
           : await (this.deps.verify ?? verifyIndependently)(release.plan, this.root, evidence, controller.signal);
+        await this.assertLeaseOwned();await targetLease!.assertOwned();
         if (copilotComponents.length) {
           await atomicWrite(path.join(evidence, 'copilot-verification.json'), JSON.stringify({ environmentUrl: run.environmentUrl, sourceCommit: run.head, mapping: verifiedMapping.filter((c) => c.kind === 'copilot'),
             checks: release.plan.verification.copilotChecks, independentEvidence: independent }, null, 2));
