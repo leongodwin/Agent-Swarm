@@ -8,6 +8,7 @@ import { atomicWrite, SerialWriter } from './atomicFile.ts';
 import { readBoundedJson } from './boundedJson.ts';
 import { validateDeliveryState, type DeliveryStoredState } from './deliveryState.ts';
 import {acquireDeliveryLease,type DeliveryLease} from './deliveryLease.ts';
+import {connectOwnedFlowAdapter} from './ownedFlowAdapter.ts';
 import { resolveTenancyCommand } from './tenancy.ts';
 import { HttpError } from './httpError.ts';
 import type { RepoView } from '../shared/types.ts';
@@ -420,7 +421,9 @@ export class DeliveryService {
       const copilotComponents = manifest.targetComponents.filter((c) => c.kind === 'copilot');
       for (const component of copilotComponents) if (!manifest.hasUi || !release.plan.verification.copilotChecks?.some((check) => check.component === component.key)) throw new Error(`Copilot ${component.key} requires QA-owned published-channel conversation checks`);
       for (const check of release.plan.verification.copilotChecks ?? []) if (!copilotComponents.some((c) => c.key === check.component)) throw new Error(`Copilot check references unknown component ${check.component}`);
-      if (cloudComponents.length) flow = await (this.deps.flow ?? connectFlowAdapter)(checkout, controller.signal);
+      if (cloudComponents.length) flow = await connectOwnedFlowAdapter(
+        ()=>(this.deps.flow??connectFlowAdapter)(checkout,controller.signal),
+        async()=>{await this.assertLeaseOwned();await targetLease!.assertOwned();},controller.signal);
       const checkAuthentication = async () => {
         if (manifest.targetBinding) await verifyTarget(request, manifest.targetBinding);
         if (!manifest.platformIdentity || !manifest.targetBinding) return;

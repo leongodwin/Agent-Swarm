@@ -350,8 +350,8 @@ describe('Release reliability', () => {
     expect(evidence.mapping[0].id).toBe(id); expect(evidence.checks[0].cases).toHaveLength(6);
     expect(run.appUrls).toContain(plan.verification.baseUrl);
   });
-  it('runs a mapped cloud-flow release through shared authentication and correlated live-read verification', async () => {
-    const { service, repo, deps, root } = await fixture(); const original = deps.run;
+  it.each(['owned','replaced'] as const)('runs a mapped cloud-flow release with %s office ownership', async ownership => {
+    const { service, repo, deps, root,calls } = await fixture(); const original = deps.run;
     const id = '11111111-1111-4111-8111-111111111111', solutionId = '22222222-2222-4222-8222-222222222222';
     const referenceId = '33333333-3333-4333-8333-333333333333';
     const targetManifest = { ...manifest, targetBinding: { organizationId: id, userId: id }, platformIdentity: { tenantId: id, username: 'maker@example.com', environmentId: id },
@@ -359,7 +359,12 @@ describe('Release reliability', () => {
       postDeployActions: [{ id: 'activate', type: 'cloud-flow-state', component: 'approval', state: 'active' }, { id: 'binding', type: 'connection-reference-check', component: 'dataverse', connectionId: 'approved', connectorId: 'dataverse-connector' }] };
     let correlatedRunId = ''; let active = false; let referenceChecked = false;
     const flow = { close: vi.fn(async () => {}), call: vi.fn(async (tool: string, args: Record<string, unknown>) => {
-      if (tool === 'whoami') return { azIdentity: { tenantId: id, user: 'maker@example.com' }, tokenIdentity: { tenantId: id, username: 'maker@example.com' }, effectiveConnectivityIdentity: { tenantId: id, username: 'maker@example.com' }, identityMismatch: false, connectivityIdentityMismatch: false };
+      if (tool === 'whoami') {
+        if(ownership==='replaced'){
+          const file=path.join(root,'delivery.lock');const successor=JSON.parse(await fs.readFile(file,'utf8'));successor.token=crypto.randomUUID();await fs.writeFile(file,JSON.stringify(successor));
+        }
+        return { azIdentity: { tenantId: id, user: 'maker@example.com' }, tokenIdentity: { tenantId: id, username: 'maker@example.com' }, effectiveConnectivityIdentity: { tenantId: id, username: 'maker@example.com' }, identityMismatch: false, connectivityIdentityMismatch: false };
+      }
       expect(args.env).toBe(id);
       if (tool === 'get_flow_context') return { workflowId: id, inSolution: true, solutionUniqueName: 'Active', isManaged: false, category: 5, warning: null };
       if (tool === 'get_flow') return args.path === 'properties' ? { definition: {}, connectionReferences: {} } : args.path === 'properties.connectionReferences' ? { dataverse: { connectionName: 'approved', connectionReferenceLogicalName: 'exp_dataverse', id: 'dataverse-connector' } } : active ? 'Started' : 'Stopped';
@@ -389,7 +394,13 @@ describe('Release reliability', () => {
     };
     const release = await service.createRelease(repo, { ...plan, verification: { ...plan.verification, cloudFlowChecks: [{ component: 'approval', action: 'Audit', correlationPointer: ['body', 'releaseId'], assertions: [{ pointer: ['body', 'saved'], equals: true }] }] } });
     await service.approveRelease(release.id, 'sherlock', release.planHash);
-    await service.start(repo, false, release.id); await service.waitForIdle();
+    const warn=ownership==='replaced'?vi.spyOn(console,'warn').mockImplementation(()=>{}):undefined;
+    try{await service.start(repo, false, release.id); await service.waitForIdle();}finally{warn?.mockRestore();}
+    if(ownership==='replaced'){
+      expect(()=>service.view()).toThrow('ownership lost');expect(flow.call).toHaveBeenCalledOnce();expect(flow.call.mock.calls[0][0]).toBe('whoami');expect(flow.close).toHaveBeenCalledOnce();
+      expect(calls.some(call=>call.startsWith('pac solution import'))).toBe(false);
+      await expect(service.close()).rejects.toThrow('ownership lost');services.splice(services.indexOf(service),1);return;
+    }
     const run = service.view().runs[0]; expect(run.phase).toBe('reviewing'); expect(flow.close).toHaveBeenCalledOnce();
     expect(run.operations?.find((operation) => operation.id === 'typed:binding')?.status).toBe('verified');
     const evidence = path.join(root, 'delivery-runs', run.id, 'evidence');
