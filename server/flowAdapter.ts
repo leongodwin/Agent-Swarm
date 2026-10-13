@@ -8,6 +8,7 @@ import type { PlatformIdentity } from './platformAuth.ts';
 import { verifyFlowIdentity } from './platformAuth.ts';
 import type { TargetAction, TargetComponent } from './targetOperations.ts';
 import {flowCleanup} from './flowCleanup.ts';
+import {flowAdapterEnvironment} from './flowEnvironment.ts';
 export interface FlowAdapter { call(tool: string, args: Record<string, unknown>): Promise<unknown>; close(): Promise<void> }
 /** The Flow API adds this parameter reference to connector inputs on readback.
  * The save validator rejects it in authored definitions. Strip only that exact
@@ -29,7 +30,7 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
   const skill = discoverSkills().skills.find((s) => s.id === 'power-automate:manage-flows');
   const entry = process.env.SWARM_FLOWAGENT_ENTRY ?? (skill ? path.resolve(path.dirname(skill.file), '..', '..', 'server', 'mcp.mjs') : '');
   if (!entry || !(await fs.stat(entry).catch(() => null))?.isFile()) throw new Error('FlowAgent runtime is unavailable; install/enable the Power Automate plugin or configure SWARM_FLOWAGENT_ENTRY');
-  const transport = new StdioClientTransport({ command: process.execPath, args: [entry], cwd, stderr: 'ignore', env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)) });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [entry], cwd, stderr: 'ignore', env: flowAdapterEnvironment() });
   const client = new Client({ name: 'swarm-flow-delivery', version: '1' });
   const cleanup=flowCleanup(client,transport);
   const close = () => {signal.removeEventListener('abort',abort);return cleanup.close();};
