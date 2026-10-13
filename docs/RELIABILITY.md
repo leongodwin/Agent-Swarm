@@ -348,3 +348,11 @@ Codex can return to its idle prompt after reporting that the selected model is a
 New and retained Codex sessions now monitor the visible native capacity error together with the exact idle prompt. Two unchanged observations classify the attempt as failed, clearing its active task callback and timers; developer keep-alive behavior preserves the conversation terminal where configured. Task quotations, non-idle/login screens and visible active-turn indicators are rejected. The monitor never changes the requested model or writes to a worktree. QA closes its terminal according to existing task completion policy; generated files are retained.
 
 This is a narrow provider-failure classification, not a general idle detector or proof of remote operation completion. Existing task failure/cooldown behavior still applies. Per-model exponential backoff, capacity telemetry and verified controlled rollout remain necessary for the broader runtime/reliability goal.
+
+### Launcher integration and guarded handoff
+
+The reliability branch is now integrated into local main and the non-demo office has reloaded it. Office/delivery/capability data and terminal recovery copies were saved beforehand; workspace edits are retained. Delivery state migration and visible capacity failures were observed live. A later read-only terminal observation showed capacity recovery and actual new work; the earlier idle state must not be treated as permanently quiescent.
+
+`POST /api/office/prepare-handoff` requires the authenticated local office session, a strict expected-PID body matching the current process, and no working/preparing agents or running delivery. Accepted requests acknowledge restart-style cleanup that preserves terminal keepers. The response does not restart or replace the launcher by itself. Active jobs are refused; deterministic handoff additionally needs an admission-drain mechanism and a supervisor that starts the replacement.
+
+The running launcher predates policy-reader hosting. Its reload ended the direct reader; the saved policy observation is now stale. Replacing that launcher and proving fresh native authentication reuse across a controlled server restart remain incomplete. Do not replay OAuth callback codes or treat saved profile/inventory data as a fresh authenticated read.
