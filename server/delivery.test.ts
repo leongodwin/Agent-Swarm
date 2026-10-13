@@ -100,6 +100,22 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   return { service, repo, calls, root, deps, release };
 }
 const storedRun={id:'synthetic-run',repoId:'synthetic/repo',head:'historical-commit',environmentUrl:target,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:[],log:[]};
+it.each(['governance','native-result'] as const)('fences a target lease displaced during %s without dispatching or accepting later native outcomes',async point=>{
+  const {service,repo,root,deps,calls}=await fixture();
+  const file=path.join(root,'resource-leases',crypto.createHash('sha256').update(`deployment:${target}`).digest('hex')+'.json');
+  const replace=async()=>{const current=JSON.parse(await fs.readFile(file,'utf8'));await fs.writeFile(file,JSON.stringify({...current,token:crypto.randomUUID(),owner:'synthetic-successor'}));};
+  const originalGovernance=deps.governance!,originalRun=deps.run;
+  if(point==='governance')deps.governance=async request=>{const result=await originalGovernance(request);if(request.phase==='import')await replace();return result;};
+  else deps.run=async(...args)=>{const output=await originalRun(...args);if(args[0].executable==='pac'&&args[0].args[1]==='import')await replace();return output;};
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  try{await service.start(repo);await service.waitForIdle();}finally{warn.mockRestore();}
+  expect(calls.filter(call=>call.startsWith('pac solution import'))).toHaveLength(point==='governance'?0:1);
+  expect(calls).not.toContain('verify');expect(calls).not.toContain('independent');
+  const run=service.view().runs[0];expect(run.phase).toBe('blocked');expect(run.recoveryRequired).toBe(true);
+  expect(run.error).toContain('ownership');expect(run.checkpoint).toBe('import-started');expect(run.operations?.find(op=>op.id==='solution-import')?.status).toBe('unknown');
+  const persisted=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8')).runs[0];expect(persisted.recoveryRequired).toBe(true);expect(persisted.operations[0].status).toBe('unknown');
+  expect(JSON.parse(await fs.readFile(file,'utf8')).owner).toBe('synthetic-successor');
+});
 it('requires a committed architecture version before creating a new release',async()=>{
   const {service,repo,calls}=await fixture();const before=calls.length;
   const {architecture:_binding,...unbound}=plan;

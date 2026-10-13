@@ -1,8 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {z} from 'zod';
+import {readBoundedJson} from './boundedJson.ts';
 
 interface Record { resource: string; owner: string; pid: number; token: string; acquiredAt: string }
+const schema=z.strictObject({resource:z.string().min(1).max(8192),owner:z.string().min(1).max(4000),pid:z.number().int().positive().max(2147483647),token:z.uuid(),acquiredAt:z.iso.datetime()});
+const sameOwner=(a:Record,b:Record)=>a.resource===b.resource&&a.owner===b.owner&&a.pid===b.pid&&a.token===b.token&&a.acquiredAt===b.acquiredAt;
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; } };
 
 /** Local-machine coordination. A live owner is never displaced by a timeout. */
@@ -10,15 +14,16 @@ export async function acquireResourceLease(root: string, resource: string, owner
   await fs.mkdir(root, { recursive: true });
   const file = path.join(root, `${crypto.createHash('sha256').update(resource).digest('hex')}.json`);
   const guard = `${file}.reaping`;
-  const record: Record = { resource, owner, pid: process.pid, token: crypto.randomUUID(), acquiredAt: new Date().toISOString() };
+  const record: Record = schema.parse({ resource, owner, pid: process.pid, token: crypto.randomUUID(), acquiredAt: new Date().toISOString() });
+  const bytes=JSON.stringify(record);
+  if(Buffer.byteLength(bytes,'utf8')>16*1024)throw new Error('Resource lease identity exceeds its bounded evidence size');
   const read = async () => {
-    const value = JSON.parse(await fs.readFile(file, 'utf8')) as Record;
-    if (!Number.isInteger(value.pid) || value.pid <= 0 || !value.token || value.resource !== resource) throw new Error(`Invalid resource lease: ${file}; inspect it before recovery`);
-    return value;
+    try{const value=schema.parse(await readBoundedJson(file,16*1024));if(value.resource===resource)return value;}catch{}
+    throw new Error(`Invalid resource lease: ${file}; inspect it before recovery`);
   };
   const create = async () => {
-    const handle = await fs.open(file, 'wx');
-    try { await handle.writeFile(JSON.stringify(record)); } finally { await handle.close(); }
+    const handle = await fs.open(file, 'wx',0o600);
+    try { await handle.writeFile(bytes); } finally { await handle.close(); }
   };
   try { await create(); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
@@ -28,19 +33,27 @@ export async function acquireResourceLease(root: string, resource: string, owner
     // Serialize reclaimers, then reread: another process may have acquired the resource.
     await fs.mkdir(guard).catch(() => { throw new Error(`Resource recovery already in progress: ${guard}`); });
     try {
-      const current = await read().catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e; });
-      if (current && (current.token !== previous.token || alive(current.pid))) throw new Error(`Resource ${resource} changed owner during recovery`);
+      const current = await read();
+      if (current && (!sameOwner(current,previous) || alive(current.pid))) throw new Error(`Resource ${resource} changed owner during recovery`);
       if (current) await fs.unlink(file);
       await create();
     } finally { await fs.rmdir(guard); }
   }
-  let released = false;
+  let released = false,lost=false,releaseWork:Promise<void>|undefined;
   const assertOwned = async () => {
-    if (released || (await read()).token !== record.token) throw new Error(`Resource ownership lost: ${resource}`);
+    if(released||lost)throw new Error(`Resource ownership lost: ${resource}`);
+    try{if(!sameOwner(await read(),record))throw new Error('Owner changed');}catch{lost=true;throw new Error(`Resource ownership lost: ${resource}`);}
   };
   return {
     token: record.token, assertOwned,
-    async release() { if (released) return; await assertOwned(); await fs.unlink(file); released = true; },
+    release() {
+      if(releaseWork)return releaseWork;
+      releaseWork=(async()=>{
+        await fs.mkdir(guard).catch(()=>{throw new Error(`Resource release or recovery already in progress: ${guard}`);});
+        try{await assertOwned();await fs.unlink(file);released=true;}finally{await fs.rmdir(guard);}
+      })();
+      return releaseWork;
+    },
   };
 }
 

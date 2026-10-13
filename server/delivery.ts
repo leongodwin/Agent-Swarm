@@ -186,7 +186,12 @@ export class DeliveryService {
     try{if(!this.lease)throw new HttpError(409,'Delivery ownership is unavailable');await this.lease.assertOwned();}
     catch(error){this.ownershipLost=true;this.closed=true;this.active?.abort();throw error;}
   }
-  private async command(command:DeliveryCommand,cwd:string,env:Record<string,string>,signal:AbortSignal){await this.assertLeaseOwned();signal.throwIfAborted();return this.deps.run(command,cwd,env,signal);}
+  private async command(command:DeliveryCommand,cwd:string,env:Record<string,string>,signal:AbortSignal,additionalOwnership?:()=>Promise<void>){
+    await this.assertLeaseOwned();await additionalOwnership?.();signal.throwIfAborted();
+    const output=await this.deps.run(command,cwd,env,signal);
+    await this.assertLeaseOwned();await additionalOwnership?.();signal.throwIfAborted();
+    return output;
+  }
   private requireReady() { if (this.closed || !this.ready) throw new HttpError(409, 'Delivery service is not ready or is closed'); }
   view(repoId?: string): DeliveryView {
     if(this.ownershipLost)throw new HttpError(409,'Delivery ownership lost; inspect the current owner before restarting');
@@ -313,7 +318,12 @@ export class DeliveryService {
       run.acceptance = acceptanceScope(release.plan);
       this.state.blockers = this.state.blockers.filter((b) => b.repoId !== repo.id);
       await this.changed();
-      this.pending = this.execute(repo, run, controller).catch((error) => { run.phase = 'blocked'; run.error = `Could not persist delivery status: ${error.message}`; console.warn(run.error); }).finally(async () => { this.active = null; this.pending = null; });
+      this.pending = this.execute(repo, run, controller).catch(async(error) => {
+        run.phase='blocked';run.recoveryRequired=true;run.error=`Delivery execution or cleanup failed; reconcile ownership and the persisted checkpoint before retrying: ${error.message}`;
+        // A lost office owner cannot write. Otherwise retain the cleanup failure,
+        // rather than misreporting every failed lease release as a persistence error.
+        await this.save().catch(()=>{});console.warn(run.error);
+      }).finally(async () => { this.active = null; this.pending = null; });
       return this.view(repo.id);
     } catch (err) { this.active = null; await this.blocker(repo.id, err, release); throw err; }
     finally { prepared(); this.preparing = null; }
@@ -417,12 +427,14 @@ export class DeliveryService {
       const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
       env[pathKey] = `${dotnetDir}${path.delimiter}${process.env[pathKey] ?? ''}`; env.DOTNET_ROOT = dotnetDir;
     }
-    const command = (executable: string, args: string[], cwd = checkout) => this.command({ executable, args }, cwd, env, controller.signal);
+    // The target lease is absent only during local checkout preparation. Once acquired,
+    // recheck it at every native boundary, including after asynchronous governance.
+    let targetLease: Awaited<ReturnType<typeof acquireResourceLease>> | undefined;
+    const command = (executable: string, args: string[], cwd = checkout) => this.command({ executable, args }, cwd, env, controller.signal,async()=>{await targetLease?.assertOwned();});
     const step = async (phase: DeliveryRun['phase'], fn: () => Promise<unknown>) => {
       run.phase = phase; run.log.push(`${new Date().toISOString()} ${phase}`); await this.save(); await fn();
     };
     const commands = async (list: DeliveryCommand[],manifest:unknown,phase:GovernancePhase) => { for (const item of list) {await this.governance(run,manifest,phase);await command(item.executable, item.args);} };
-    let targetLease: Awaited<ReturnType<typeof acquireResourceLease>> | undefined;
     const authoringLeases: Awaited<ReturnType<typeof acquireResourceLease>>[] = [];
     let flow: FlowAdapter | undefined;
     try {
