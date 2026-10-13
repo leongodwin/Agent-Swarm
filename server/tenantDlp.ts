@@ -45,6 +45,7 @@ export class TenantDlpService {
   private closed = false;
   private corrupt = false;
   private saving: Promise<void> = Promise.resolve();
+  private observationWaiters = new Set<() => void>();
   constructor(private home: string, private start: StartPolicyReader = startReader, private now: () => number = Date.now, private writeEvidence: typeof atomicWrite = atomicWrite) {}
   async init() {
     try { const file = path.join(this.home, 'tenant-dlp.json'); if ((await fs.stat(file)).size > 8 * 1024 * 1024) throw new Error('oversized'); this.snapshot = tenantSnapshotSchema.parse(JSON.parse(await fs.readFile(file, 'utf8'))); this.unavailable = false; }
@@ -61,6 +62,36 @@ export class TenantDlpService {
     if(this.closed||this.view().status!=='observed'||!this.snapshot) throw new Error('A fresh authenticated standard-policy inventory is required');
     return structuredClone(verifyTenantSnapshot(this.snapshot,identity,this.now()));
   }
+  /** Join one identity-bound read; cancellation revokes this waiter, not another
+   * caller's discovery or a native read already issued. No observation grants full compliance. */
+  async ensureObservation(input:{tenantId:string;caller:string},options:{signal?:AbortSignal;force?:boolean;timeoutMs?:number}={}) {
+    const identity=identitySchema.parse(input);
+    const timeout=z.number().int().min(1).max(55_000).parse(options.timeoutMs??45_000);
+    if(options.signal?.aborted)throw new Error('Policy observation wait was cancelled');
+    if(!options.force)try{return this.observation(identity);}catch {/* A bounded fresh read is required. */}
+    if(this.pending&&(!this.identity||this.identity.tenantId.toLowerCase()!==identity.tenantId.toLowerCase()||this.identity.caller.toLowerCase()!==identity.caller.toLowerCase()))throw new Error('Policy discovery is in progress for another tenant or account');
+    if(!this.pending)this.refresh(identity);
+    const pending=this.pending;
+    if(!pending)throw new Error(this.reason);
+    return new Promise<Snapshot>((resolve,reject)=>{
+      let done=false;
+      const finish=(error?:Error,snapshot?:Snapshot)=>{
+        if(done)return;done=true;clearTimeout(timer);this.observationWaiters.delete(check);options.signal?.removeEventListener('abort',cancel);
+        if(error)reject(error);else resolve(snapshot!);
+      };
+      const cancel=()=>finish(new Error('Policy observation wait was cancelled'));
+      const check=()=>{
+        if(this.closed){finish(new Error('Policy reader is closed'));return;}
+        if(this.pending===pending)return;
+        if(this.pending){finish(new Error('Policy observation request was replaced'));return;}
+        try {finish(undefined,this.observation(identity));}catch {finish(new Error(this.reason));}
+      };
+      const timer=setTimeout(()=>finish(new Error('Policy observation wait expired; execution denied')),timeout);
+      this.observationWaiters.add(check);options.signal?.addEventListener('abort',cancel,{once:true});
+      if(options.signal?.aborted)cancel();else check();
+    });
+  }
+  private notifyObservationWaiters() {for(const check of [...this.observationWaiters])check();}
   refresh(input: unknown): TenantDlpView {
     if (this.closed) throw new HttpError(409, 'Policy reader is closed');
     if (this.corrupt) throw new HttpError(409, 'Preserve and repair the corrupted policy evidence before refreshing');
@@ -92,7 +123,7 @@ export class TenantDlpService {
     } catch { if(this.pending?.id===id)this.fail('Policy reader could not start; install the supported administration module and Windows PowerShell'); this.stopReader(); }
     return this.view();
   }
-  private fail(reason: string) { clearTimeout(this.pending?.timer); this.pending = undefined; this.reading = false; this.unavailable = true; this.reason = reason; }
+  private fail(reason: string) { clearTimeout(this.pending?.timer); this.pending = undefined; this.reading = false; this.unavailable = true; this.reason = reason; this.notifyObservationWaiters(); }
   private stopReader(keepWarm=false) { const old=this.reader; this.reader=undefined; this.readerGeneration=undefined; old?.stop(keepWarm); }
   private async observe(value: unknown, identity: Identity, pending: NonNullable<TenantDlpService['pending']>, generation: symbol) {
     const owns=()=>!this.closed&&this.identity===identity&&this.pending===pending&&this.readerGeneration===generation;
@@ -103,8 +134,9 @@ export class TenantDlpService {
       await this.writeEvidence(path.join(this.home, 'tenant-dlp.json'), JSON.stringify(snapshot, null, 2), owns);
       if (!owns()) return;
       this.snapshot = snapshot; this.unavailable = false; this.reading = false; clearTimeout(this.pending?.timer); this.pending = undefined;
+      this.notifyObservationWaiters();
     } catch { if(owns())this.fail('Policy discovery or evidence persistence failed; previous evidence is not current verification'); }
   }
   async settled() { await this.saving; }
-  async close(restart=false) { this.closed = true; clearTimeout(this.pending?.timer); this.pending = undefined; this.reading = false; this.stopReader(restart); await this.saving; }
+  async close(restart=false) { this.closed = true; clearTimeout(this.pending?.timer); this.pending = undefined; this.reading = false; this.notifyObservationWaiters(); this.stopReader(restart); await this.saving; }
 }

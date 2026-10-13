@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Automatic lifecycle policy observation
+
+The production lifecycle provider requests a fresh authenticated standard-policy inventory at each build, test, import, post-deployment, verification and health check, using the exact manifest tenant/account. Warm native authentication is reused through the existing reader. Concurrent checks for that identity join one pending read; a different tenant/account cannot take over pending discovery. A non-forced service read may reuse fresh persisted evidence, but production lifecycle checks explicitly force discovery.
+
+Each waiter is bounded to 45 seconds, below the lifecycle provider's 60-second deadline, and accepts the lifecycle abort signal. Timeout, cancellation, closure, provider failure and persistence failure reject that wait. Cancellation removes only its waiter; another caller or a native read already issued may continue within the reader's existing ten-minute limit. Late valid inventory may remain useful globally, but cannot resurrect a cancelled/expired delivery check. Returned snapshots are independent copies. Fresh-read failure never falls back to a cached passing classification.
+
+The service still evaluates only standard-policy inventory. Complete package-resource inventory, advanced policies and comprehensive schema contracts remain necessary for any clear lifecycle decision; fresh standard data does not bypass those blockers. Tests exercise all six lifecycle phases and shared/manual discovery, identity conflict, cancellation, expiry, failure and closure. The current office remains in direct mode with stale evidence; no live sign-in, tenant mutation or complete compliance claim occurred. Evidence: `.swarm-reliability/automatic-policy-read-coverage-2026-10-13.txt`, `automatic-policy-read-coverage-exit-2026-10-13.txt`, `automatic-policy-read-api-e2e-2026-10-13.txt` and `automatic-policy-read-live-runtime-2026-10-13.json`.
+
 ## Launcher-owned authentication reuse
 
 The office launcher now owns the authenticated standard-policy PowerShell reader, so server development reloads can release their subscription while leaving the reader's in-memory native authentication intact. Replacement servers request a fresh inventory over Node's inherited IPC channel. No network listener, exported token cache, arbitrary executable path or caller-supplied command is added. A direct launch, or a launcher without the new capability flag, retains the server-owned reader fallback. `/api/runtime` reports `policyReaderMode` as `launcher` or `direct`.

@@ -8,7 +8,7 @@ import path from 'node:path';
 /** Declaration-level standard checks may deny, but cannot authorize a release.
  * A full provider must also independently extract package resources and evaluate
  * advanced/action/endpoint policies and comprehensive source/target schemas. */
-export function createDeliveryGovernance(source:{observation(identity:{tenantId:string;caller:string}):unknown}):LifecycleCheck {
+export function createDeliveryGovernance(source:{observation(identity:{tenantId:string;caller:string}):unknown;ensureObservation?(identity:{tenantId:string;caller:string},options:{signal?:AbortSignal;force:boolean;timeoutMs:number}):Promise<unknown>}):LifecycleCheck {
   return async request=>{
     const manifest=deliveryManifest.parse(request.manifest);
     let packageInventoryFile:string|undefined;
@@ -33,7 +33,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     if(!manifest.platformIdentity)return unavailable(['The release lacks a pinned platform identity for tenant policy and schema governance']);
     const identity={tenantId:manifest.platformIdentity.tenantId,caller:manifest.platformIdentity.username};
     let snapshot:unknown;
-    try{snapshot=source.observation(identity);}
+    try{snapshot=source.ensureObservation?await source.ensureObservation(identity,{signal:request.signal,force:true,timeoutMs:45_000}):await source.observation(identity);}
     catch{return unavailable(['Refresh the authenticated policy inventory for the exact approved tenant and account before governed delivery']);}
     const declared=manifest.postDeployActions.filter(action=>action.type==='connection-reference-check').map(action=>({id:`reference:${action.component}`,complete:true,connectors:[action.connectorId]}));
     if(!(resources??declared).length)return unavailable(['No independently complete app/flow connector inventory is available; advanced policy and comprehensive schema evidence are also required']);

@@ -32,6 +32,22 @@ it('uses exact approved tenant/account and never promotes an empty standard inve
   const read=vi.fn(()=>observation());const check=createDeliveryGovernance({observation:read});const result=await check(request);
   expect(read).toHaveBeenCalledWith({tenantId:guid,caller:'tester@company.test'});expect(result.status).toBe('unavailable');expect(result.policySha256).toMatch(/^[a-f0-9]{64}$/);expect(result.reasons[0]).toContain('remain unverified');
 });
+it('requests a fresh identity-bound observation at every lifecycle phase without granting full compliance',async()=>{
+  const cached=vi.fn(()=>observation()),fresh=vi.fn(async()=>observation());const check=createDeliveryGovernance({observation:cached,ensureObservation:fresh});
+  const controller=new AbortController();
+  for(const phase of ['build','test','import','post-deploy','verify','health'] as const) {
+    const result=await check({...request,phase,signal:controller.signal});expect(result.phase).toBe(phase);expect(result.status).toBe('unavailable');
+    expect(fresh).toHaveBeenLastCalledWith({tenantId:guid,caller:'tester@company.test'},{force:true,timeoutMs:45_000,signal:controller.signal});
+  }
+  expect(fresh).toHaveBeenCalledTimes(6);expect(cached).not.toHaveBeenCalled();
+});
+it('awaits discovery and never falls back to a cached passing classification on fresh-read failure',async()=>{
+  let reject!:(error:Error)=>void;const fresh=vi.fn(()=>new Promise<unknown>((_resolve,fail)=>{reject=fail;}));const cached=vi.fn(()=>observation());
+  const check=createDeliveryGovernance({observation:cached,ensureObservation:fresh});let finished=false;
+  const result=check(request).then(value=>{finished=true;return value;});await Promise.resolve();expect(finished).toBe(false);
+  reject(new Error('private authentication detail'));const denied=await result;
+  expect(denied.status).toBe('unavailable');expect(cached).not.toHaveBeenCalled();expect(JSON.stringify(denied)).not.toContain('private');
+});
 it('blocks standard classification violations from the actual observation and handles missing target, discovery and resource contracts',async()=>{
   const blocked=createDeliveryGovernance({observation:()=>observation([{name:'policy',environmentType:'AllEnvironments',environments:[],defaultConnectorsClassification:'General',connectorGroups:[{classification:'Blocked',connectors:[{id:'shared_commondataserviceforapps'}]}]}])});
   expect((await blocked(request)).status).toBe('blocked');

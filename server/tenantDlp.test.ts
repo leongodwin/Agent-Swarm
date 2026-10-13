@@ -100,6 +100,43 @@ it('revokes queued persistence on expiry without clearing or overwriting a repla
   expect(service.view()).toMatchObject({status:'observed',policyCount:1});
   expect(JSON.parse(await fs.readFile(path.join(root,'tenant-dlp.json'),'utf8')).policies).toEqual([{name:'replacement'}]);
 });
+it('shares an identity-bound fresh read, preserves independent results and forces subsequent stage reads',async()=>{
+  let report!:(value:unknown)=>void;const refresh=vi.fn(),start=vi.fn<StartPolicyReader>((_identity,result,_end,initialId)=>{
+    let id=initialId;report=value=>result(value,id);refresh.mockImplementation(next=>{id=next;});return {refresh,stop:vi.fn()};
+  });
+  const {service}=await fixture(start);
+  const first=service.ensureObservation(identity,{force:true}),second=service.ensureObservation({...identity,caller:identity.caller.toUpperCase()},{force:true});
+  expect(start).toHaveBeenCalledOnce();report({status:'observed',snapshot:snapshot()});await service.settled();
+  const [a,b]=await Promise.all([first,second]);expect(a).toEqual(b);expect(a).not.toBe(b);
+  await service.ensureObservation(identity);expect(refresh).not.toHaveBeenCalled();
+  const forced=service.ensureObservation(identity,{force:true});expect(refresh).toHaveBeenCalledOnce();
+  report({status:'observed',snapshot:{...snapshot(),policies:[{name:'fresh-stage'}]}});await service.settled();expect((await forced).policies).toEqual([{name:'fresh-stage'}]);
+});
+it('joins manual discovery and rejects another identity without taking over its reader',async()=>{
+  let report!:(value:unknown)=>void;const stop=vi.fn();const {service}=await fixture((_identity,result,_end,id)=>{report=value=>result(value,id);return {refresh:vi.fn(),stop};});
+  service.refresh(identity);const joined=service.ensureObservation(identity,{force:true});
+  await expect(service.ensureObservation({...identity,caller:'other@company.test'},{force:true})).rejects.toThrow('another tenant or account');
+  expect(stop).not.toHaveBeenCalled();report({status:'observed',snapshot:snapshot()});await service.settled();expect((await joined).caller).toBe(identity.caller);
+});
+it('cancels only the requesting waiter while another check can complete discovery',async()=>{
+  let report!:(value:unknown)=>void;const stop=vi.fn();const {service}=await fixture((_identity,result,_end,id)=>{report=value=>result(value,id);return {refresh:vi.fn(),stop};});
+  const controller=new AbortController();const cancelled=service.ensureObservation(identity,{signal:controller.signal,force:true});
+  const cancellation=expect(cancelled).rejects.toThrow('cancelled');const other=service.ensureObservation(identity,{force:true});controller.abort();await cancellation;
+  expect(stop).not.toHaveBeenCalled();expect(service.view().status).toBe('reading');
+  report({status:'observed',snapshot:snapshot()});await service.settled();expect((await other).pages).toBe(1);
+  const aborted=new AbortController();aborted.abort();await expect(service.ensureObservation(identity,{signal:aborted.signal})).rejects.toThrow('cancelled');
+});
+it('bounds waits without promoting late evidence to the expired waiter and rejects closure and provider failure',async()=>{
+  vi.useFakeTimers();let report!:(value:unknown)=>void;const {service}=await fixture((_identity,result,_end,initialId)=>{let id=initialId;report=value=>result(value,id);return {refresh:vi.fn(next=>{id=next;}),stop:vi.fn()};});
+  const timed=service.ensureObservation(identity,{force:true,timeoutMs:5});const expired=expect(timed).rejects.toThrow('expired');
+  await vi.advanceTimersByTimeAsync(5);await expired;
+  report({status:'observed',snapshot:snapshot()});await service.settled();expect(service.view().status).toBe('observed');
+  await expect(service.ensureObservation(identity,{timeoutMs:Infinity})).rejects.toThrow();
+  const failed=service.ensureObservation(identity,{force:true});const failure=expect(failed).rejects.toThrow('discovery or evidence persistence');
+  report({status:'unavailable'});await service.settled();await failure;
+  const closing=service.ensureObservation(identity,{force:true});const closed=expect(closing).rejects.toThrow('closed');
+  await service.close();await closed;
+});
 it.runIf(process.platform==='win32')('runs the actual correlated PowerShell loop and stops on unsupported commands',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-policy-protocol-'));roots.push(root);const script=path.join(root,'protocol-test.ps1');
   const initial='11111111-1111-4111-8111-111111111111',next='22222222-2222-4222-8222-222222222222';
