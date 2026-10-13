@@ -345,7 +345,7 @@ export function removeDesk(fullName: string, agentSlug: string): Promise<void> {
 // ---------- leftover processes ----------
 
 // Only these kinds of processes are stopped when walking up from a leftover to its (orphaned) launcher.
-const LAUNCHERS = ['node.exe', 'cmd.exe', 'bash.exe', 'sh.exe', 'conhost.exe', 'python.exe', 'npm.exe', 'npx.exe', 'bun.exe', 'deno.exe'];
+const LAUNCHERS = ['node.exe', 'cmd.exe', 'bash.exe', 'sh.exe', 'zsh.exe', 'conhost.exe', 'python.exe','python3.exe', 'npm.exe', 'npx.exe', 'bun.exe', 'deno.exe','dotnet.exe','java.exe','ruby.exe','php.exe','powershell.exe','pwsh.exe'];
 
 /** What a desk clean-up leaves alone: the office's own processes, and command lines that carry these paths. */
 export interface OfficeProcesses {
@@ -366,17 +366,21 @@ export function leftoversInDesk(listing: string, desk: string, keep: OfficeProce
     if (!m) continue;
     const [pid, args] = [Number(m[1]), m[2]];
     if (keep.pids.includes(pid) || keep.markers.some((mark) => pathForms(mark).some((f) => args.includes(f)))) continue;
-    if (pathForms(desk).some((f) => args.includes(f))) out.push(pid);
+    const executable=args.match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/),file=executable?.[1]??executable?.[2]??executable?.[3]??'';
+    const name=file.split(/[\\/]/).at(-1)?.toLowerCase().replace(/\.exe$/,'');
+    const runtime=LAUNCHERS.some(item=>item.replace(/\.exe$/,'')===name);
+    if ((runtime||pathForms(desk).some(mark=>file.includes(mark)))&&pathForms(desk).some((f) => args.includes(f))) out.push(pid);
   }
   return out;
 }
 
 /**
- * Stop what an agent left running: anything listening on its reserved port or whose command line points into its
- * desk, plus the shell/node chain that launched it. Never the office's own processes (the keeper, the CLIs in agents'
+ * Stop desk-marked leftovers. A listening port alone cannot establish ownership.
+ * Runtime processes and executables inside the desk are eligible; an editor merely
+ * opening that path is not. Never the office's own processes (the keeper, the CLIs in agents'
  * terminals): the walk up from a leftover stops at them.
  */
-export async function releaseDesk(fullName: string, agentSlug: string, port: number, keep: OfficeProcesses = { pids: [], markers: [] }): Promise<void> {
+export async function releaseDesk(fullName: string, agentSlug: string, _port: number, keep: OfficeProcesses = { pids: [], markers: [] }): Promise<void> {
   const desk = deskDir(fullName, agentSlug);
   const spare = [process.pid, ...keep.pids];
   if (process.platform === 'win32') {
@@ -385,9 +389,9 @@ export async function releaseDesk(fullName: string, agentSlug: string, port: num
 $ErrorActionPreference = 'SilentlyContinue'
 $spare = @(${spare.join(', ')})
 $seed = @()
-Get-NetTCPConnection -LocalPort ${port} -State Listen | ForEach-Object { $seed += [int]$_.OwningProcess }
 $desks = @(${psList([desk])})
 $marks = @(${psList(keep.markers)})
+$launchers = @(${LAUNCHERS.map((n) => `'${n}'`).join(', ')})
 $all = Get-CimInstance Win32_Process
 $byId = @{}; foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }
 foreach ($p in $all) {
@@ -396,27 +400,42 @@ foreach ($p in $all) {
   $ours = $false
   foreach ($m in $marks) { if ($cmd.Contains($m)) { $ours = $true } }
   if ($ours) { continue }
+  $runtime = $launchers -contains $p.Name.ToLower()
+  if (-not $runtime) {
+    foreach ($d in $desks) { if ($p.ExecutablePath -and $p.ExecutablePath.ToLower().Contains($d)) { $runtime = $true } }
+  }
+  if (-not $runtime) { continue }
   foreach ($d in $desks) { if ($cmd.Contains($d)) { $seed += [int]$p.ProcessId } }
 }
-$launchers = @(${LAUNCHERS.map((n) => `'${n}'`).join(', ')})
 $kill = New-Object 'System.Collections.Generic.HashSet[int]'
 foreach ($id in $seed) {
   $cur = $byId[$id]
   $first = $true
   while ($cur -and -not ($spare -contains [int]$cur.ProcessId) -and ($first -or $launchers -contains $cur.Name.ToLower())) {
+    if (-not $first) {
+      $protected = $false
+      foreach ($m in $marks) { if ($cur.CommandLine -and $cur.CommandLine.ToLower().Contains($m)) { $protected = $true } }
+      if ($protected) { break }
+      $marked = $false
+      foreach ($d in $desks) { if ($cur.CommandLine -and $cur.CommandLine.ToLower().Contains($d)) { $marked = $true } }
+      if (-not $marked) { break }
+    }
     [void]$kill.Add([int]$cur.ProcessId)
     $first = $false
     $cur = $byId[[int]$cur.ParentProcessId]
   }
 }
-foreach ($id in $kill) { taskkill /PID $id /T /F 2>&1 | Out-Null }
+foreach ($id in $kill) {
+  $observed = $byId[$id]
+  $current = Get-CimInstance Win32_Process -Filter "ProcessId=$id"
+  if ($current -and $current.CreationDate -eq $observed.CreationDate -and $current.CommandLine -eq $observed.CommandLine) { taskkill /PID $id /T /F 2>&1 | Out-Null }
+}
 Write-Output $kill.Count`;
     await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { timeoutMs: 30_000 }).catch(() => undefined);
     return;
   }
-  const listening = await run('sh', ['-c', `lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null || true`]).catch(() => '');
   const listing = await run('ps', ['-A', '-ww', '-o', 'pid=,args=']).catch(() => '');
-  const pids = new Set([...listening.split(/\s+/).map(Number), ...leftoversInDesk(listing, desk, keep)]);
+  const pids = new Set(leftoversInDesk(listing, desk, keep));
   for (const pid of pids) {
     if (!pid || spare.includes(pid)) continue;
     try {

@@ -27,6 +27,7 @@ interface Run {
   log: string[];
   handle: PreviewHandle | null;
   gen: number; // bumped by every start / stop; callbacks from older runs are ignored
+  stopping:Promise<void>|null;
 }
 
 const PREVIEW_BASE_PORT = 6300;
@@ -80,7 +81,7 @@ export class Previews {
   private run(id: string): Run {
     let r = this.runs.get(id);
     if (!r) {
-      r = { status: 'stopped', port: null, ref: null, pr: null, commit: null, startedAt: null, error: null, log: [], handle: null, gen: 0 };
+      r = { status: 'stopped', port: null, ref: null, pr: null, commit: null, startedAt: null, error: null, log: [], handle: null, gen: 0,stopping:null };
       this.runs.set(id, r);
     }
     return r;
@@ -170,12 +171,12 @@ export class Previews {
         },
         failed: (message, unconfigured) => {
           if (!live()) return;
-          r.handle = null;
           Object.assign(r, { status: unconfigured ? 'unconfigured' : 'error', error: message });
           if (unconfigured) this.hasDefault.set(f.id, false);
           this.hooks.emit(f.id);
           // Anything the app left behind in its worktree or on its port goes too.
-          void this.backend.releaseDesk(f.fullName, PREVIEW_SLUG, port).catch(() => undefined);
+          // Retain the handle until verified cleanup. A failure callback is not
+          // proof that its runtime and startup work have finished.
         },
       },
     );
@@ -185,8 +186,9 @@ export class Previews {
   /** Stop the floor's preview and free its port. */
   async stop(f: PreviewFloor): Promise<PreviewView> {
     const r = this.run(f.id);
-    r.gen++;
+    const gen=++r.gen;
     await this.halt(f, r);
+    if(gen!==r.gen)return this.view(f);
     Object.assign(r, { status: 'stopped', error: null, startedAt: null });
     this.hooks.emit(f.id);
     return this.view(f);
@@ -230,14 +232,22 @@ export class Previews {
   }
 
   private async halt(f: PreviewFloor, r: Run) {
+    if(r.stopping)return r.stopping;
     const handle = r.handle;
-    r.handle = null;
     if (!handle) return;
-    await handle.stop().catch(() => undefined);
-    if (!r.port) return;
-    await this.backend.releaseDesk(f.fullName, PREVIEW_SLUG, r.port).catch(() => undefined);
-    // Windows can take a moment to let go of a killed process's socket.
-    for (let i = 0; i < 20 && (await portOpen(r.port)); i++) await new Promise((res) => setTimeout(res, 250));
+    const work=Promise.resolve().then(async()=>{
+      try{
+        await handle.stop();
+        if(r.port){
+          await this.backend.releaseDesk(f.fullName,PREVIEW_SLUG,r.port);
+          for(let i=0;i<20&&(await portOpen(r.port));i++)await new Promise(resolve=>setTimeout(resolve,250));
+          if(await portOpen(r.port))throw new Error('Preview port is still listening; cleanup ownership is unverified');
+        }
+        if(r.handle===handle)r.handle=null;
+      }catch(error){r.status='error';r.error='Preview cleanup is unverified; resolve it before restarting or removing the worktree';this.hooks.emit(f.id);throw error;}
+    });
+    r.stopping=work;
+    try{await work;}finally{if(r.stopping===work)r.stopping=null;}
   }
 
   private async checkOpen(f: PreviewFloor, pr: number) {

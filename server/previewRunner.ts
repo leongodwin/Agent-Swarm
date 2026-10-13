@@ -5,6 +5,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { git } from './exec.ts';
 import * as workspace from './workspace.ts';
+import {terminalCallback} from './terminalCallbacks.ts';
 
 // A floor's app, run for the preview monitor: checked out in its own worktree (never the floor's main checkout,
 // which for floor 1 is the folder the live office runs from), installed, started, and watched until its port answers.
@@ -129,22 +130,38 @@ class RealPreview implements PreviewHandle {
   private child: ChildProcess | null = null;
   private stopped = false;
   private partial = '';
+  private work:Promise<void>;
+  private childClosed:Promise<number|null>|null=null;
+  private stopWork:Promise<void>|null=null;
 
   constructor(
     private job: PreviewJob,
     private cb: PreviewCallbacks,
   ) {
-    void this.run().catch((err) => {
+    const callbacks=cb;
+    this.cb={status:value=>terminalCallback(callbacks.status,value),commit:value=>terminalCallback(callbacks.commit,value),log:value=>terminalCallback(callbacks.log,value),failed:(message,unconfigured)=>terminalCallback(value=>value.unconfigured===undefined?callbacks.failed(value.message):callbacks.failed(value.message,value.unconfigured),{message,unconfigured})};
+    this.work=Promise.resolve().then(()=>this.run()).catch(async(err) => {
       if (this.stopped || err instanceof Stopped) return;
       this.stopped = true;
-      if (this.child) void killTree(this.child);
-      this.cb.failed((err as Error).message);
+      let message=(err as Error).message;
+      try{if(this.child)await this.terminate();}catch{message+=' Preview cleanup is unverified; retry cleanup before restarting.';}
+      this.cb.failed(message);
     });
   }
 
-  async stop() {
+  stop():Promise<void> {
+    if(this.stopWork)return this.stopWork;
     this.stopped = true;
-    if (this.child) await killTree(this.child);
+    this.stopWork=(async()=>{if(this.child)await this.terminate();await this.work;})();
+    void this.stopWork.catch(()=>{this.stopWork=null;});
+    return this.stopWork;
+  }
+  private async terminate(){
+    const child=this.child,closed=this.childClosed;if(!child||!closed)return;
+    await killTree(child);
+    let timer:NodeJS.Timeout|undefined;
+    try{await Promise.race([closed,new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error('Preview root exit is unverified; cleanup remains blocked')),5000);})]);}
+    finally{clearTimeout(timer);}
   }
 
   private check() {
@@ -152,16 +169,20 @@ class RealPreview implements PreviewHandle {
   }
 
   private async run() {
+    this.check();
     const { job, cb } = this;
     cb.status('preparing');
+    this.check();
     const wt = await workspace.prepareDesk(job.fullName, { defaultBranch: job.defaultBranch, pr: job.pr ?? undefined }, PREVIEW_SLUG, PREVIEW_BRANCH);
     this.check();
     await workspace.ensureLocalExcludes(job.fullName).catch(() => undefined);
-    cb.commit(await git(['rev-parse', '--short', 'HEAD'], { cwd: wt }).catch(() => ''));
+    this.check();const sha=await git(['rev-parse', '--short', 'HEAD'], { cwd: wt }).catch(() => '');this.check();cb.commit(sha);this.check();
     const tmp = path.join(wt, PREVIEW_TMP);
     await fs.mkdir(tmp, { recursive: true });
+    this.check();
 
     const pkg = await readJson(path.join(wt, 'package.json'));
+    this.check();
     const command = job.command ?? defaultCommand(pkg);
     if (!command) {
       this.stopped = true;
@@ -221,10 +242,13 @@ class RealPreview implements PreviewHandle {
     }
     const cmd = lock !== null ? 'npm ci' : 'npm install';
     this.cb.log([`$ ${cmd}`]);
-    const code = await Promise.race([this.spawn(cmd, wt, env), sleep(INSTALL_TIMEOUT_MS).then(() => 'timeout' as const)]);
+    let timer:NodeJS.Timeout|undefined;
+    let code:number|null|'timeout';
+    try{code=await Promise.race([this.spawn(cmd,wt,env),new Promise<'timeout'>(resolve=>{timer=setTimeout(()=>resolve('timeout'),INSTALL_TIMEOUT_MS);})]);}
+    finally{clearTimeout(timer);}
     this.check();
     if (code === 'timeout') {
-      if (this.child) await killTree(this.child);
+      if (this.child) await this.terminate();
       throw new Error(`${cmd} took longer than ${INSTALL_TIMEOUT_MS / 60_000} minutes.`);
     }
     if (code !== 0) throw new Error(`${cmd} failed (code ${code}).`);
@@ -246,10 +270,10 @@ class RealPreview implements PreviewHandle {
     };
     child.stdout?.on('data', onData);
     child.stderr?.on('data', onData);
-    return new Promise((resolve) => {
+    const closed = new Promise<number|null>((resolve) => {
       child.once('error', (err) => {
         this.cb.log([err.message]);
-        resolve(-1);
+        if(child.pid===undefined)resolve(-1);
       });
       child.once('close', (code) => {
         if (this.partial.trim()) this.cb.log([this.partial]);
@@ -257,6 +281,7 @@ class RealPreview implements PreviewHandle {
         resolve(code);
       });
     });
+    this.childClosed=closed;return closed;
   }
 }
 

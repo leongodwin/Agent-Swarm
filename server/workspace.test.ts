@@ -293,6 +293,7 @@ describe('leftoversInDesk', () => {
       `  104 /opt/homebrew/lib/codex/codex -c notify=["node","/Users/ada/.cubefarm/bin/notify.cjs"] -c developer_instructions="Your worktree: ${desk}"`,
       `  300 node /Users/ada/project/${desk}`, // spared by pid
       '  105 node /somewhere/else/server.js',
+      `  106 /usr/bin/code ${desk}`, // editor opening a desk is not a runtime
     ].join('\n');
     expect(leftoversInDesk(listing, desk, keep)).toEqual([101, 102]);
   });
@@ -304,6 +305,7 @@ describe('leftoversInDesk', () => {
     const listing = [
       `  7 codex.exe -c notify=["node","${escaped(String.raw`C:\Users\Ada\.cubefarm\bin\notify.cjs`)}"] -c developer_instructions="Your worktree: ${escaped(winDesk)}"`,
       `  8 node ${winDesk}\\server.js`,
+      `  9 "C:\\Program Files\\Editor\\code.exe" ${winDesk}`,
     ].join('\n');
     expect(leftoversInDesk(listing, winDesk, winKeep)).toEqual([8]);
   });
