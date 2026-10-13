@@ -3,10 +3,9 @@
   "version": "0.3.2",
   "description": "A cartoon 3D office where a team of AI coding agents works through your GitHub issues.",
   "keywords": [
-    "claude-code",
     "codex",
     "opencode",
-    "claude-agent-sdk",
+    "gemini",
     "ai-agents",
     "coding-agents",
     "github-issues",
@@ -48,7 +47,6 @@
     "prepublishOnly": "npm test && npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.283",
     "@axe-core/playwright": "4.13.0",
     "@lydell/node-pty": "1.2.0-beta.15",
     "@modelcontextprotocol/sdk": "^1.30.1",

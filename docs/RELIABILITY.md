@@ -437,4 +437,12 @@ An actual Codex 0.162.1 synthetic test exposed a failure-response mismatch: the 
 
 Validation: 1,027 tests passed with one TODO across 90 files; build/typecheck passed. Backend branch coverage is 4,801/7,970 (60.23%), below the unchanged 90.01% requirement, so the coverage command fails. Native trust/readback and the exercised patch path do not establish comprehensive enforcement for every tool, existing terminal stdin sessions, hosted tool opt-outs, arbitrary scripts or same-user process interference. Full tenant schema/effective-DLP validation, production Gemini protected-profile acceptance, remote CI reliability and production delivery acceptance remain open. Copilot Studio remains paused.
 
+## Provider-independent office tools (2026-10-13)
+
+Office, QA and engineering tools now construct their servers with the existing MCP SDK directly. The Anthropic agent SDK and its bundled platform packages have been removed from the package manifest/lockfile; no Anthropic agent SDK reference remains in the built server. Installed Power Platform skill discovery remains available to agents. CLI execution restrictions still allow only Codex, Gemini and OpenCode, with Codex as default. Existing physical installations are not uninstalled or authenticated by this change.
+
+The CEO's primary server previously captured unguarded definitions before session authorization was applied. It now receives the same authorization wrapper as fresh HTTP instances and direct calls. Tests on both transports verify that cancellation denies subsequent mutations without invoking handlers. Direct calls now validate strict arguments, preventing the demo/direct path from bypassing tool schemas. A stateless localhost HTTP MCP test verifies tool discovery, strict schemas, malformed-input refusal, one permitted synthetic action and revocation. These tests make no tenant changes and do not prove real model-to-office tool use or comprehensive tenant governance.
+
+Validation: 1,031 tests passed with one TODO across 91 files; build/typecheck passed. Backend branch coverage is 4,806/7,974 (60.27%); the unchanged 90.01% coverage gate still fails. The command-containment and full lifecycle schema/effective-DLP gaps remain open. Copilot Studio remains paused.
+
 References: https://geminicli.com/docs/hooks/reference/ and https://geminicli.com/docs/reference/configuration/ .

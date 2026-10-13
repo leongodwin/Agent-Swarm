@@ -7,8 +7,7 @@ import { run } from './exec.ts';
 import type { AgentCli, CliView, EffortLevel } from '../shared/types.ts';
 
 // The coding-agent CLIs an agent can run in its terminal, how to find them on this machine, and how to start one on
-// a task. Claude Code is fully wired in: its hooks report every tool call to the office.
-// Other CLIs run the same prompt and report when a turn ends; the office shows their task instead of each tool call.
+// a task. Only Codex, Gemini and OpenCode may execute; their bridges report tool checkpoints to the office.
 
 export interface CliDef {
   id: AgentCli;
@@ -68,11 +67,6 @@ export function unwrapCmdShim(shimPath: string, text: string): { file: string; a
   return { file: fs.existsSync(localNode) ? localNode : process.execPath, args: [...nodeFlags, target] };
 }
 
-/**
- * The Claude Code the Agent SDK ships as a per-platform package (the one `cubefarm login` signs in with), so the
- * terminal runtime works without Claude Code installed, on the version the office was tested with. Same lookup as
- * the SDK's own and bin/cubefarm.js.
- */
 /** How to start a CLI: the program and the arguments that come before the office's own. */
 export function commandFor(id: AgentCli): { file: string; args: string[] } | null {
   if (!allowedRuntime(id)) return null;

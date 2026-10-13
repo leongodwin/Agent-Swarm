@@ -3,7 +3,7 @@ import { discoverSkills, selectSkills } from './skillRegistry.ts';
 import { templateCatalog, templateFiles, type TemplateId } from './implementationTemplates.ts';
 import { DELIVERY_CEO } from '../shared/delivery.ts';
 import { sessionAuthority, type SessionAuthorization } from './toolGovernance.ts';
-import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
+import {createOfficeMcpServer,tool,type OfficeMcpConfig,type OfficeToolDefinition} from './officeMcp.ts';
 import { z } from 'zod';
 import { blockers, holdUps, setDependsOn } from '../shared/issues.ts';
 import type { CeoJobKind } from '../shared/types.ts';
@@ -46,16 +46,15 @@ export interface OfficeHandlers {
 }
 
 export interface OfficeTools {
-  server: McpSdkServerConfigWithInstance;
+  server: OfficeMcpConfig;
   /** A fresh MCP server with the same tools, for one request from a CEO running in a terminal (served over HTTP). */
-  serve(): McpSdkServerConfigWithInstance['instance'];
+  serve(): OfficeMcpConfig['instance'];
   /** Run a tool without a model in the loop (the demo CEO). */
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
 const EFFORT = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 
-type OfficeToolDefinition = NonNullable<Parameters<typeof createSdkMcpServer>[0]['tools']>[number];
 function authorizeDefinitions<T extends OfficeToolDefinition>(defs: T[], authorize?: SessionAuthorization): T[] {
   return defs.map(def => ({...def, handler: async (args: Parameters<OfficeToolDefinition['handler']>[0], extra: Parameters<OfficeToolDefinition['handler']>[1]) => {
     const denied = authorize ? await sessionAuthority(authorize) : null;
@@ -169,11 +168,11 @@ export function createOfficeTools(h: OfficeHandlers, authorize?: SessionAuthoriz
       (a) => run(() => h.routeIssue(a)),
     ),
   ];
-  const server = createSdkMcpServer({ name: 'office', version: '1.0.0', tools: defs });
   defs = authorizeDefinitions(defs, authorize);
+  const server = createOfficeMcpServer({ name: 'office', version: '1.0.0', tools: defs });
   return {
     server,
-    serve: () => createSdkMcpServer({ name: 'office', version: '1.0.0', tools: defs }).instance,
+    serve: () => createOfficeMcpServer({ name: 'office', version: '1.0.0', tools: defs }).instance,
     async call(name, args) {
       const def = defs.find((d) => d.name === name);
       if (!def) throw new Error(`No office tool ${name}`);
@@ -220,7 +219,7 @@ export function ceoSystemPrompt(o: {
     '- Before proposing a hire, check the floor and the pending proposals for someone who already covers it. If the manager declined a similar proposal (recentDecisions), do not propose it again unless something has changed, and say what.',
     `- ${o.hiring === 'auto' ? 'Hiring is on auto: proposals within the team cap are approved immediately, so be deliberate.' : 'The manager approves every hire, so explain each reason in a sentence or two they can decide on.'}`,
     '- Issues: plan for parallel work. What keeps a floor busy is the number of issues that can start right now (capacity.issuesReadyToStart in company_status); aim for at least one per developer. Write "Depends on #N" only when an issue truly cannot start until #N\'s code is merged, because it waits until #N is closed. Keep dependency chains to two steps at most, keep foundation issues small, and split big pieces into parts that can be built side by side. The office starts the issues that hold up others first. Do not duplicate open issues: fix an existing issue\'s specialty or dependencies with route_issue. File at most 12 issues per job, or per message from the manager.',
-    "- When company.usage in company_status says pacing or paused, Claude's usage is running low and the office is finishing open work first: file only what is needed next, not a whole milestone.",
+    "- When company.usage in company_status says pacing or paused, the configured coding runtime's usage is constrained and the office is finishing open work first: file only what is needed next, not a whole milestone.",
     '- Your final message goes straight to the manager\'s phone. Keep it short and plain: what you found, what you proposed, what you filed, and any question you need answered. No headings, no tables.',
   ].join('\n');
 }
@@ -445,7 +444,7 @@ export function createDeliveryQaTools(status: () => string, approve: (id: string
     tool('approve_release', 'Approve the exact release head and plan after inspecting its coverage and assertions. No self-approval.', { release_id: z.string(), plan_hash: z.string() }, (a) => run(() => approve(a.release_id, a.plan_hash))),
   ];
   defs = authorizeDefinitions(defs, authorize);
-  return { server: createSdkMcpServer({ name: 'office', tools: defs }), serve: () => createSdkMcpServer({ name: 'office', tools: defs }).instance,
+  return { server: createOfficeMcpServer({ name: 'office', tools: defs }), serve: () => createOfficeMcpServer({ name: 'office', tools: defs }).instance,
     async call(name, args) { const def = defs.find((d) => d.name === name); if (!def) throw new Error('Unknown QA tool'); const result = await def.handler(args as never, undefined); return JSON.stringify(result); } };
 }
 
@@ -459,6 +458,6 @@ export function createEngineeringTools(capabilities: () => string, authoring?: {
     tool('implementation_templates', 'Read a supported, versioned starter recipe. Copy/adapt files inside your own worktree; tenant verification remains required.', { platform: z.enum(['canvas', 'power-pages', 'dataverse', 'flow', 'deployment', 'copilot-studio']).optional() }, async (a) => ({ content: [{ type: 'text' as const, text: JSON.stringify(a.platform ? templateFiles(a.platform) : templateCatalog()) }] })),
   ];
   defs = authorizeDefinitions(defs, authorize);
-  return { server: createSdkMcpServer({ name: 'office', tools: defs }), serve: () => createSdkMcpServer({ name: 'office', tools: defs }).instance,
+  return { server: createOfficeMcpServer({ name: 'office', tools: defs }), serve: () => createOfficeMcpServer({ name: 'office', tools: defs }).instance,
     async call(name, args) { const def = defs.find((d) => d.name === name); if (!def) throw new Error('Unknown engineering tool'); return JSON.stringify(await def.handler(args as never, undefined)); } };
 }

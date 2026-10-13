@@ -162,6 +162,26 @@ describe('office tools', () => {
     await client.callTool({ name: 'set_floor_profile', arguments: { floor: 1, preview_env: { VITE_API: 'http://localhost:{port}' } } });
     expect(floors).toEqual([{ floor: 1, preview_env: { VITE_API: 'http://localhost:{port}' } }]);
   });
+
+  it.each(['primary','fresh'] as const)('revokes CEO mutation authority on the %s native transport',async kind=>{
+    let active=true;const update=vi.fn(()=> 'saved');
+    const office=createOfficeTools({companyStatus:()=> '{}',agentDetail:()=> '{}',setFloorProfile:update,updateJob:()=> '',proposeHire:()=> '',proposeLetGo:()=> '',fileIssue:async()=> '',routeIssue:async()=> ''},()=>active?null:'CEO task cancelled');
+    const server=kind==='primary'?office.server.instance:office.serve();
+    const [serverSide,clientSide]=InMemoryTransport.createLinkedPair();const client=new Client({name:'ceo-authority',version:'1'});
+    await server.connect(serverSide);await client.connect(clientSide);
+    try{
+      expect((await client.callTool({name:'set_floor_profile',arguments:{floor:1}})).isError).not.toBe(true);
+      active=false;
+      expect((await client.callTool({name:'set_floor_profile',arguments:{floor:2}})).isError).toBe(true);
+      expect(update).toHaveBeenCalledOnce();
+    }finally{await client.close();await server.close();}
+  });
+
+  it('validates direct engineering calls before acquiring authority',async()=>{
+    const acquire=vi.fn(async()=> 'lease');const tools=createEngineeringTools(()=> 'status',{acquire,release:async()=>{}});
+    for(const args of [{app:'invalid',owner:'test'},{app:'11111111-1111-4111-8111-111111111111',owner:'test',extraAuthority:'admin'}])expect(JSON.parse(await tools.call('canvas_authoring_acquire',args)).isError).toBe(true);
+    expect(acquire).not.toHaveBeenCalled();
+  });
 });
 
 describe('planRoute (route_issue)', () => {

@@ -15,7 +15,7 @@ That's it. cubefarm checks your machine, starts the office and opens it in your 
 - **Node.js 22 or newer**: [nodejs.org](https://nodejs.org)
 - **git**
 - **The GitHub CLI**, signed in: install it from [cli.github.com](https://cli.github.com), then run `gh auth login`
-- **GitHub Copilot CLI**: install it from [github.com/github/copilot-cli](https://github.com/github/copilot-cli), then sign in with `npx cubefarm login`. It's the default for the CEO, developers and QA testers. Claude Code, Codex and OpenCode are also available if you have them installed and signed in.
+- **Codex CLI**: install it from [the Codex CLI guide](https://developers.openai.com/codex/cli), then sign in with `npx cubefarm login`. Codex is the default for the CEO, developers and QA testers. Gemini and OpenCode are the other permitted runtimes. Each needs its own authentication and verified governance bridge; Gemini also requires its protected system profile. Claude and GitHub Copilot CLI are excluded from execution.
 - **Google Chrome**, for agents that test your app in a browser.
 
 It runs on Windows, macOS and Linux. Not sure you're ready? `npx cubefarm doctor` checks all of it.
