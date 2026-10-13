@@ -23,6 +23,7 @@ import { createDeliveryGovernance } from './deliveryGovernance.ts';
 import { OfficeShutdown } from './officeShutdown.ts';
 import { parseBody } from './requestSchemas.ts';
 import { OfficeMaintenance } from './officeMaintenance.ts';
+import {createDeclaredSchemaObserver} from './declaredSchema.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
 const runtimeStartedAt = new Date().toISOString();
@@ -41,7 +42,7 @@ const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.dem
 await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
 await tenantDlp.init();
-delivery.checkGovernance=createDeliveryGovernance(tenantDlp);
+delivery.checkGovernance=createDeliveryGovernance(tenantDlp,createDeclaredSchemaObserver());
 setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, input, checkpoint));
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();

@@ -1,14 +1,17 @@
 import { deliveryManifest,containedFile } from './delivery.ts';
 import { unavailableGovernance,type LifecycleCheck } from './lifecycleGovernance.ts';
+import {manifestDigest} from './lifecycleGovernance.ts';
 import { evaluateStandardPolicies } from './standardPolicy.ts';
 import { inspectSolutionPackage } from './packageInventory.ts';
 import { atomicWrite } from './atomicFile.ts';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import {declaredSchemaObservation,type DeclaredSchemaObserver} from './declaredSchema.ts';
 
 /** Declaration-level standard checks may deny, but cannot authorize a release.
  * A full provider must also independently extract package resources and evaluate
  * advanced/action/endpoint policies and comprehensive source/target schemas. */
-export function createDeliveryGovernance(source:{observation(identity:{tenantId:string;caller:string}):unknown;ensureObservation?(identity:{tenantId:string;caller:string},options:{signal?:AbortSignal;force:boolean;timeoutMs:number}):Promise<unknown>}):LifecycleCheck {
+export function createDeliveryGovernance(source:{observation(identity:{tenantId:string;caller:string}):unknown;ensureObservation?(identity:{tenantId:string;caller:string},options:{signal?:AbortSignal;force:boolean;timeoutMs:number}):Promise<unknown>},observeSchema?:DeclaredSchemaObserver):LifecycleCheck {
   return async request=>{
     const manifest=deliveryManifest.parse(request.manifest);
     let packageInventoryFile:string|undefined;
@@ -31,14 +34,25 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     }
     const unavailable=(reasons:string[])=>({...unavailableGovernance(request,reasons),artifactSha256:request.packageSha256,packageInventoryFile});
     if(!manifest.platformIdentity)return unavailable(['The release lacks a pinned platform identity for tenant policy and schema governance']);
-    const identity={tenantId:manifest.platformIdentity.tenantId,caller:manifest.platformIdentity.username};
+    const platformIdentity=manifest.platformIdentity;
+    const identity={tenantId:platformIdentity.tenantId,caller:platformIdentity.username};
+    let declaredSchemaFile:string|undefined;
+    let schemaReason='Fresh identity-bound declared target schema evidence is unavailable';
+    const schemaWork=async()=>{if(observeSchema)try{
+      const schema=declaredSchemaObservation.parse(await observeSchema(request));
+      const age=Date.now()-Date.parse(schema.checkedAt);
+      if(request.signal?.aborted||schema.phase!==request.phase||schema.sourceCommit!==request.sourceCommit||schema.releaseId!==request.releaseId||schema.environmentUrl!==request.environmentUrl||schema.manifestSha256!==manifestDigest(request.manifest)||age>60_000||age < -30_000||(schema.status==='observed'&&(schema.identity?.tenantId.toLowerCase()!==identity.tenantId.toLowerCase()||schema.identity?.username.toLowerCase()!==identity.caller.toLowerCase()||schema.identity?.environmentId.toLowerCase()!==platformIdentity.environmentId.toLowerCase()||schema.binding?.organizationId.toLowerCase()!==manifest.targetBinding?.organizationId.toLowerCase()||schema.binding?.userId.toLowerCase()!==manifest.targetBinding?.userId.toLowerCase())))throw new Error('Schema context differs');
+      schemaReason=schema.reason;
+      if(request.evidenceDirectory){const content=JSON.stringify(schema,null,2);declaredSchemaFile=`declared-schema-${crypto.createHash('sha256').update(content).digest('hex')}.json`;await atomicWrite(path.join(request.evidenceDirectory,declaredSchemaFile),content);}
+    }catch{schemaReason='Declared schema evidence could not be bound to this stage or persisted';}};
     let snapshot:unknown;
-    try{snapshot=source.ensureObservation?await source.ensureObservation(identity,{signal:request.signal,force:true,timeoutMs:45_000}):await source.observation(identity);}
-    catch{return unavailable(['Refresh the authenticated policy inventory for the exact approved tenant and account before governed delivery']);}
+    const [,policy]=await Promise.allSettled([schemaWork(),Promise.resolve().then(()=>source.ensureObservation?source.ensureObservation(identity,{signal:request.signal,force:true,timeoutMs:45_000}):source.observation(identity))]);
+    if(policy.status==='rejected')return {...unavailable(['Refresh the authenticated policy inventory for the exact approved tenant and account before governed delivery',schemaReason]),declaredSchemaFile};
+    snapshot=policy.value;
     const declared=manifest.postDeployActions.filter(action=>action.type==='connection-reference-check').map(action=>({id:`reference:${action.component}`,complete:true,connectors:[action.connectorId]}));
-    if(!(resources??declared).length)return unavailable(['No independently complete app/flow connector inventory is available; advanced policy and comprehensive schema evidence are also required']);
+    if(!(resources??declared).length)return {...unavailable(['No independently complete app/flow connector inventory is available; advanced policy and comprehensive schema evidence are also required',schemaReason]),declaredSchemaFile};
     const standard=evaluateStandardPolicies(snapshot,identity,manifest.platformIdentity.environmentId,resources??declared);
     const reasons=standard.status==='clear'?[resources?'Inspectable package resources passed standard classification; advanced policies, remaining opaque resources and comprehensive schemas are unverified':'Declared reference IDs passed standard classification; full package resource inventory, advanced policies and comprehensive schemas remain unverified']:standard.reasons.slice(0,20).map(reason=>reason.slice(0,1000));
-    return {...unavailableGovernance(request,[...reasons,...packageIssues].slice(0,30)),status:standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile};
+    return {...unavailableGovernance(request,[...reasons,...packageIssues,schemaReason].slice(0,30)),status:standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,declaredSchemaFile};
   };
 }

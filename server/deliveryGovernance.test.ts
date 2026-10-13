@@ -2,6 +2,8 @@ import {afterEach,expect,it,vi} from 'vitest';
 import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import crypto from 'node:crypto';import {ZipFile} from 'yazl';
 import {createDeliveryGovernance} from './deliveryGovernance.ts';
 import type {LifecycleRequest} from './lifecycleGovernance.ts';
+import {manifestDigest} from './lifecycleGovernance.ts';
+import type {DeclaredSchemaObservation} from './declaredSchema.ts';
 const guid='11111111-1111-4111-8111-111111111111';
 const manifest={schemaVersion:1,solutionUniqueName:'Expenses',solutionVersion:'1.0.0.0',solutionZip:'release.zip',hasUi:false,recovery:{runbook:'recovery.md',rehearsalReport:'drill.json'},documentation:['one.md','two.md','three.md'],build:[{executable:'node',args:['build.js']}],test:[{executable:'node',args:['test.js']}],verify:[{executable:'node',args:['verify.js']}],targetBinding:{organizationId:guid,userId:guid},platformIdentity:{tenantId:guid,username:'tester@company.test',environmentId:guid},targetComponents:[{key:'dataverse',kind:'connection-reference',logicalName:'exp_dataverse'}],postDeployActions:[{id:'binding',type:'connection-reference-check',component:'dataverse',connectionId:'approved',connectorId:'shared_commondataserviceforapps'}]};
 const request:LifecycleRequest={phase:'build',sourceCommit:'a'.repeat(40),environmentUrl:'https://test.crm4.dynamics.com',releaseId:'release-1',checkout:'unused',manifest};
@@ -40,6 +42,31 @@ it('requests a fresh identity-bound observation at every lifecycle phase without
     expect(fresh).toHaveBeenLastCalledWith({tenantId:guid,caller:'tester@company.test'},{force:true,timeoutMs:45_000,signal:controller.signal});
   }
   expect(fresh).toHaveBeenCalledTimes(6);expect(cached).not.toHaveBeenCalled();
+});
+
+it('persists stage-bound declared schema evidence without substituting it for comprehensive governance',async()=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'schema-stage-evidence-'));directories.push(directory);
+  const schema=vi.fn(async(input:LifecycleRequest):Promise<DeclaredSchemaObservation>=>({scope:'declared-target-schema',complete:false,status:'unavailable',phase:input.phase,sourceCommit:input.sourceCommit,releaseId:input.releaseId,environmentUrl:input.environmentUrl,manifestSha256:manifestDigest(input.manifest),checkedAt:new Date().toISOString(),reason:'No declared table contracts',tables:[],observations:[]}));
+  const check=createDeliveryGovernance({observation:()=>observation()},schema);
+  for(const phase of ['build','test','import','post-deploy','verify','health'] as const){
+    const result=await check({...request,phase,evidenceDirectory:directory});expect(result.status).toBe('unavailable');expect(result.schemaSha256).toBeUndefined();expect(result.declaredSchemaFile).toMatch(/^declared-schema-[a-f0-9]{64}\.json$/);
+    const content=await fs.readFile(path.join(directory,result.declaredSchemaFile!),'utf8');expect(JSON.parse(content)).toMatchObject({phase,complete:false});expect(result.declaredSchemaFile).toBe(`declared-schema-${crypto.createHash('sha256').update(content).digest('hex')}.json`);
+  }
+  expect(schema).toHaveBeenCalledTimes(6);
+});
+it.each(['release','manifest','stale','identity'])('rejects mismatched schema observation scope: %s',async mismatch=>{
+  const schema=async(input:LifecycleRequest):Promise<DeclaredSchemaObservation>=>({scope:'declared-target-schema',complete:false,status:'observed',phase:input.phase,sourceCommit:input.sourceCommit,releaseId:mismatch==='release'?'another-release':input.releaseId,environmentUrl:input.environmentUrl,manifestSha256:mismatch==='manifest'?'f'.repeat(64):manifestDigest(input.manifest),checkedAt:new Date(Date.now()-(mismatch==='stale'?120000:0)).toISOString(),reason:'Synthetic observed columns',identity:{...manifest.platformIdentity,tenantId:mismatch==='identity'?'22222222-2222-4222-8222-222222222222':guid},binding:manifest.targetBinding,tables:['exp_report'],observations:[{resource:'EntityDefinitions',value:{}}]});
+  const result=await createDeliveryGovernance({observation:()=>observation()},schema)(request);
+  expect(result.status).toBe('unavailable');expect(result.declaredSchemaFile).toBeUndefined();expect(result.reasons.join(' ')).toContain('could not be bound');
+});
+it('starts independent schema and policy observations together and preserves schema evidence when policy discovery fails',async()=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'schema-policy-failure-'));directories.push(directory);
+  let release!:(value:DeclaredSchemaObservation)=>void;const schema=vi.fn(()=>new Promise<DeclaredSchemaObservation>(resolve=>{release=resolve;}));
+  const policy=vi.fn(async()=>{throw new Error('private policy detail');});
+  const pending=createDeliveryGovernance({observation:policy},schema)({...request,evidenceDirectory:directory});
+  for(let i=0;i<10&&!policy.mock.calls.length;i++)await Promise.resolve();expect(schema).toHaveBeenCalledOnce();expect(policy).toHaveBeenCalledOnce();
+  release({scope:'declared-target-schema',complete:false,status:'unavailable',phase:request.phase,sourceCommit:request.sourceCommit,releaseId:request.releaseId,environmentUrl:request.environmentUrl,manifestSha256:manifestDigest(request.manifest),checkedAt:new Date().toISOString(),reason:'No declared table contracts',tables:[],observations:[]});
+  const result=await pending;expect(result.status).toBe('unavailable');expect(result.declaredSchemaFile).toBeDefined();expect(JSON.stringify(result)).not.toContain('private policy detail');
 });
 it('awaits discovery and never falls back to a cached passing classification on fresh-read failure',async()=>{
   let reject!:(error:Error)=>void;const fresh=vi.fn(()=>new Promise<unknown>((_resolve,fail)=>{reject=fail;}));const cached=vi.fn(()=>observation());
