@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { RepoView } from '../../../shared/types';
+import { currentQaApproval } from '../../../shared/qa';
 import { agentsOnRepo, useStore } from '../store';
 import { AppMonitor } from './AppMonitor';
 import { Desk } from './Desk';
@@ -52,8 +53,9 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
   const qaBySlot = useMemo(() => new Map(agents.filter((a) => a.role === 'qa').map((a) => [a.desk, a])), [agents]);
   const working = agents.filter((a) => a.status === 'working' || a.status === 'preparing').length;
   const qaRecords = useStore((s) => s.qa);
-  const inQa = Object.values(qaRecords).filter((q) => q.repoId === repo.id && q.status !== 'passed').length;
-  const ready = Object.values(qaRecords).filter((q) => q.repoId === repo.id && q.status === 'passed').length;
+  const floorQa = Object.values(qaRecords).filter(q => q.repoId === repo.id);
+  const ready = floorQa.filter(q => currentQaApproval(q, repo.pulls.find(p => p.number === q.prNumber))).length;
+  const inQa = floorQa.length - ready;
   const name = repo.fullName.split('/')[1] ?? repo.fullName;
   const rugColor = shade(repo.color, 0.24);
 
@@ -143,7 +145,7 @@ export function OfficeFloor({ repo }: { repo: RepoView }) {
             317,
             [
               { text: `👩‍💻 ${agents.length} on the team`, size: 54, color: '#2d3142' },
-              { text: `⚙️ ${working} busy · 🔍 ${inQa} in QA · ✅ ${ready} to merge`, size: 46, color: '#2d3142', weight: 600 },
+              { text: `⚙️ ${working} busy · 🔍 ${inQa} in QA · ✅ ${ready} QA approved`, size: 46, color: '#2d3142', weight: 600 },
               { text: `📋 ${repo.issues.length} open issue${repo.issues.length === 1 ? '' : 's'}${repo.autoAssign ? ' · ⚡ auto' : ''}`, size: 44, color: '#5c6078', weight: 500 },
             ],
             '#fffdf5',

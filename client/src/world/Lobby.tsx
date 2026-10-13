@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { currentQaApproval } from '../../../shared/qa';
 import * as THREE from 'three';
 import { Billboard } from '@react-three/drei';
 import { pendingRequests, useStore, type Agent } from '../store';
@@ -47,8 +48,8 @@ function useOfficeStats() {
       prs: r.pulls.filter((p) => p.state === 'OPEN').length,
     }));
     const qaList = Object.values(qa);
-    const inQa = qaList.filter((q) => q.status !== 'passed').length;
-    const readyToMerge = qaList.filter((q) => q.status === 'passed').length;
+    const readyToMerge = qaList.filter(q => currentQaApproval(q, repos.find(r => r.id === q.repoId)?.pulls.find(p => p.number === q.prNumber))).length;
+    const inQa = qaList.length - readyToMerge;
     const pending = pendingRequests(requests).length;
     return { repos: repos.length, agents: list.length, working, openPrs, inQa, readyToMerge, merged, issues, floors, max: settings.sessionLimit, pending };
   }, [repos, agents, settings, qa, requests]);
@@ -76,7 +77,7 @@ function ManagerComputer() {
         ['Agents on staff', `${stats.agents}`],
         ['Sessions running', stats.max ? `${stats.working} / ${stats.max}` : `${stats.working}`],
         ['Open issues', `${stats.issues}`],
-        ['PRs in QA / ready to merge', `${stats.inQa} / ${stats.readyToMerge}`],
+        ['PRs in QA / QA approved', `${stats.inQa} / ${stats.readyToMerge}`],
         ['📄 Hiring decisions waiting', `${stats.pending}`],
       ];
       rows.forEach(([k, v], i) => {

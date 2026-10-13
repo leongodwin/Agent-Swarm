@@ -100,17 +100,9 @@ export function KanbanView({ repoId }: { repoId: string }) {
   const devs = agents.filter((a) => a.role === 'dev');
   const free = devs.filter((a) => a.status === 'idle' || a.status === 'done' || a.status === 'stopped' || a.status === 'error');
   const merge = async (c: KanbanCard) => {
-    const passed = c.qa?.status === 'passed';
-    const ok = await confirmDialog(
-      passed
-        ? { icon: '🎉', title: `Merge PR #${c.number}?`, body: `“${c.title}” passed QA. It will be squash-merged into ${repo.defaultBranch}.`, confirm: 'Squash & merge' }
-        : {
-            tone: 'warn',
-            title: `Merge PR #${c.number} without QA?`,
-            body: `“${c.title}” has not passed QA yet. Merge it into ${repo.defaultBranch} anyway?`,
-            confirm: 'Merge anyway',
-          },
-    );
+    const pr = repo.pulls.find(pull => pull.number === c.number);
+    if (c.qa?.status !== 'passed' || !c.qa.passedSha || c.qa.passedSha !== pr?.headSha) return;
+    const ok = await confirmDialog({icon: '🎉', title: `Merge PR #${c.number}?`, body: `“${c.title}” passed QA for commit ${c.qa.passedSha.slice(0, 8)}. The office will recheck the PR, checks and scan results before squash-merging into ${repo.defaultBranch}.`, confirm: 'Verify & merge'});
     if (ok) void act(c.key, () => api.mergePull(repo.id, c.number));
   };
   const previewButton = (c: KanbanCard) => (
@@ -248,23 +240,19 @@ export function KanbanView({ repoId }: { repoId: string }) {
                 <QaLink card={c} />
                 {previewButton(c)}
                 {(st === 'testing' || st === 'fixing') && terminalButton(c)}
-                {(!st || st === 'needs-human') && (
+                {(!st || st === 'needs-human' || st === 'passed') && (
                   <button className="btn btn-small btn-good" disabled={pending === c.key} onClick={() => act(c.key, () => api.sendToQa(repo.id, c.number))}>
-                    {st === 'needs-human' ? 'Retry QA' : 'Send to QA'}
+                    {st === 'needs-human' || st === 'passed' ? 'Retry QA' : 'Send to QA'}
                   </button>
                 )}
-                {st === 'needs-human' && (
-                  <button className="btn btn-small btn-ghost" disabled={pending === c.key} onClick={() => merge(c)}>
-                    Merge anyway
-                  </button>
-                )}
+                {st === 'needs-human' && <span className="muted small">QA approval is required before merging.</span>}
               </div>
             );
           },
           'Nothing waiting for testing.',
         )}
         {column(
-          '✅ Ready to merge',
+          '✅ QA approved',
           'kcol-review',
           cols.ready,
           (c) => {
@@ -279,7 +267,7 @@ export function KanbanView({ repoId }: { repoId: string }) {
                 <span className="spacer" />
                 <QaLink card={c} />
                 {previewButton(c)}
-                <button className="btn btn-small btn-good" disabled={pending === c.key || pr?.isDraft} onClick={() => merge(c)}>
+                <button className="btn btn-small btn-good" disabled={pending === c.key || pr?.isDraft || !c.qa?.passedSha || c.qa.passedSha !== pr?.headSha} onClick={() => merge(c)}>
                   Merge
                 </button>
                 <button

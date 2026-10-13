@@ -1,5 +1,15 @@
 # Reliability priorities 5–8
 
+## QA evidence and merge admission
+
+QA reports use one bounded runtime schema for both the authoring output contract and server parsing. Empty summaries/checks, unknown outcomes, malformed entries and coerced values are rejected. A pass requires every reported check to pass; skipped or unverified required checks cannot support approval. Failed reports need actionable findings. Interrupted/failed sessions cannot approve, terminal parsing uses the final JSON report without falling back to an earlier pass, and screenshot captions must match captured images. A pass also requires the task's tested commit. These constraints validate reported evidence; they do not independently prove each claimed command ran or each acceptance criterion was covered.
+
+Retesting revokes approval immediately. A legacy approval without a tested SHA cannot adopt the current head. Auto-merge and the manager's Merge action require the same commit-bound QA, GitHub checks/readiness and exact-head local-source scan. Manager merging refreshes the PR under the merge lock, pins the selected method and approved SHA, and blocks rather than dispatching fixes or updating branches. Unknown/blocked/unstable readiness waits. Changed heads cannot combine old cached checks/scans with new details. Approval revoked or shutdown begun during a scan prevents a later merge.
+
+The client receives tested/passed commit IDs and presents stale or missing bindings for fresh QA. Kanban has no “Merge anyway” option; the HUD, floor/lobby counters and terminal chips count only current approvals and label them QA approved. This status is distinct from successful final merge verification. The rendered browser regression uses explicitly synthetic WebSocket fixtures; real Swarm scheduler and merge transitions use an isolated synthetic backend. No GitHub PR or tenant was mutated by these tests.
+
+The source scanner remains a local heuristic. This batch does not certify full tenant DLP, comprehensive Dataverse schema enforcement or unrestricted runtime safety. Complete authoritative lifecycle governance remains a separate required gate. Evidence is `.swarm-reliability/qa-merge-coverage-2026-10-13.txt`, `qa-merge-api-ui-e2e-2026-10-13.txt` and `qa-merge-ui-2026-10-13.png`.
+
 ## Office restart and shutdown integrity
 
 Office startup treats only a missing state file as a first run. Unreadable files, invalid JSON or critical persisted shapes, duplicate repository/agent IDs, oversized files and newer state versions stop startup with the state path and a preserve-and-repair instruction. The reader does not reset or rename the original evidence. Legacy settings migrations remain supported. A failed load cannot save defaults during cleanup.

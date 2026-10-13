@@ -39,7 +39,6 @@ import type {
   PreviewView,
   ProjectFolderView,
   PullInfo,
-  QaCheck,
   QaView,
   RepoView,
   ServerEvent,
@@ -51,6 +50,7 @@ import { activeEnvironment } from './tenancy.ts';
 import { fixDeskBranch } from './workspace.ts';
 import { atomicWrite, SerialWriter } from './atomicFile.ts';
 import { readOfficeState } from './officeState.ts';
+import { QA_SCHEMA, parseQaReport, type QaReport } from './qaReport.ts';
 
 // ---------- persisted shape ----------
 
@@ -189,14 +189,6 @@ interface RepoRuntime {
   merging: boolean;
 }
 
-interface QaReport {
-  verdict: 'pass' | 'fail';
-  summary: string;
-  checks: QaCheck[];
-  commands: { command: string; result: string }[];
-  screenshots: string[];
-  fixInstructions?: string;
-}
 
 // ---------- flavour ----------
 
@@ -287,73 +279,6 @@ const terminalFile = (agentId: string) => path.join(TERMINALS_DIR, `${agentId}.a
 const TERMINAL_SAVE_MS = 20_000;
 
 // ---------- QA report ----------
-
-const QA_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['verdict', 'summary', 'checks', 'commands', 'screenshots'],
-  properties: {
-    verdict: { type: 'string', enum: ['pass', 'fail'], description: 'pass only if the change works and meets the issue requirements' },
-    summary: { type: 'string', description: 'Two to four sentences for the pull request comment.' },
-    checks: {
-      type: 'array',
-      description: 'Each acceptance criterion, test run or scenario you verified.',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['name', 'result', 'details'],
-        properties: {
-          name: { type: 'string' },
-          result: { type: 'string', enum: ['pass', 'fail', 'skip'] },
-          details: { type: 'string', description: 'What you did and what you observed.' },
-        },
-      },
-    },
-    commands: {
-      type: 'array',
-      description: 'Test suites, linters, builds and other commands you ran.',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['command', 'result'],
-        properties: { command: { type: 'string' }, result: { type: 'string', description: 'e.g. "42 passed, 0 failed"' } },
-      },
-    },
-    screenshots: {
-      type: 'array',
-      description: 'One short caption per screenshot you took with browser_take_screenshot, in the order you took them.',
-      items: { type: 'string' },
-    },
-    fixInstructions: { type: 'string', description: 'When the verdict is fail: precise, actionable instructions for the developer.' },
-  },
-};
-
-function parseReport(result: SessionResult): QaReport | null {
-  let raw: unknown = result.structured;
-  if (!raw && result.text) {
-    // Terminal agents end their last message with the report, usually in a ```json block.
-    const fenced = [...result.text.matchAll(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g)].map((m) => m[1]).reverse();
-    for (const json of [...fenced, result.text.match(/\{[\s\S]*\}/)?.[0]].filter((j): j is string => !!j)) {
-      try {
-        raw = JSON.parse(json);
-        break;
-      } catch {
-        raw = null;
-      }
-    }
-  }
-  if (!raw || typeof raw !== 'object') return null;
-  const r = raw as Partial<QaReport>;
-  if (r.verdict !== 'pass' && r.verdict !== 'fail') return null;
-  return {
-    verdict: r.verdict,
-    summary: String(r.summary ?? ''),
-    checks: Array.isArray(r.checks) ? r.checks.map((c) => ({ name: String(c.name ?? ''), result: c.result === 'fail' ? 'fail' : c.result === 'skip' ? 'skip' : 'pass', details: String(c.details ?? '') })) : [],
-    commands: Array.isArray(r.commands) ? r.commands.map((c) => ({ command: String(c.command ?? ''), result: String(c.result ?? '') })) : [],
-    screenshots: Array.isArray(r.screenshots) ? r.screenshots.map(String) : [],
-    fixInstructions: r.fixInstructions ? String(r.fixInstructions) : undefined,
-  };
-}
 
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
 const ICON = { pass: '✅', fail: '❌', skip: '⏭️' } as const;
@@ -721,6 +646,8 @@ export class Swarm {
       repoId: q.repoId,
       prNumber: q.prNumber,
       status: q.status,
+      testedSha: q.testedSha,
+      passedSha: q.passedSha,
       round: q.round,
       devAgentId: q.devAgentId,
       qaAgentId: q.qaAgentId,
@@ -1041,12 +968,14 @@ export class Swarm {
    * it back to QA. Merging deletes the remote branch, and the floor's folder then fast-forwards (syncRepo sees the merge).
    */
   private async advanceMerges(repo: PersistedRepo) {
+    if (this.closed) return;
     const rt = this.repoRt.get(repo.id);
     if (!rt || !repo.autoMerge || rt.merging) return;
     rt.merging = true;
     let merged = false;
     try {
       for (const rec of this.state.qa.filter((q) => q.repoId === repo.id && q.status === 'passed')) {
+        if (this.closed) return;
         const pr = rt.pulls.find((p) => p.number === rec.prNumber && p.state === 'OPEN');
         if (!pr || !pr.headRefName.startsWith('swarm/')) continue; // people's own PRs are theirs to merge
         // Only act on PR data fetched after the record last changed (a fix may have just pushed).
@@ -1068,12 +997,16 @@ export class Swarm {
   }
 
   /** One step toward merging a QA-passed PR. Returns true when it merged. */
-  private async advanceMerge(repo: PersistedRepo, rec: QaRecord, pr: PullInfo): Promise<boolean> {
+  private async advanceMerge(repo: PersistedRepo, rec: QaRecord, pr: PullInfo, preferredMethod?: 'squash' | 'merge' | 'rebase'): Promise<boolean> {
+    if (this.closed) return false;
     let dlpViolations: DlpPolicyViolation[] = [];
     try {
       const files = await this.backend.prFiles(repo.fullName, pr.number, pr.headSha);
+      if (this.closed) return false;
+      if (!this.state.qa.includes(rec) || rec.status !== 'passed') return false;
       dlpViolations = files.flatMap((file) => auditDlpCompliance(file.content, file.file));
     } catch (err) {
+      if (this.closed) return false;
       console.warn(`DLP scan failed for ${repo.fullName}#${pr.number}`, err);
       return this.mergeNote(rec, 'DLP scan unavailable; waiting to retry before merging');
     }
@@ -1081,17 +1014,31 @@ export class Swarm {
     if (step.do === 'details') {
       // GitHub works mergeability out lazily and lists often say UNKNOWN; asking about the PR itself gets an answer.
       const d = await this.backend.prDetails(repo.fullName, pr.number);
+      if (this.closed) return false;
+      if (!this.state.qa.includes(rec) || rec.status !== 'passed') return false;
+      if (d.state !== 'OPEN') return this.mergeNote(rec, 'Pull request is no longer open; refresh its state before merging');
+      if (d.headSha !== pr.headSha) {
+        // Cached checks and scanned files belong to the earlier head, even if
+        // another QA record already names the new head. Never mix observations.
+        this.setQa(rec, {status: 'queued', passedSha: null, testedSha: null, round: rec.round + 1, retests: rec.retests + 1,
+          mergeNote: 'PR head changed during merge verification; QA and checks must refresh'});
+        this.later(() => this.schedule(), 200);
+        return false;
+      }
       pr = { ...pr, headSha: d.headSha, mergeable: d.mergeable, mergeState: d.mergeState };
       step = mergeStep({ ...pr, dlpViolations }, rec, Date.now(), { base: repo.defaultBranch, detailed: true });
     }
     Object.assign(rec, step.set);
     if (step.do === 'requeue') {
       // Commits arrived after QA's sign-off: they get tested too.
-      this.setQa(rec, { status: 'queued', round: rec.round + 1, retests: rec.retests + 1, mergeNote: null, pendingSince: null });
+      this.setQa(rec, { status: 'queued', passedSha: null, testedSha: null, round: rec.round + 1, retests: rec.retests + 1, mergeNote: null, pendingSince: null });
       this.later(() => this.schedule(), 200);
       return false;
     }
-    if (step.do === 'send-back') return this.sendBack(repo, rec, step.reason, step.instructions, step.needsHuman);
+    if (step.do === 'send-back') {
+      if (preferredMethod) return this.mergeNote(rec, `Merge blocked (${step.reason}): ${step.instructions}`);
+      return this.sendBack(repo, rec, step.reason, step.instructions, step.needsHuman);
+    }
     if (step.do === 'wait') {
       if (step.alert) {
         this.postMessage('office', `⏳ PR #${pr.number} on ${repo.fullName} passed QA, but its checks (${pr.pendingChecks.join(', ')}) have been running for over ${CHECKS_ALERT_MS / 60_000} minutes. It merges as soon as they finish.`);
@@ -1099,6 +1046,7 @@ export class Swarm {
       return step.note === undefined ? false : this.mergeNote(rec, step.note);
     }
     if (step.do === 'update-branch') {
+      if (preferredMethod) return this.mergeNote(rec, 'Branch is behind the base; update it and obtain fresh QA approval before merging');
       // The repo only merges up-to-date branches. GitHub merges the base in cleanly (or refuses); CI checks the result.
       this.mergeNote(rec, `updating the branch with ${repo.defaultBranch}`);
       await this.backend.updateBranch(repo.fullName, pr.number);
@@ -1110,9 +1058,10 @@ export class Swarm {
     if (step.do !== 'merge') return false;
     this.mergeNote(rec, 'merging…');
     let error = '';
-    for (const method of ['squash', 'merge', 'rebase'] as const) {
+    for (const method of preferredMethod ? [preferredMethod] : ['squash', 'merge', 'rebase'] as const) {
+      if (this.closed) return false;
       try {
-        await this.backend.mergePull(repo.fullName, pr.number, method, rec.passedSha ?? pr.headSha);
+        await this.backend.mergePull(repo.fullName, pr.number, method, rec.passedSha!);
         error = '';
         break;
       } catch (err) {
@@ -1321,9 +1270,21 @@ export class Swarm {
   }
 
   async mergePull(repoId: string, number: number, method: 'squash' | 'merge' | 'rebase' = 'squash') {
+    if (this.closed) throw new HttpError(409, 'Office is shutting down');
+    if (!['squash', 'merge', 'rebase'].includes(method)) throw new HttpError(400, 'Invalid merge method');
     const repo = this.repo(repoId);
-    await this.backend.mergePull(repo.fullName, number, method);
-    this.toast('success', `Merged PR #${number} into ${repo.defaultBranch}`);
+    const rt = this.repoRt.get(repo.id)!;
+    if (rt.merging || rt.syncing) throw new HttpError(409, 'PR verification is already running; retry after it finishes');
+    rt.merging = true; // the refresh cannot dispatch a competing automatic merge
+    try {
+      await this.syncRepo(repo.id);
+      if (this.closed || rt.syncError) throw new HttpError(409, 'Fresh PR verification is unavailable');
+      const pr = rt.pulls.find(pull => pull.number === number && pull.state === 'OPEN');
+      if (!pr) throw new HttpError(404, `PR #${number} is not open on ${repo.fullName}`);
+      const rec = this.state.qa.find(record => record.repoId === repo.id && record.prNumber === number);
+      if (!rec || rec.status !== 'passed' || !rec.passedSha) throw new HttpError(409, 'A commit-bound QA approval is required before merging');
+      if (!await this.advanceMerge(repo, rec, pr, method)) throw new HttpError(409, rec.mergeNote || 'QA, checks or scan evidence does not permit merging');
+    } finally { rt.merging = false; }
     await this.syncRepo(repo.id);
     this.later(() => this.schedule(), 200);
   }
@@ -1994,7 +1955,7 @@ export class Swarm {
     let rec = this.state.qa.find((q) => q.repoId === repo.id && q.prNumber === prNumber);
     if (rec) {
       if (rec.status === 'testing') return;
-      this.setQa(rec, { status: 'queued', devAgentId: dev?.id ?? rec.devAgentId, devSessionId: dev?.sessionId ?? rec.devSessionId });
+      this.setQa(rec, { status: 'queued', passedSha: null, testedSha: null, devAgentId: dev?.id ?? rec.devAgentId, devSessionId: dev?.sessionId ?? rec.devSessionId });
     } else {
       rec = {
         repoId: repo.id,
@@ -2076,6 +2037,7 @@ export class Swarm {
         ? `4. If the project has a UI, start it in the background on port ${this.port(a)} (reserved for you) and exercise the change in a real browser with the Playwright tools: navigate, click, type, resize to a phone size, try edge cases, and check the console for errors. Take a screenshot with browser_take_screenshot (no filename) of every important state: the screenshots are attached to the PR as evidence. Stop the server afterwards.`
         : '4. Exercise the changed behaviour directly (run the program, call the API, write a quick script).',
       '5. You may write throwaway scripts to probe behaviour, but do not commit them.',
+      'Report pass only when every reported acceptance check passed. An unverified or skipped required criterion must be reported as a failure with actionable remediation. Never invent a screenshot caption: include one per captured image (at most the last 12 retained images).',
       '',
       'Rules: do not modify the code under test, do not commit, push, comment on, review or merge anything on GitHub. The office posts your report on the pull request. Finish with the structured QA report: verdict, summary, the checks you performed, the commands you ran and one caption per screenshot.',
     ].join('\n');
@@ -2083,7 +2045,7 @@ export class Swarm {
 
   private async runQa(a: PersistedAgent, repo: PersistedRepo, rec: QaRecord) {
     const branch = `qa/pr-${rec.prNumber}-${slugify(a.name)}`;
-    this.setQa(rec, { status: 'testing', qaAgentId: a.id });
+    this.setQa(rec, { status: 'testing', passedSha: null, testedSha: null, qaAgentId: a.id });
     this.beginTask(
       a,
       { task: 'qa', issueNumber: rec.issueNumber, issueTitle: `PR #${rec.prNumber}`, branch, prNumber: rec.prNumber, prUrl: null, sessionId: null },
@@ -2150,9 +2112,12 @@ export class Swarm {
   }
 
   private async onQaFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult) {
+    if (this.closed) return;
     const rec = this.state.qa.find((q) => q.repoId === repo.id && q.prNumber === a.prNumber);
+    if (!rec) return this.fail(a, {...result, errors: ['QA record unavailable; report was not accepted']}, `QA of PR #${a.prNumber}`);
     const rt = this.agentRt.get(a.id)!;
-    const report = result.ok ? parseReport(result) : null;
+    const parsed = parseQaReport(result);
+    const report = parsed && parsed.screenshots.length === rt.shots.length && (parsed.verdict !== 'pass' || !!rec?.testedSha) ? parsed : null;
 
     if (a.status === 'stopped' || !report) {
       if (a.status !== 'stopped') this.fail(a, { ...result, errors: result.errors.length ? result.errors : ['QA finished without a usable report'] }, `QA of PR #${a.prNumber}`);
@@ -2162,13 +2127,13 @@ export class Swarm {
           status: a.status === 'stopped' || failures >= 2 ? 'needs-human' : 'queued',
           qaAgentId: null,
           sessionFailures: failures,
+          passedSha: null,
           summary: a.status === 'stopped' ? 'QA was stopped by the manager.' : rec.summary,
         });
       }
       return;
     }
 
-    a.status = 'done';
     const pass = report.verdict === 'pass';
     this.appendLog(a, [{ kind: pass ? 'done' : 'error', text: `${pass ? '✅ QA passed' : '❌ QA failed'} PR #${a.prNumber} · ${report.checks.length} checks · ${rt.shots.length} screenshots` }]);
 
@@ -2178,11 +2143,14 @@ export class Swarm {
       try {
         this.appendLog(a, [{ kind: 'system', text: '📎 Uploading evidence and posting the QA report on the PR…' }]);
         const body = await this.renderQaComment(a, repo, rec, report, rt.shots);
+        if (this.closed) return;
         commentUrl = (await this.backend.commentPull(repo.fullName, rec.prNumber, body)) || null;
         this.appendLog(a, [{ kind: 'system', text: `  ⎿ ${commentUrl ?? 'comment posted'}` }]);
       } catch (err) {
         this.appendLog(a, [{ kind: 'error', text: `  ⎿ Could not post the QA report: ${(err as Error).message}` }]);
       }
+      if (this.closed || !this.state.qa.includes(rec) || rec.status !== 'testing' || rec.qaAgentId !== a.id) return;
+      a.status = 'done';
       const qaRounds = rec.round - rec.retests; // rounds QA itself asked for
       const nextStatus = pass ? 'passed' : qaRounds >= MAX_QA_ROUNDS ? 'needs-human' : 'failed';
       this.setQa(rec, {

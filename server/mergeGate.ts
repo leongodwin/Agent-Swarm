@@ -43,8 +43,8 @@ export function mergeStep(pr: MergePull, rec: MergeRecord, now: number, opts: { 
   if (pr.isDraft) return { do: 'wait', note: 'a draft: waiting', set: {} };
   if (!opts.detailed && (pr.mergeable === 'UNKNOWN' || pr.mergeState === 'UNKNOWN')) return { do: 'details', set: {} };
   const set: MergeBookkeeping = {};
-  if (rec.passedSha == null) set.passedSha = pr.headSha; // signed off before the office tracked commits
-  if (pr.headSha !== (set.passedSha ?? rec.passedSha)) return { do: 'requeue', set };
+  // Legacy approval is not evidence that QA tested the current commit.
+  if (!rec.passedSha || !pr.headSha || pr.headSha !== rec.passedSha) return { do: 'requeue', set };
   const needsHuman = rec.mergeFixes >= MAX_MERGE_FIXES;
   if (pr.dlpViolations && pr.dlpViolations.length > 0) {
     const instructions = `DLP Policy Violations detected:\n` + pr.dlpViolations.map((v) => `- [${v.category}] ${v.connectorName} in ${v.resourceFile}: ${v.remediation}`).join('\n');
@@ -67,6 +67,7 @@ export function mergeStep(pr: MergePull, rec: MergeRecord, now: number, opts: { 
   set.pendingSince = null;
   if (pr.mergeable === 'UNKNOWN') return { do: 'wait', note: 'GitHub is checking it can merge', set };
   if (pr.mergeState === 'BEHIND') return { do: 'update-branch', set };
+  if (pr.mergeable !== 'MERGEABLE' || pr.mergeState !== 'CLEAN') return { do: 'wait', note: `Merge readiness is not confirmed (${pr.mergeable}/${pr.mergeState})`, set };
   if (rec.mergeRetryAt && now < rec.mergeRetryAt) return { do: 'wait', set };
   return { do: 'merge', set };
 }

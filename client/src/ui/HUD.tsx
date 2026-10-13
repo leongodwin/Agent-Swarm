@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { repoOnFloor, usePhoneBadge, useStore, TOUR_WAYPOINTS } from '../store';
 import { CEO_ID } from '../../../shared/types';
+import { currentQaApproval } from '../../../shared/qa';
 import { HeldHint } from './HeldHint';
 import { WorkersPanel } from './WorkersPanel';
 import { officeUpdateChip } from '../officeUpdate';
@@ -154,6 +155,7 @@ export function HUD() {
   const floorAgents = repo ? Object.values(agents).filter((a) => a.repoId === repo.id) : [];
   const qa = useStore((s) => s.qa);
   const floorQa = repo ? Object.values(qa).filter((q) => q.repoId === repo.id) : [];
+  const approvedQa = repo ? floorQa.filter(q => currentQaApproval(q, repo.pulls.find(p => p.number === q.prNumber))).length : 0;
 
   return (
     <div className="hud">
@@ -163,7 +165,7 @@ export function HUD() {
           <div className="floor-name">{repo ? repo.fullName : `${settings.companyName || 'Copilot Swarm'} · Lobby`}</div>
           <div className="floor-sub">
             {repo
-              ? `${floorAgents.length} agents · ${floorAgents.filter((a) => a.status === 'working' || a.status === 'preparing').length} working · ${floorQa.filter((q) => q.status !== 'passed').length} in QA · ${floorQa.filter((q) => q.status === 'passed').length} ready to merge`
+              ? `${floorAgents.length} agents · ${floorAgents.filter((a) => a.status === 'working' || a.status === 'preparing').length} working · ${floorQa.length - approvedQa} in QA · ${approvedQa} QA approved`
               : `${repos.length} floor${repos.length === 1 ? '' : 's'} connected`}
           </div>
         </div>

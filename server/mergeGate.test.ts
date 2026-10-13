@@ -30,6 +30,15 @@ describe('mergeStep', () => {
     expect(mergeStep(pull({ checks: 'none' }), record(), NOW, base).do).toBe('merge');
   });
 
+  it.each(['BLOCKED', 'UNSTABLE', 'UNKNOWN', 'HAS_HOOKS', 'unexpected'])('waits on unconfirmed merge state %s', state => {
+    expect(mergeStep(pull({mergeState: state}), record(), NOW, {...base, detailed: true}).do).toBe('wait');
+  });
+
+  it('re-tests empty approval or head identities and never invents a tested SHA', () => {
+    expect(mergeStep(pull(), record({passedSha: ''}), NOW, base)).toEqual({do: 'requeue', set: {}});
+    expect(mergeStep(pull({headSha: ''}), record(), NOW, base)).toEqual({do: 'requeue', set: {}});
+  });
+
   it('waits on a draft without touching the record', () => {
     expect(mergeStep(pull({ isDraft: true, mergeable: 'CONFLICTING', headSha: 'other' }), record({ passedSha: null }), NOW, base)).toEqual({
       do: 'wait',
@@ -53,7 +62,7 @@ describe('mergeStep', () => {
     });
 
     it('carries on with the details once GitHub knows', () => {
-      expect(mergeStep(pull({ mergeState: 'UNKNOWN' }), record(), NOW, { ...base, detailed: true }).do).toBe('merge');
+      expect(mergeStep(pull({ mergeState: 'CLEAN' }), record(), NOW, { ...base, detailed: true }).do).toBe('merge');
       expect(mergeStep(pull({ mergeable: 'CONFLICTING' }), record(), NOW, { ...base, detailed: true }).do).toBe('send-back');
     });
   });
@@ -67,10 +76,10 @@ describe('mergeStep', () => {
       expect(mergeStep(pull({ headSha: 'new456', mergeable: 'CONFLICTING', checks: 'failing' }), record(), NOW, base).do).toBe('requeue');
     });
 
-    it('adopts the head as the passed commit for records from before commits were tracked', () => {
+    it('requires a new QA run when legacy approval has no tested commit', () => {
       expect(mergeStep(pull({ headSha: 'def789' }), record({ passedSha: null }), NOW, base)).toEqual({
-        do: 'merge',
-        set: { passedSha: 'def789', pendingSince: null },
+        do: 'requeue',
+        set: {},
       });
     });
   });

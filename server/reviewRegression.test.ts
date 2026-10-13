@@ -54,10 +54,11 @@ describe('Review regressions', () => {
   it('requires QA again after updating the PR branch, including concurrent new commits', async () => {
     vi.useFakeTimers();
     const mergePull = vi.fn(); const setQa = vi.fn(); const prDetails = vi.fn(async () => ({ headSha: 'concurrent-new-commit' }));
-    const fake = { backend: { prFiles: async () => [], updateBranch: vi.fn(async () => {}), mergePull, prDetails }, setQa, mergeNote: vi.fn(), schedule: vi.fn(), later: (callback: () => void, delay: number) => setTimeout(callback, delay) };
+    const record = {status: 'passed', passedSha: 'abc', round: 1, retests: 0, mergeFixes: 0};
+    const fake = {state: {qa: [record]}, backend: { prFiles: async () => [], updateBranch: vi.fn(async () => {}), mergePull, prDetails }, setQa, mergeNote: vi.fn(), schedule: vi.fn(), later: (callback: () => void, delay: number) => setTimeout(callback, delay) };
     const advance = (Swarm.prototype as unknown as { advanceMerge(...args: unknown[]): Promise<boolean> }).advanceMerge;
     try {
-      await advance.call(fake, { fullName: 'test/repo', defaultBranch: 'main' }, { passedSha: 'abc', round: 1, retests: 0, mergeFixes: 0 },
+      await advance.call(fake, { fullName: 'test/repo', defaultBranch: 'main' }, record,
         { number: 1, headSha: 'abc', mergeable: 'MERGEABLE', mergeState: 'BEHIND', checks: 'passing', isDraft: false });
       expect(mergePull).not.toHaveBeenCalled(); expect(setQa.mock.calls[0][1]).toMatchObject({ status: 'queued', passedSha: null, testedSha: null, round: 2 });
       expect(prDetails).not.toHaveBeenCalled();

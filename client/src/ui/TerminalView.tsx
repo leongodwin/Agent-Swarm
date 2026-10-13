@@ -4,6 +4,7 @@ import { isBusy, kanbanFor, agentsOnRepo, useStore } from '../store';
 import { confirmDialog } from './Confirm';
 import { LiveTerminal } from './LiveTerminal';
 import { effectiveModel } from '../../../shared/models';
+import { currentQaApproval } from '../../../shared/qa';
 import { Markdown } from './Markdown';
 import { MessageBox } from './MessageBox';
 import { closeOverlay, Panel } from './Overlays';
@@ -82,6 +83,7 @@ export function TerminalView({ agentId }: { agentId: string }) {
   const issueUrl = agent.issueNumber ? `https://github.com/${repo.fullName}/issues/${agent.issueNumber}` : null;
   const canMessage = working || (!isQa && !!agent.branch && agent.status !== 'idle');
   const qaRec = agent.prNumber ? qaRecords[`${repo.id}#${agent.prNumber}`] : undefined;
+  const qaCurrent = currentQaApproval(qaRec, repo.pulls.find(pull => pull.number === agent.prNumber));
 
   return (
     <Panel
@@ -124,8 +126,8 @@ export function TerminalView({ agentId }: { agentId: string }) {
           </a>
         )}
         {qaRec && agent.status !== 'idle' && (
-          <span className={`chip ${qaRec.status === 'passed' ? 'chip-good' : ''}`}>
-            QA: {qaRec.status}
+          <span className={`chip ${qaCurrent ? 'chip-good' : ''}`}>
+            QA: {qaRec.status === 'passed' && !qaCurrent ? 'approval needs refresh' : qaRec.status}
             {qaRec.round > 1 ? ` · round ${qaRec.round}` : ''}
           </span>
         )}

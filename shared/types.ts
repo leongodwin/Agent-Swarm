@@ -222,6 +222,8 @@ export interface QaView {
   repoId: string;
   prNumber: number;
   status: QaStatus;
+  testedSha?: string | null;
+  passedSha?: string | null; // absent legacy evidence requires fresh QA
   round: number; // 1-based QA round
   devAgentId: string | null; // who wrote it (null for PRs opened outside the swarm)
   qaAgentId: string | null; // who is testing / last tested it

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { CEO_ID, type AgentView, type CeoInfo, type CliView, type HireRequestView, type LogLine, type OfficeUpdateView, type PhoneMessage, type QaView, type RepoView, type ServerEvent, type SwarmSettings, type UsageView, type WorldSnapshot } from '../../shared/types';
 import { blockers } from '../../shared/issues';
+import { currentQaApproval } from '../../shared/qa';
 import { chirp, cue } from './ui/sfx';
 
 export type Agent = Omit<AgentView, 'log'>;
@@ -596,7 +597,7 @@ export function kanbanFor(repo: RepoView, agents: Agent[], qaRecords: Record<str
     const dev = (rec?.devAgentId ? byId.get(rec.devAgentId) : undefined) ?? authorOf(p.number, p.headRefName);
     const tester = rec?.qaAgentId ? byId.get(rec.qaAgentId) : undefined;
     const base = { key: `pr-${p.number}`, number: p.number, prNumber: p.number, title: p.title, url: p.url, qa: rec };
-    if (rec?.status === 'passed') {
+    if (rec && currentQaApproval(rec, p)) {
       ready.push({
         ...base,
         agent: dev,
@@ -618,7 +619,9 @@ export function kanbanFor(repo: RepoView, agents: Agent[], qaRecords: Record<str
       ...base,
       agent: status === 'testing' ? tester : dev,
       note:
-        status === 'queued'
+        status === 'passed'
+          ? 'QA approval needs refresh for this commit'
+          : status === 'queued'
           ? `waiting for QA${rec && rec.round > 1 ? ` · round ${rec.round}` : ''}`
           : status === 'testing'
             ? `🔍 testing · round ${rec!.round}`
