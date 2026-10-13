@@ -76,7 +76,14 @@ export class HldSynthesisService {
   }
   private finish(job:SynthesisJob,status:SynthesisJob['status'],error?:string){
     if(terminal(job))return;
-    job.status=status;job.error=error?.slice(0,4000);job.endedAt=Date.now();job.elapsedMs=Math.max(0,job.endedAt-job.startedAt);
+    const endedAt=Date.now(),elapsedMs=Math.max(0,endedAt-job.startedAt);
+    // The last publication guard and completion timestamp are separate reads.
+    // Crossing the deadline (or a backwards clock) between them cannot create
+    // a successful record that the persisted-state validator later rejects.
+    if(status==='completed'&&(endedAt<job.startedAt||elapsedMs>=DEADLINE)){
+      status='failed';error='Synthesis completion missed its consistent five-minute deadline; any saved draft remains unaccepted';delete job.result;this.event(job,'error',error);
+    }
+    job.status=status;job.error=error?.slice(0,4000);job.endedAt=endedAt;job.elapsedMs=elapsedMs;
     const active=this.active;if(active?.job===job){clearTimeout(active.timer);active.controller.abort();
       if(active.started&&!active.acknowledged){active.lease.stopping();job.runtimeCleanup='awaiting-completion';}
       try{active.handle?.stop();}catch{this.closed=true;job.error='Model runtime stop failed; verify the process before reopening synthesis';}

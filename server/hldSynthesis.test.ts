@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
@@ -89,6 +90,14 @@ it('denies altered saved model artifacts when a completed job is loaded',async()
   const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());f.callbacks.finished(success());
   await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('completed'));const docId=f.service.view('synthetic/project',job.id)[0].result!.docId;
   await fs.appendFile(path.join(f.checkout,'docs','architecture','drafts',`${docId}.md`),'Changed');await expect(f.service.result('synthetic/project',job.id)).rejects.toThrow('Markdown differs');
+});
+it.each(['deadline','clock-backwards'] as const)('denies a completion boundary race and restores its failed record: %s',async mode=>{
+  const f=await fixture(),job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
+  const clock=vi.spyOn(Date,'now').mockReturnValue(job.startedAt+299999),original=f.deps.context;let afterPublication=0;
+  f.deps.context=id=>{const context=original(id);if(existsSync(path.join(f.checkout,'docs','architecture','drafts','current.json'))&&++afterPublication===2)clock.mockReturnValue(mode==='deadline'?job.startedAt+300000:job.startedAt-1);return context;};
+  try{f.callbacks.finished(success());await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('failed'));const failed=f.service.view('synthetic/project',job.id)[0];expect(afterPublication).toBe(2);expect(failed.result).toBeUndefined();expect(failed.error).toContain('completion missed');expect(failed.runtimeCleanup).toBe('released');await expect(f.service.result('synthetic/project',job.id)).rejects.toThrow('no completed');}
+  finally{clock.mockRestore();f.deps.context=original;}
+  await f.service.close();const restored=new HldSynthesisService(f.root,f.deps);try{await restored.init();expect(restored.view('synthetic/project',job.id)[0].status).toBe('failed');expect(restored.summary('synthetic/project').successfulDurationMs.count).toBe(0);}finally{await restored.close();}
 });
 it('retains older failed jobs beyond the recent 30-job response and across restart',async()=>{
   const f=await fixture(async()=> 'Synthetic authentication blocker');let first='';
