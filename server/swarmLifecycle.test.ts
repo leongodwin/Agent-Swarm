@@ -29,7 +29,9 @@ function backend() {
     prDetails: vi.fn(async () => ({state: 'OPEN'})),
     commentPull: vi.fn(async () => 'https://example.test/comment'), mergePull: vi.fn(async () => {}),
     prFiles: vi.fn<Backend['prFiles']>(async () => []),
-    mainDir: () => HOME_DIR, deskDir: () => HOME_DIR, prepareDesk: vi.fn(async () => HOME_DIR),
+    prForBranch: vi.fn<Backend['prForBranch']>(async () => null),
+    uploadEvidence: vi.fn<Backend['uploadEvidence']>(async () => 'https://example.test/evidence'),
+    mainDir: () => HOME_DIR, deskDir: () => HOME_DIR, prepareDesk: vi.fn<Backend['prepareDesk']>(async () => HOME_DIR),
     startSession: vi.fn((_opts: unknown, _cb: SessionCallbacks) => ({stop: vi.fn(), send: vi.fn()})),
     previews: {hasDefault: vi.fn(async () => false), start: vi.fn(() => {throw new Error('Unexpected preview execution');})},
     office: {head: vi.fn(async () => null), takeLastUpdate: vi.fn(async () => null), isOwnFolder: () => false},
@@ -580,4 +582,69 @@ it.each(['qa', 'fix'])('removes stale %s pipeline activity when retained work is
   await fs.writeFile(STATE_FILE, JSON.stringify(saved)); await swarm.init();
   expect(fake.startSession).not.toHaveBeenCalled(); expect(swarm.snapshot().qa[0].status).toBe(task === 'qa' ? 'queued' : 'failed');
   if (task === 'qa') {vi.useRealTimers(); await swarm.shutdown(true); const recovered = JSON.parse(await fs.readFile(STATE_FILE, 'utf8')); expect(recovered.qa[0]).toMatchObject({testedSha: null, passedSha: null, qaAgentId: null});}
+});
+
+const secondIssue = {...issue, number: 2, title: 'Build replacement feature'};
+async function twoIssueOffice() {return office(true, fake => fake.listIssues.mockResolvedValue([issue, secondIssue]));}
+
+it('cannot apply an old failed readiness decision to a replacement assignment', async () => {
+  const {swarm, fake} = await twoIssueOffice(); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  const checks: ((value: string | null) => void)[] = []; swarm.capabilityPreflight = () => new Promise(resolve => {checks.push(resolve);});
+  await swarm.assign(agent.id, 1); swarm.stopAgent(agent.id); await swarm.assign(agent.id, 2);
+  expect(checks).toHaveLength(2); checks[0]('Old synthetic failure'); for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(swarm.snapshot().agents.find(a => a.id === agent.id)).toMatchObject({status: 'preparing', issueNumber: 2, lastError: null});
+  checks[1](null); await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
+  expect(fake.prepareDesk.mock.calls[0][3]).toContain('issue-2');
+});
+
+it('serializes cancelled and replacement worktree preparation without launching the old task', async () => {
+  const {swarm, fake} = await twoIssueOffice(); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  let prepared!: (value: string) => void;
+  fake.prepareDesk.mockImplementationOnce(() => new Promise(resolve => {prepared = resolve;}));
+  await swarm.assign(agent.id, 1); await vi.waitFor(() => expect(fake.prepareDesk).toHaveBeenCalledOnce());
+  swarm.stopAgent(agent.id); await swarm.assign(agent.id, 2); for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(fake.prepareDesk).toHaveBeenCalledOnce(); prepared(HOME_DIR);
+  await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
+  expect(fake.prepareDesk).toHaveBeenCalledTimes(2); expect((fake.startSession.mock.calls[0][0] as {prompt: string}).prompt).toContain('#2');
+});
+
+it('ignores obsolete session callbacks and retains the replacement session handle', async () => {
+  const {swarm, fake} = await twoIssueOffice(); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  await swarm.assign(agent.id, 1); await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
+  const old = fake.startSession.mock.calls[0][1]; swarm.stopAgent(agent.id); await swarm.assign(agent.id, 2);
+  await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledTimes(2));
+  const replacement = fake.startSession.mock.results[1].value; const usage = swarm.snapshot().usage;
+  old.sessionId('obsolete-session'); old.tool('obsolete-tool'); old.browserUrl('https://obsolete.test');
+  old.log([{kind: 'text', text: 'obsolete log'}]); old.screenshot(Buffer.from('obsolete'), 'image/png'); old.limited?.(Date.now() + 60000);
+  old.finished({ok: true, text: 'https://github.com/synthetic/repo/pull/7', costUsd: 99, turns: 99, errors: []});
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(swarm.snapshot().agents.find(a => a.id === agent.id)).toMatchObject({status: 'working', issueNumber: 2, prNumber: null, costUsd: 0, turns: 0, hasScreenshot: false});
+  expect(swarm.snapshot().usage).toEqual(usage); expect(swarm.snapshot().qa).toHaveLength(0);
+  await swarm.message(agent.id, 'Current follow-up'); expect(replacement.send).toHaveBeenCalledExactlyOnceWith('Current follow-up');
+});
+
+it('discards a PR lookup that finishes after its task was replaced', async () => {
+  const {swarm, fake} = await twoIssueOffice(); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  let found!: (value: {number: number; url: string}) => void;
+  fake.prForBranch.mockImplementationOnce(() => new Promise(resolve => {found = resolve;}));
+  await swarm.assign(agent.id, 1); await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
+  fake.startSession.mock.calls[0][1].finished({ok: true, text: 'No PR link in this result', costUsd: 0, turns: 1, errors: []});
+  expect(found).toBeTypeOf('function'); swarm.stopAgent(agent.id); await swarm.assign(agent.id, 2);
+  found({number: 7, url: 'https://example.test/pr/7'}); await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledTimes(2));
+  expect(swarm.snapshot().agents.find(a => a.id === agent.id)).toMatchObject({status: 'working', issueNumber: 2, prNumber: null});
+  expect(swarm.snapshot().qa).toHaveLength(0);
+});
+
+it('stops remaining QA uploads and refuses an old approval after the reviewer is reassigned', async () => {
+  const {swarm, fake, callbacks} = await qaOffice(); const reviewer = swarm.snapshot().agents.find(a => a.role === 'qa')!;
+  callbacks.screenshot(Buffer.from('synthetic image one'), 'image/png'); callbacks.screenshot(Buffer.from('synthetic image two'), 'image/png');
+  let uploaded!: (value: string) => void;
+  fake.uploadEvidence.mockImplementationOnce(() => new Promise(resolve => {uploaded = resolve;}));
+  callbacks.finished({ok: true, text: '', structured: {...qaReport, screenshots: ['First image', 'Second image']}, costUsd: 0, turns: 1, errors: []});
+  expect(uploaded).toBeTypeOf('function'); swarm.stopAgent(reviewer.id); swarm.resetAgent(reviewer.id);
+  await swarm.sendToQa('synthetic/repo', 7); await vi.advanceTimersByTimeAsync(200);
+  expect(fake.startSession).toHaveBeenCalledTimes(2); uploaded('https://example.test/evidence');
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  expect(fake.uploadEvidence).toHaveBeenCalledOnce(); expect(fake.commentPull).not.toHaveBeenCalled();
+  expect(swarm.snapshot().qa[0].status).toBe('testing');
 });

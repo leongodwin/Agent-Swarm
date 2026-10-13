@@ -14,14 +14,14 @@ async function temp() { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cub
 describe('Review regressions', () => {
   it('stops paused platform work before readiness checks or workspace preparation', async () => {
     const agent = { issueTitle: 'Copilot expense topics', status: 'preparing', lastError: '' };
-    const preflight = vi.fn(); const fake = { taskPaused: () => true, capabilityPreflight: preflight, emitAgent: vi.fn(), save: vi.fn() };
+    const preflight = vi.fn(); const fake = {taskGeneration: () => 0, taskPaused: () => true, capabilityPreflight: preflight, emitAgent: vi.fn(), save: vi.fn() };
     const check = (Swarm.prototype as unknown as { checkTaskCapabilities(a: unknown, repo: unknown): Promise<boolean> }).checkTaskCapabilities;
     expect(await check.call(fake, agent, {})).toBe(false);
     expect(agent.status).toBe('stopped'); expect(agent.lastError).toContain('paused'); expect(preflight).not.toHaveBeenCalled();
   });
   it('quarantines a surviving paused platform session without launching a replacement', async () => {
     const start = vi.fn(); const releaseIdle = vi.fn();
-    const fake = { state: {repos: [{id: 'repo', fullName: 'owner/repo'}], qa: []}, agentRt: new Map([['grace', {terminal: {releaseIdle}}]]), taskPaused: () => true, appendLog: vi.fn(), backend: {terminals: true}, emitAgent: vi.fn(), save: vi.fn(), startAgentSession: start };
+    const fake = {reserveTask: () => 1, ownsTask: () => true, state: {repos: [{id: 'repo', fullName: 'owner/repo'}], qa: []}, agentRt: new Map([['grace', {terminal: {releaseIdle}}]]), taskPaused: () => true, appendLog: vi.fn(), backend: {terminals: true}, emitAgent: vi.fn(), save: vi.fn(), startAgentSession: start };
     const restore = (Swarm.prototype as unknown as {reattachSession(a: unknown, held: unknown): Promise<void>}).reattachSession;
     await restore.call(fake, {id: 'grace', repoId: 'repo', issueTitle: 'Copilot Studio topics', task: 'fix', sessionId: 'existing-session'}, {agentId: 'grace', cli: 'codex', resumeId: 'keeper-session', busy: true});
     expect(start).not.toHaveBeenCalled(); expect(releaseIdle).toHaveBeenCalledOnce();
@@ -36,7 +36,7 @@ describe('Review regressions', () => {
   it('starts a release review only with its free assigned QA agent and no PR side effects', async () => {
     const agent = { id: 'sherlock', role: 'qa', repoId: 'test/repo', status: 'idle' };
     const startAgentSession = vi.fn();
-    const fake = { state: { agents: [agent] }, agentRt: new Map(), slotsFull: () => false, repo: () => ({ fullName: 'test/repo' }), backend: { mainDir: () => 'checkout' }, startAgentSession, save: vi.fn(), emitAgent: vi.fn(), checkTaskCapabilities: vi.fn(async () => true) };
+    const fake = {reserveTask: () => 1, ownsTask: () => true, deskWriters: new Map(), state: { agents: [agent] }, agentRt: new Map(), slotsFull: () => false, repo: () => ({ fullName: 'test/repo' }), backend: { mainDir: () => 'checkout' }, startAgentSession, save: vi.fn(), emitAgent: vi.fn(), checkTaskCapabilities: vi.fn(async () => true) };
     const review = (Swarm.prototype as unknown as { reviewDeliveryRelease(...args: string[]): Promise<string> }).reviewDeliveryRelease;
     expect(await review.call(fake, 'sherlock', 'test/repo', 'release')).toContain('started');
     expect(startAgentSession.mock.calls[0][3]).toContain('exact pinned commit');

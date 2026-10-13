@@ -357,6 +357,21 @@ export class Swarm {
   private ceoIssues = new IssueCap(MAX_ISSUES_PER_JOB); // issues filed during the current CEO job
   private messageSeq = 1;
   private agentRt = new Map<string, AgentRuntime>();
+  private taskGenerations = new Map<string, number>();
+  private deskWriters = new Map<string, SerialWriter>();
+  private deskOperation<T>(a: PersistedAgent, action: () => Promise<T>): Promise<T> {
+    let writer = this.deskWriters.get(a.id);
+    if (!writer) {writer = new SerialWriter(); this.deskWriters.set(a.id, writer);}
+    return writer.write(action);
+  }
+
+  private taskGeneration(a: PersistedAgent) { return this.taskGenerations.get(a.id) ?? 0; }
+  private reserveTask(a: PersistedAgent) {
+    const generation = this.taskGeneration(a) + 1; this.taskGenerations.set(a.id, generation); return generation;
+  }
+  private ownsTask(a: PersistedAgent, generation: number) {
+    return !this.closed && this.state.agents.includes(a) && this.taskGeneration(a) === generation;
+  }
   private repoRt = new Map<string, RepoRuntime>();
   private clients = new Set<WebSocket>();
   private user: string | null = null;
@@ -1460,6 +1475,17 @@ export class Swarm {
   stopAgent(id: string) {
     const a = this.agent(id);
     if (!BUSY.includes(a.status)) return;
+    const stoppedSession = this.agentRt.get(id)?.session;
+    if (a.role !== 'ceo') {
+      const repo = this.state.repos.find(r => r.id === a.repoId);
+      const slug = this.agentSlug(a);
+      if (repo) void this.deskOperation(a, () => this.backend.releaseDesk(repo.fullName, slug, this.port(a))).catch(err => console.warn('could not release stopped task workspace', err));
+    }
+    if (a.role !== 'ceo') {this.reserveTask(a); const runtime = this.agentRt.get(id); if (runtime) runtime.session = null;}
+    if (a.role !== 'ceo') for (const record of this.state.qa) {
+      if (record.qaAgentId === id && record.status === 'testing') this.setQa(record, {status: 'queued', qaAgentId: null, testedSha: null, passedSha: null});
+      if (record.devAgentId === id && record.status === 'fixing') this.setQa(record, {status: 'failed'});
+    }
     a.status = 'stopped';
     a.lastError = 'Stopped by manager';
     if (a.role === 'ceo' && !this.agentRt.get(id)?.session) {
@@ -1467,13 +1493,14 @@ export class Swarm {
       this.emitCeo();
     }
     this.appendLog(a, [{ kind: 'manager', text: '■ Manager stopped this session.' }]);
-    this.agentRt.get(id)?.session?.stop();
+    stoppedSession?.stop();
     this.emitAgent(a);
     this.save();
   }
 
   /** An agent whose CLI kept working through the office's restart: the office follows its session again. */
   private async reattachSession(a: PersistedAgent, held: ReconnectedCli) {
+    const generation = this.reserveTask(a);
     const repo = this.state.repos.find((r) => r.id === a.repoId);
     const rt = this.agentRt.get(a.id);
     let blocker: string | null = null;
@@ -1486,6 +1513,7 @@ export class Swarm {
       else blocker = await this.sessionReadiness(a, repo, held.resumeId ?? undefined, held.cli);
     }
     if (this.closed) return;
+    if (!this.ownsTask(a, generation)) {rt?.terminal?.releaseIdle?.(); return;}
     paused = this.taskPaused(a.issueTitle ?? '');
     if (paused) blocker = 'This platform is paused by the manager';
     if (!blocker && (a.status !== 'preparing' || !this.state.agents.includes(a))) blocker = 'Retained task was cancelled during readiness verification';
@@ -1673,6 +1701,7 @@ export class Swarm {
   }
 
   private beginTask(a: PersistedAgent, patch: Partial<PersistedAgent>, banner: string, preparing: string) {
+    const generation = this.reserveTask(a);
     const rt = this.agentRt.get(a.id)!;
     Object.assign(a, {
       status: 'preparing' as AgentStatus,
@@ -1694,20 +1723,23 @@ export class Swarm {
     ]);
     this.emitAgent(a);
     this.save();
+    return generation;
   }
 
-  private async prepare(a: PersistedAgent, repo: PersistedRepo, base: { pr?: number }, branch: string): Promise<string | null> {
-    const active = () => !this.closed && a.status === 'preparing' && this.state.agents.includes(a);
+  private async prepare(a: PersistedAgent, repo: PersistedRepo, base: { pr?: number }, branch: string, generation = this.taskGeneration(a)): Promise<string | null> {
+    const active = () => this.ownsTask(a, generation) && a.status === 'preparing';
+    const slug = this.agentSlug(a);
+    return this.deskOperation(a, async () => {
     try {
       if (!active()) return null;
       if (this.repoRt.get(repo.id)?.cloneStatus !== 'ready') await this.cloneRepo(repo.id);
       if (!active()) return null;
-      await this.backend.releaseDesk(repo.fullName, this.agentSlug(a), this.port(a));
+      await this.backend.releaseDesk(repo.fullName, slug, this.port(a));
       if (!active()) return null;
-      const cwd = await this.backend.prepareDesk(repo.fullName, { defaultBranch: repo.defaultBranch, pr: base.pr }, this.agentSlug(a), branch);
-      return !this.closed && a.status === 'preparing' ? cwd : null;
+      const cwd = await this.backend.prepareDesk(repo.fullName, { defaultBranch: repo.defaultBranch, pr: base.pr }, slug, branch);
+      return active() ? cwd : null;
     } catch (err) {
-      if (this.closed || a.status !== 'preparing') return null;
+      if (!active()) return null;
       a.status = 'error';
       a.endedAt = Date.now();
       a.lastError = (err as Error).message;
@@ -1716,6 +1748,7 @@ export class Swarm {
       this.save();
       return null;
     }
+    });
   }
 
   private async sessionReadiness(a: PersistedAgent, repo: PersistedRepo, resume?: string, retainedCli?: AgentCli): Promise<string | null> {
@@ -1725,14 +1758,14 @@ export class Swarm {
     return this.boundedReadiness(() => this.capabilityPreflight(repo.id, cli), 'Capability');
   }
 
-  private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo, resume?: string) {
+  private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo, resume?: string, generation = this.taskGeneration(a)) {
     if (this.closed) return false;
     if (this.taskPaused?.(a.issueTitle ?? '')) {
       a.status = 'stopped'; a.lastError = 'This platform is paused by the manager';
       this.emitAgent(a); this.save(); return false;
     }
     const blocker = await this.sessionReadiness(a, repo, resume);
-    if (this.closed) return false;
+    if (!this.ownsTask(a, generation) || a.status !== 'preparing') return false;
     if (blocker === null) return true;
     a.lastError = blocker;
     a.status = 'error'; a.endedAt = Date.now();
@@ -1741,15 +1774,15 @@ export class Swarm {
 
   private async runTask(a: PersistedAgent, repo: PersistedRepo, issue: IssueInfo, note?: string) {
     const branch = `swarm/issue-${issue.number}-${slugify(a.name)}`;
-    this.beginTask(
+    const generation = this.beginTask(
       a,
       { task: 'issue', issueNumber: issue.number, issueTitle: issue.title, branch, prNumber: null, prUrl: null, sessionId: null },
       `Issue #${issue.number}: ${issue.title}`,
       `Preparing worktree on ${branch}…`,
     );
-    if (!await this.checkTaskCapabilities(a, repo)) return;
-    const cwd = await this.prepare(a, repo, {}, branch);
-    if (!cwd) return;
+    if (!await this.checkTaskCapabilities(a, repo, undefined, generation)) return;
+    const cwd = await this.prepare(a, repo, {}, branch, generation);
+    if (!cwd || !this.ownsTask(a, generation)) return;
 
     const prompt = [
       `Please resolve GitHub issue #${issue.number}: ${issue.title}`,
@@ -1778,10 +1811,13 @@ export class Swarm {
   ) {
     if (this.closed) return;
     const rt = this.agentRt.get(a.id)!;
+    const generation = this.taskGeneration(a);
+    let completed = false;
+    const live = () => !completed && this.ownsTask(a, generation);
     a.status = 'working';
     const how = this.sessionRuntime(a, resumeSessionId, mode === 'reattach' ? a.sessionCli ?? undefined : undefined);
     this.emitAgent(a);
-    rt.session = this.backend.startSession(
+    const handle = this.backend.startSession(
       {
         cwd,
         prompt,
@@ -1801,25 +1837,25 @@ export class Swarm {
         ...how,
       },
       {
-        log: (entries) => this.appendLog(a, entries),
+        log: (entries) => {if (live()) this.appendLog(a, entries);},
         tool: (name) => {
-          if (this.closed) return;
+          if (!live()) return;
           if (rt.currentTool === name) return;
           rt.currentTool = name;
           this.emitAgent(a);
         },
         sessionId: (id) => {
-          if (this.closed) return;
+          if (!live()) return;
           a.sessionId = id;
           a.sessionCli = id ? (how.cli ?? 'claude') : null;
         },
         browserUrl: (url) => {
-          if (this.closed) return;
+          if (!live()) return;
           rt.browserUrl = url;
           this.emitAgent(a);
         },
         screenshot: (data, mime) => {
-          if (this.closed) return;
+          if (!live()) return;
           const at = Date.now();
           rt.screenshot = { data, mime, at };
           rt.shots.push({ data, mime, url: rt.browserUrl, at });
@@ -1830,16 +1866,18 @@ export class Swarm {
             .then(() => fs.writeFile(screenFile(a.id, mime), data))
             .catch((err) => console.warn('could not save screenshot', err));
         },
-        limited: (at) => this.pauseForLimit(at),
-        usageWarning: (info) => this.paceForWarning(info),
-        finished: (result) => void this.onFinished(a, repo, result),
+        limited: (at) => {if (live()) this.pauseForLimit(at);},
+        usageWarning: (info) => {if (live()) this.paceForWarning(info);},
+        finished: (result) => {if (!live()) return; completed = true; void this.onFinished(a, repo, result, generation);},
       },
     );
+    if (this.ownsTask(a, generation)) rt.session = completed ? null : handle;
+    else if (!completed) handle.stop();
   }
 
-  private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult) {
+  private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a)) {
     const rt = this.agentRt.get(a.id);
-    if (this.closed || !rt || !this.state.agents.includes(a)) return; // fired or closing
+    if (!rt || !this.ownsTask(a, generation)) return;
     if (this.officeUpdate.handedOver) return; // stopped for the office's update: recovered like after a restart
     rt.session = null;
     rt.currentTool = null;
@@ -1847,7 +1885,8 @@ export class Swarm {
     a.costUsd += result.costUsd;
     a.turns += result.turns;
     // Dev servers the agent forgot to stop would otherwise keep its port and lock its desk folder.
-    void this.backend.releaseDesk(repo.fullName, this.agentSlug(a), this.port(a)).catch(() => undefined);
+    const slug = this.agentSlug(a);
+    void this.deskOperation(a, async () => {if (this.ownsTask(a, generation)) await this.backend.releaseDesk(repo.fullName, slug, this.port(a));}).catch(() => undefined);
     if (result.interrupted) this.interrupted(a);
 
     if (!result.ok && this.isOpenCodeLimit(result, a)) {
@@ -1864,9 +1903,11 @@ export class Swarm {
     if (a.task === 'qa' && a.prNumber === null) {
       a.status = result.ok ? 'done' : 'error'; a.lastError = result.ok ? null : result.errors.join('; ');
       this.appendLog(a, [{ kind: result.ok ? 'system' : 'error', text: result.text || a.lastError || 'Release review ended' }]);
-    } else if (a.task === 'qa') await this.onQaFinished(a, repo, result);
+    } else if (a.task === 'qa') await this.onQaFinished(a, repo, result, generation);
     else if (a.task === 'fix') this.onFixFinished(a, repo, result);
-    else await this.onIssueFinished(a, repo, result);
+    else await this.onIssueFinished(a, repo, result, generation);
+
+    if (!this.ownsTask(a, generation)) return;
 
     this.emitAgent(a);
     this.save();
@@ -1943,7 +1984,7 @@ export class Swarm {
     return true;
   }
 
-  private async onIssueFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult) {
+  private async onIssueFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a)) {
     const escaped = repo.fullName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const m = result.text.match(new RegExp(`https://github\\.com/${escaped}/pull/(\\d+)`, 'i'));
     if (m) {
@@ -1951,6 +1992,7 @@ export class Swarm {
       a.prUrl = m[0];
     } else if (a.branch) {
       const pr = await this.backend.prForBranch(repo.fullName, a.branch).catch(() => null);
+      if (!this.ownsTask(a, generation)) return;
       if (pr) {
         a.prNumber = pr.number;
         a.prUrl = pr.url;
@@ -2092,7 +2134,7 @@ export class Swarm {
   private async runQa(a: PersistedAgent, repo: PersistedRepo, rec: QaRecord) {
     const branch = `qa/pr-${rec.prNumber}-${slugify(a.name)}`;
     this.setQa(rec, { status: 'testing', passedSha: null, testedSha: null, qaAgentId: a.id });
-    this.beginTask(
+    const generation = this.beginTask(
       a,
       { task: 'qa', issueNumber: rec.issueNumber, issueTitle: `PR #${rec.prNumber}`, branch, prNumber: rec.prNumber, prUrl: null, sessionId: null },
       `QA · PR #${rec.prNumber} · round ${rec.round}`,
@@ -2105,10 +2147,12 @@ export class Swarm {
       pr = await this.backend.prDetails(repo.fullName, rec.prNumber);
       const issueNumber = rec.issueNumber ?? pr.closesIssues[0] ?? null;
       if (issueNumber) issue = await this.backend.issueDetails(repo.fullName, issueNumber).catch(() => null);
+      if (!this.ownsTask(a, generation) || a.status !== 'preparing') return;
       Object.assign(a, { issueTitle: pr.title, prUrl: pr.url });
       rec.testedSha = pr.headSha;
       this.emitAgent(a);
     } catch (err) {
+      if (!this.ownsTask(a, generation)) return;
       a.status = 'error';
       a.endedAt = Date.now();
       a.lastError = (err as Error).message;
@@ -2125,8 +2169,9 @@ export class Swarm {
       return;
     }
 
-    if (!await this.checkTaskCapabilities(a, repo)) { this.setQa(rec, { status: 'queued' }); return; }
-    const cwd = await this.prepare(a, repo, { pr: rec.prNumber }, branch);
+    if (!await this.checkTaskCapabilities(a, repo, undefined, generation)) { if (this.ownsTask(a, generation)) this.setQa(rec, { status: 'queued' }); return; }
+    const cwd = await this.prepare(a, repo, { pr: rec.prNumber }, branch, generation);
+    if (!this.ownsTask(a, generation)) return;
     if (!cwd) {
       if (this.state.qa.includes(rec) && rec.status === 'testing') this.setQa(rec, { status: 'queued', qaAgentId: null });
       return;
@@ -2157,7 +2202,7 @@ export class Swarm {
     this.startAgentSession(a, repo, cwd, prompt, this.buildQaSystemAppend(a, repo, cwd, branch, pr), undefined, QA_SCHEMA);
   }
 
-  private async onQaFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult) {
+  private async onQaFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a)) {
     if (this.closed) return;
     const rec = this.state.qa.find((q) => q.repoId === repo.id && q.prNumber === a.prNumber);
     if (!rec) return this.fail(a, {...result, errors: ['QA record unavailable; report was not accepted']}, `QA of PR #${a.prNumber}`);
@@ -2188,14 +2233,15 @@ export class Swarm {
     if (rec) {
       try {
         this.appendLog(a, [{ kind: 'system', text: '📎 Uploading evidence and posting the QA report on the PR…' }]);
-        const body = await this.renderQaComment(a, repo, rec, report, rt.shots);
-        if (this.closed) return;
+        const body = await this.renderQaComment(a, repo, rec, report, rt.shots, generation);
+        if (!this.ownsTask(a, generation)) return;
         commentUrl = (await this.backend.commentPull(repo.fullName, rec.prNumber, body)) || null;
         this.appendLog(a, [{ kind: 'system', text: `  ⎿ ${commentUrl ?? 'comment posted'}` }]);
       } catch (err) {
+        if (!this.ownsTask(a, generation)) return;
         this.appendLog(a, [{ kind: 'error', text: `  ⎿ Could not post the QA report: ${(err as Error).message}` }]);
       }
-      if (this.closed || !this.state.qa.includes(rec) || rec.status !== 'testing' || rec.qaAgentId !== a.id) return;
+      if (!this.ownsTask(a, generation) || !this.state.qa.includes(rec) || rec.status !== 'testing' || rec.qaAgentId !== a.id) return;
       a.status = 'done';
       const qaRounds = rec.round - rec.retests; // rounds QA itself asked for
       const nextStatus = pass ? 'passed' : qaRounds >= MAX_QA_ROUNDS ? 'needs-human' : 'failed';
@@ -2224,13 +2270,14 @@ export class Swarm {
     }
   }
 
-  private async renderQaComment(a: PersistedAgent, repo: PersistedRepo, rec: QaRecord, report: QaReport, shots: Shot[]) {
+  private async renderQaComment(a: PersistedAgent, repo: PersistedRepo, rec: QaRecord, report: QaReport, shots: Shot[], generation = this.taskGeneration(a)) {
     const pass = report.verdict === 'pass';
     const images: string[] = [];
     const evidence = shots.slice(-8);
     const offset = shots.length - evidence.length;
     const folder = `pr-${rec.prNumber}/round-${rec.round}-${Date.now().toString(36)}`;
     for (const [i, shot] of evidence.entries()) {
+      if (!this.ownsTask(a, generation)) throw new HttpError(409, 'QA evidence upload cancelled');
       const n = offset + i + 1;
       const ext = MIME_EXT[shot.mime] ?? 'png';
       const file = `${folder}/${String(n).padStart(2, '0')}.${ext}`;
@@ -2239,6 +2286,7 @@ export class Swarm {
         const caption = report.screenshots[n - 1] ?? `Screenshot ${n}`;
         images.push(`**${n}. ${caption}**${shot.url ? ` · \`${shot.url}\`` : ''}\n\n<img src="${url}" alt="${caption.replace(/"/g, "'")}" width="760">`);
       } catch (err) {
+        if (!this.ownsTask(a, generation)) throw new HttpError(409, 'QA evidence upload cancelled');
         this.appendLog(a, [{ kind: 'error', text: `  ⎿ screenshot ${n} upload failed: ${(err as Error).message.slice(0, 120)}` }]);
       }
     }
@@ -2268,14 +2316,13 @@ export class Swarm {
   private async runFix(dev: PersistedAgent, repo: PersistedRepo, rec: QaRecord) {
     const original = rec.devAgentId === dev.id;
     const pull = this.repoRt.get(repo.id)?.pulls.find((p) => p.number === rec.prNumber);
-    const headRef = pull?.headRefName ?? (await this.backend.prDetails(repo.fullName, rec.prNumber)).headRefName;
     const branch = fixDeskBranch(rec.prNumber, this.agentSlug(dev));
     const terminal = this.state.settings.runtime === 'terminal' && this.backend.terminals;
     const resume = original && rec.devSessionId && isCli(rec.devSessionCli) && (terminal || rec.devSessionCli === 'claude') ? rec.devSessionId : undefined;
     if (original && rec.devSessionId && !resume) this.appendLog(dev, [{kind: 'system', text: 'Repair checkpoint runtime is unknown or incompatible; starting a fresh session with the current PR and QA context.'}]);
     const qaAgent = rec.qaAgentId ? this.state.agents.find((x) => x.id === rec.qaAgentId) : null;
     this.setQa(rec, { status: 'fixing', devAgentId: dev.id, devSessionId: resume ?? null, devSessionCli: resume ? rec.devSessionCli : null });
-    this.beginTask(
+    const generation = this.beginTask(
       dev,
       { task: 'fix', issueNumber: rec.issueNumber, issueTitle: pull?.title ?? `PR #${rec.prNumber}`, branch, prNumber: rec.prNumber, prUrl: pull?.url ?? null, sessionId: resume ?? null, sessionCli: resume ? rec.devSessionCli : null },
       rec.fixReason === 'conflict'
@@ -2287,8 +2334,13 @@ export class Swarm {
             : `Fixing PR #${rec.prNumber} after QA round ${rec.round}`,
       `Checking out PR #${rec.prNumber}…`,
     );
-    if (!await this.checkTaskCapabilities(dev, repo, resume)) { this.setQa(rec, { status: 'failed' }); return; }
-    const cwd = await this.prepare(dev, repo, { pr: rec.prNumber }, branch);
+    if (!await this.checkTaskCapabilities(dev, repo, resume, generation)) { if (this.ownsTask(dev, generation)) this.setQa(rec, { status: 'failed' }); return; }
+    let headRef: string;
+    try {headRef = pull?.headRefName ?? (await this.backend.prDetails(repo.fullName, rec.prNumber)).headRefName;}
+    catch {if (this.ownsTask(dev, generation)) {dev.status = 'error'; dev.lastError = 'Repair PR metadata is unavailable'; this.setQa(rec, {status: 'failed'}); this.emitAgent(dev);} return;}
+    if (!this.ownsTask(dev, generation)) return;
+    const cwd = await this.prepare(dev, repo, { pr: rec.prNumber }, branch, generation);
+    if (!this.ownsTask(dev, generation)) return;
     if (!cwd) {
       if (rec.status === 'fixing') this.setQa(rec, { status: 'failed' });
       return;
@@ -2392,9 +2444,14 @@ export class Swarm {
     if (a.status === 'preparing') throw new HttpError(409, `${a.name} is still setting up; try again in a moment`);
     if (!a.sessionId || !a.branch || a.task === 'qa') throw new HttpError(409, `${a.name} has no session to continue. Assign an issue instead.`);
     this.ensureSlot();
+    const generation = this.reserveTask(a);
     a.status = 'preparing'; this.emitAgent(a); this.save();
-    if (!await this.checkTaskCapabilities(a, repo, a.sessionId)) throw new HttpError(409, a.lastError || 'Session readiness is unavailable');
-    if (this.closed || a.status !== 'preparing' || !this.state.agents.includes(a)) throw new HttpError(409, 'Session stopped during readiness verification');
+    const ready = await this.checkTaskCapabilities(a, repo, a.sessionId, generation);
+    if (!this.ownsTask(a, generation)) throw new HttpError(409, 'Session stopped during readiness verification');
+    if (!ready) throw new HttpError(409, a.lastError || 'Session readiness is unavailable');
+    if (a.status !== 'preparing') throw new HttpError(409, 'Session stopped during readiness verification');
+    await this.deskWriters.get(a.id)?.drain().catch(() => undefined);
+    if (!this.ownsTask(a, generation) || a.status !== 'preparing') throw new HttpError(409, 'Session stopped while waiting for its worktree');
     this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${text}` }]);
     const cwd = this.backend.deskDir(repo.fullName, this.agentSlug(a));
     a.lastError = null;
@@ -3112,10 +3169,15 @@ export class Swarm {
     const a = this.state.agents.find((a) => a.id === agentId && a.repoId === repoId && a.role === 'qa');
     if (!a || BUSY.includes(a.status) || this.agentRt.get(a.id)?.session || this.slotsFull()) throw new HttpError(409, 'Assigned QA reviewer or session slot is busy; request the release review when available');
     const repo = this.repo(repoId);
+    const generation = this.reserveTask(a);
     a.task = 'qa'; a.prNumber = null; a.issueNumber = null; a.issueTitle = `Release review ${releaseId}`; a.startedAt = Date.now(); a.lastError = null;
     a.status = 'preparing'; this.emitAgent(a); this.save();
-    if (!await this.checkTaskCapabilities(a, repo)) throw new HttpError(409, a.lastError || 'Release-review readiness is unavailable');
-    if (this.closed || a.status !== 'preparing' || !this.state.agents.includes(a)) throw new HttpError(409, 'Reviewer stopped during readiness verification');
+    const ready = await this.checkTaskCapabilities(a, repo, undefined, generation);
+    if (!this.ownsTask(a, generation)) throw new HttpError(409, 'Reviewer stopped during readiness verification');
+    if (!ready) throw new HttpError(409, a.lastError || 'Release-review readiness is unavailable');
+    if (a.status !== 'preparing') throw new HttpError(409, 'Reviewer stopped during readiness verification');
+    await this.deskWriters.get(a.id)?.drain().catch(() => undefined);
+    if (!this.ownsTask(a, generation) || a.status !== 'preparing') throw new HttpError(409, 'Reviewer stopped while waiting for workspace cleanup');
     this.startAgentSession(a, repo, this.backend.mainDir(repo.fullName),
       `Independently review release ${releaseId}. If its run is reviewing, inspect every captured desktop/mobile screenshot, accessibility report, usability results and recovery rehearsal evidence, then call approve_visual with the run ID, evidence hash, five visual scores and specific review notes. Otherwise review the plan. Call delivery_status, inspect the exact pinned commit with git show, read docs/DELIVERY.md, and inspect all acceptance scenarios. Do not modify source or approve weak/static assertions. Every required issue must be implemented in the pinned commit, each component packaged, authorization must exercise denied access, and persistence must prove a write survives reload. If adequate call approve_release with the exact plan hash. Otherwise explain the specific gaps without approving.`, DELIVERY_ENGINEERING);
     this.save(); return 'Assigned QA review started';

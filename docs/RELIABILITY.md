@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Worker task ownership and cancellation
+
+Worker tasks carry an in-memory generation that changes when a task is reserved or stopped. Capability checks, workspace preparation, QA metadata reads, PR lookups and session callbacks verify that generation before applying their results. Old callbacks cannot change a replacement task's session ID, tool/screen state, usage pacing, cost or QA handoff. Completion is processed once per session.
+
+Stopping a worker invalidates its callbacks immediately, updates interrupted QA/repair state and schedules owned workspace cleanup directly. Worktree preparation and cleanup serialize per agent; a replacement waits for an earlier operation to finish and rechecks ownership before proceeding. Follow-ups and release reviews also wait for pending cleanup. Cancelled QA uploads do not initiate further evidence uploads or post an obsolete approval after reassignment.
+
+Actual Swarm regressions exercise delayed failed readiness, in-flight preparation, obsolete callbacks, late PR discovery and cancelled QA evidence uploads. These prove coordinator ownership and ordering with a synthetic backend. They do not revoke native tool authority, cancel already-issued external requests, confirm physical process termination or provide complete containment. Full execution and policy/schema enforcement remain required. Evidence: `.swarm-reliability/task-generation-coverage-2026-10-13.txt`, `task-generation-coverage-exit-2026-10-13.txt` and `task-generation-api-e2e-2026-10-13.txt`.
+
 ## Retained CLI admission
 
 Busy keeper sessions no longer bypass capability readiness on startup. The office verifies the returned agent/CLI/session metadata and terminal support, checks the actual retained CLI, and rechecks pause/cancellation before following it. Keeper metadata replaces stale persisted runtime ownership. A verified retained terminal is adopted as that CLI even when the office default has changed to SDK, avoiding a second SDK session alongside the surviving process.
