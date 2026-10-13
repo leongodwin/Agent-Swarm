@@ -579,6 +579,44 @@ it('blocks CEO work without native terminal readiness and retains the queued job
   expect(swarm.snapshot().ceo.retryAt).toBeGreaterThan(Date.now());
 });
 
+it('holds unsupported CEO model work through messages, cosmetic edits and restart until the model changes',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  swarm.updateAgent(CEO_ID,{model:'synthetic-invalid'});await swarm.messageCeo('Original synthetic request');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['Error: Model "synthetic-invalid" from --model flag is not available.'],costUsd:0,turns:0,configurationError:{kind:'unsupported-model',cli:'copilot',model:'synthetic-invalid'}});
+  expect(swarm.snapshot().ceo).toMatchObject({job:null,retryAt:null,blockedReason:expect.stringContaining('model changes'),queue:[{kind:'chat'}]});
+  await swarm.messageCeo('Additional synthetic context');swarm.updateAgent(CEO_ID,{name:'Renamed CEO',effort:'high'});await vi.advanceTimersByTimeAsync(180000);
+  expect(fake.startSession).toHaveBeenCalledOnce();expect(swarm.snapshot().agents.find(a=>a.id===CEO_ID)?.status).toBe('error');
+  vi.useRealTimers();await swarm.shutdown(true);vi.useFakeTimers();
+  const restoredBackend=backend();restoredBackend.terminals=true;
+  const restored=new Swarm(restoredBackend as unknown as Backend);offices.push(restored);restored.ceoPreflight=async()=>null;restored.capabilityPreflight=async()=>null;
+  await restored.init();await vi.advanceTimersByTimeAsync(180000);expect(restoredBackend.startSession).not.toHaveBeenCalled();
+  restored.updateAgent(CEO_ID,{model:''});await vi.advanceTimersByTimeAsync(200);
+  await vi.waitFor(()=>expect(restoredBackend.startSession).toHaveBeenCalledOnce());
+  const options=restoredBackend.startSession.mock.calls[0][0] as SessionOptions;expect(options.model).toBe('');expect(options.prompt).toContain('Original synthetic request');expect(options.prompt).toContain('Additional synthetic context');
+  expect(restored.snapshot().ceo.blockedReason).toBeNull();
+});
+
+it('does not hold a replacement model when the old active CLI reports its rejection late',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  swarm.updateAgent(CEO_ID,{model:'old-invalid'});await swarm.messageCeo('Synthetic model change request');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());swarm.updateAgent(CEO_ID,{model:'replacement-model'});
+  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['native model unavailable'],costUsd:0,turns:0,configurationError:{kind:'unsupported-model',cli:'copilot',model:'old-invalid'}});
+  await vi.advanceTimersByTimeAsync(300);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+  expect((fake.startSession.mock.calls[1][0] as SessionOptions).model).toBe('replacement-model');expect(swarm.snapshot().ceo.blockedReason).toBeNull();
+});
+
+it('migrates an observed legacy native model rejection into a durable CEO hold',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  swarm.updateAgent(CEO_ID,{model:'legacy-invalid'});await swarm.messageCeo('Synthetic legacy request');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['GitHub Copilot CLI exited with code 1. Error: Model "legacy-invalid" from --model flag is not available.'],costUsd:0,turns:0});
+  vi.useRealTimers();await swarm.shutdown(true);vi.useFakeTimers();
+  const restoredBackend=backend();restoredBackend.terminals=true;const restored=new Swarm(restoredBackend as unknown as Backend);offices.push(restored);restored.ceoPreflight=async()=>null;
+  await restored.init();await restored.messageCeo('Synthetic retry context');await vi.advanceTimersByTimeAsync(180000);
+  expect(restoredBackend.startSession).not.toHaveBeenCalled();expect(restored.snapshot().ceo.blockedReason).toContain('configured CEO model');
+});
+
 it('binds CEO tool authority to its active job and revokes it when stopped', async () => {
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});
   swarm.ceoPreflight=async()=>null;

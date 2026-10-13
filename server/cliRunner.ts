@@ -27,6 +27,7 @@ import type { OfficeTools } from './ceo.ts';
 import type { AgentTerminal } from './terminal.ts';
 import type { AgentCli } from '../shared/types.ts';
 import { governSessionTool, hookDecision, hookFailure } from './toolGovernance.ts';
+import {copilotUnavailableModel} from './runtimeFailure.ts';
 
 // One agent session as the real CLI in a pseudo-terminal: the same contract as the Agent SDK runner (log lines, the
 // current tool, the final text, finished), so the rest of the office doesn't care which runtime an agent uses.
@@ -651,14 +652,17 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       const text = copilotResponse(live?.output ?? '');
       if (text) {
         lastText = text;
-        turns += 1;
-        log(assistantLines(text));
-        cb.turn?.(text);
+        if(exitCode===0){
+          turns += 1;
+          log(assistantLines(text));
+          cb.turn?.(text);
+        }else log([{kind:'error',text:clip(text,1000)}]);
       }
       finish({
         ok: exitCode === 0 && !!text,
         text,
         errors: exitCode === 0 && text ? [] : [`${label} ${exitCode ? `exited with code ${exitCode}` : 'finished without a response'}.${text ? ` ${clip(text, 240)}` : ''}`],
+        ...(exitCode!==0&&copilotUnavailableModel(text,opts.model)?{configurationError:{kind:'unsupported-model' as const,cli:'copilot' as const,model:opts.model}}:{}),
       });
       return;
     }

@@ -60,6 +60,8 @@ export interface SessionResult {
   interrupted?: boolean;
   /** OpenCode hit its free usage limit and needs fallback to Copilot. */
   opencodeLimit?: boolean;
+  /** Explicit native model rejection; changing task text does not repair it. */
+  configurationError?:{kind:'unsupported-model';cli:'copilot';model:string};
 }
 
 export interface SessionCallbacks {

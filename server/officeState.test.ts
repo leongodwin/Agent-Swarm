@@ -34,3 +34,8 @@ it('preserves backward-compatible data while rejecting duplicate agent identitie
   await fs.writeFile(file, JSON.stringify({agents: Array(2).fill({id: 'x', name: 'X', repoId: '', status: 'idle'})}));
   await expect(readOfficeState(file)).rejects.toThrow('preserve and repair');
 });
+
+it.each([{fingerprint:'bad',reason:'unavailable'}, {fingerprint:'a'.repeat(64),reason:''}, {fingerprint:'a'.repeat(64),reason:'unavailable',ignore:true}])('preserves malformed persisted model holds instead of resuming CEO execution: %#',async modelBlock=>{
+  const raw=JSON.stringify({version:2,ceo:{modelBlock}});const file=await fixture(raw);
+  await expect(readOfficeState(file)).rejects.toThrow('preserve and repair');expect(await fs.readFile(file,'utf8')).toBe(raw);
+});

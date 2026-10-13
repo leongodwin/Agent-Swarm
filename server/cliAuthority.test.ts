@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import type { AgentTerminal } from './terminal.ts';
 import type { SessionOptions } from './agentRunner.ts';
-const native = vi.hoisted(() => ({token: '', kill: vi.fn()}));
+const native = vi.hoisted(() => ({token: '', kill: vi.fn(),data:undefined as undefined|((data:string)=>void),exit:undefined as undefined|((code:number)=>void)}));
 vi.mock('./config.ts', async importOriginal => {
   const real = await importOriginal<typeof import('./config.ts')>();
   const fs = await import('node:fs/promises'); const os = await import('node:os'); const path = await import('node:path');
@@ -14,7 +14,7 @@ vi.mock('./ptyClient.ts', () => ({
   hooksReady: vi.fn(), leaveKeeper: vi.fn(), discardPty: vi.fn(), adoptPty: vi.fn(), startKeeper: vi.fn(),
   spawnPty: (_file: string, _args: string[], _options: unknown, meta: {token: string}) => {
     native.token=meta.token;
-    return {pid:0,write:vi.fn(),resize:vi.fn(),kill:native.kill,setMeta:vi.fn(),onData:vi.fn(),onExit:vi.fn()};
+    return {pid:0,write:vi.fn(),resize:vi.fn(),kill:native.kill,setMeta:vi.fn(),onData:(handler:(data:string)=>void)=>{native.data=handler;},onExit:(handler:(code:number)=>void)=>{native.exit=handler;}};
   },
 }));
 import { HOME_DIR } from './config.ts';
@@ -58,6 +58,16 @@ it('denies an actual CLI hook when task authority is revoked during asynchronous
   active=false;finish();
   expect(await pending).toMatchObject({hookSpecificOutput:{permissionDecision:'deny'}});
   handle.stop();
+});
+
+it.each([0,1])('distinguishes actual Copilot CLI rejection from a successful response (exit %s)',async exit=>{
+  vi.useFakeTimers();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+  const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn(),turn:vi.fn()};
+  startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'synthetic-invalid',effort:'low',browserTesting:false,additionalDirectories:[],role:'ceo',agentId:'synthetic-ceo',cli:'copilot',terminal:term,authorizeTool:()=>null},callbacks);
+  native.data!('Error: Model "synthetic-invalid" from --model flag is not available.');native.exit!(exit);
+  expect(callbacks.finished).toHaveBeenCalledOnce();
+  if(exit===1){expect(callbacks.finished.mock.calls[0][0]).toMatchObject({ok:false,configurationError:{kind:'unsupported-model',cli:'copilot',model:'synthetic-invalid'}});expect(callbacks.turn).not.toHaveBeenCalled();}
+  else{expect(callbacks.finished.mock.calls[0][0]).toMatchObject({ok:true});expect(callbacks.finished.mock.calls[0][0].configurationError).toBeUndefined();expect(callbacks.turn).toHaveBeenCalledOnce();}
 });
 
 it.each(['idle','changing','active','follow-up','completion'] as const)('reconciles retained idle Codex conservatively: %s',async mode=>{

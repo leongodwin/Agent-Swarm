@@ -21,6 +21,7 @@ import type {ReconnectedCli} from './cliRunner.ts';
 import { AgentTerminal } from './terminal.ts';
 import { blockers, holdUps, issueSpecialty } from '../shared/issues.ts';
 import { effectiveModel } from '../shared/models.ts';
+import {copilotUnavailableModel} from './runtimeFailure.ts';
 import { CEO_ID } from '../shared/types.ts';
 import type {
   AgentCli,
@@ -154,6 +155,7 @@ interface CeoState {
   lastFingerprint: string | null; // company state at the last review; unchanged means the next review is skipped
   blockedReason: string | null;
   retryAt: number | null;
+  modelBlock:{fingerprint:string;reason:string}|null;
 }
 
 interface Persisted {
@@ -332,7 +334,7 @@ export class Swarm {
     agents: [],
     qa: [],
     requests: [],
-    ceo: { queue: [], job: null, lastReviewAt: null, lastFingerprint: null, blockedReason: null, retryAt: null },
+    ceo: { queue: [], job: null, lastReviewAt: null, lastFingerprint: null, blockedReason: null, retryAt: null,modelBlock:null },
     messages: [],
     phoneReadAt: 0,
   };
@@ -501,6 +503,8 @@ export class Swarm {
         Object.assign(this.state.settings, { setupDone: true, tutorialStep: -1 });
       }
     }
+    const savedCeo=this.state.agents.find(a=>a.id===CEO_ID);
+    if(savedCeo?.status==='error'&&copilotUnavailableModel(savedCeo.lastError??'',savedCeo.model||CEO_MODEL))this.holdCeoModel(savedCeo.model||CEO_MODEL);
     this.stateLoaded = true;
     for (const r of this.state.repos) if (r.localPath) this.backend.setLocalPath(r.fullName, r.localPath);
     const interrupted: PersistedAgent[] = [];
@@ -1463,10 +1467,6 @@ export class Swarm {
     this.requireOpen();
     const a = this.agent(id);
     if (patch.cli !== undefined) a.cli = isCli(patch.cli) ? patch.cli : '';
-    if (a.role === 'ceo' && a.status === 'error') {
-      a.status = 'idle';
-      a.lastError = null;
-    }
     if (patch.name?.trim() && patch.name.trim() !== a.name) {
       a.name = patch.name.trim().slice(0, 24);
       a.look = lookFor(a.name);
@@ -1476,6 +1476,16 @@ export class Swarm {
     if (patch.hair && /^#[0-9a-f]{6}$/i.test(patch.hair)) a.hair = patch.hair;
     if (patch.model !== undefined) a.model = String(patch.model).trim();
     if (patch.effort !== undefined) a.effort = EFFORTS.includes(patch.effort as EffortLevel) ? (patch.effort as EffortLevel) : '';
+    if(a.role==='ceo'){
+      const c=this.state.ceo;
+      if(c.modelBlock&&c.modelBlock.fingerprint!==this.ceoModelFingerprint(a.model||CEO_MODEL)){
+        if(c.blockedReason===c.modelBlock.reason)c.blockedReason=null;
+        c.modelBlock=null;c.retryAt=null;
+        this.later(()=>this.schedule(),200);
+      }
+      if(a.status==='error'&&!c.modelBlock){a.status='idle';a.lastError=null;}
+      this.emitCeo();
+    }
     if (a.role !== 'ceo') {
       if (patch.title !== undefined) a.title = String(patch.title).trim().slice(0, 60);
       if (patch.specialty !== undefined) a.specialty = specialtySlug(patch.specialty);
@@ -3079,11 +3089,22 @@ export class Swarm {
     this.later(() => this.schedule(), 150);
   }
 
+  private ceoModelFingerprint(model:string){return crypto.createHash('sha256').update(JSON.stringify(['copilot','unsupported-model',model])).digest('hex');}
+  private holdCeoModel(model:string){
+    const reason='GitHub Copilot CLI rejected the configured CEO model. Select an available model or clear the override to use the CLI default; queued work is held until the model changes.';
+    this.state.ceo.modelBlock={fingerprint:this.ceoModelFingerprint(model),reason};
+    this.state.ceo.blockedReason=reason;this.state.ceo.retryAt=null;
+  }
   /** Start the CEO's next job when they're free and a session slot is open. Replies to the manager go first. */
   private startCeoWork(): void {
     if (this.closed) return;
     const a = this.state.agents.find((x) => x.id === CEO_ID);
     const c = this.state.ceo;
+    if(c.modelBlock&&a){
+      if(c.modelBlock.fingerprint===this.ceoModelFingerprint(a.model||CEO_MODEL))return;
+      if(c.blockedReason===c.modelBlock.reason)c.blockedReason=null;
+      c.modelBlock=null;c.retryAt=null;
+    }
     if (c.retryAt && Date.now() < c.retryAt) return;
     if (!a || BUSY.includes(a.status) || c.job || c.queue.length === 0) return;
     if (this.slotsFull()) return;
@@ -3270,6 +3291,10 @@ export class Swarm {
     } else if (!result.ok) {
       a.status = 'error';
       a.lastError = result.errors.join('; ') || 'Session failed';
+      if(result.configurationError?.cli==='copilot'&&result.configurationError.kind==='unsupported-model'){
+        this.holdCeoModel(result.configurationError.model);
+        this.enqueueCeo(job);
+      }
       this.appendLog(a, [{ kind: 'error', text: `✗ ${a.lastError}` }]);
       const what = job ? jobLabel(job, this.ceoFloor(job.repoId)).toLowerCase() : 'working';
       this.postMessage('office', `⚠️ ${a.name} hit a problem while ${what}: ${a.lastError.slice(0, 240)}`);
