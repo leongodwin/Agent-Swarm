@@ -198,3 +198,14 @@ it('requires a current process and quiescent authenticated office for terminal-p
   expect((await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid})).status).toBe(409);expect(handoff).not.toHaveBeenCalled();snapshot.mockRestore();
   const response=await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid});expect(response.status).toBe(202);expect(await response.json()).toMatchObject({accepted:true,preserveTerminals:true});expect(handoff).toHaveBeenCalledOnce();
 });
+it('authenticates and pins reversible drain without changing target policy or office settings',async()=>{
+  const {request,swarm,delivery,url}=await office();const settings=swarm.snapshot().settings,policy=delivery.view().policy;
+  expect((await fetch(url+'/api/office/drain',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedPid:process.pid,draining:true})})).status).toBe(401);
+  expect((await request('/api/office/drain','POST',{expectedPid:process.pid+1,draining:true})).status).toBe(409);
+  expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:'yes'})).status).toBe(400);
+  expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true})).status).toBe(200);
+  expect(await (await request('/api/runtime')).json()).toMatchObject({draining:true});
+  expect((await request('/api/repos/synthetic%2Frepo/delivery/run','POST',{})).status).toBe(409);
+  expect(swarm.isDraining).toBe(true);expect(delivery.isDraining).toBe(true);expect(swarm.snapshot().settings).toEqual(settings);expect(delivery.view().policy).toEqual(policy);
+  expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:false})).status).toBe(200);expect(swarm.isDraining).toBe(false);expect(delivery.isDraining).toBe(false);
+});

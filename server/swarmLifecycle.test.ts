@@ -931,6 +931,16 @@ it('discards folder-sync feedback completed after shutdown without updating its 
   expect(swarm.snapshot().repos[0].folderSync).toBe(observed);expect(await fs.readFile(STATE_FILE,'utf8')).toBe(before);
 });
 async function twoIssueOffice() {return office(true, fake => fake.listIssues.mockResolvedValue([issue, secondIssue]));}
+it('drains new dispatch while an admitted task continues, and permits explicit resumption',async()=>{
+  const {swarm,fake}=await twoIssueOffice();const first=swarm.hireAgent('synthetic/repo',{name:'Admitted worker'}),second=swarm.hireAgent('synthetic/repo',{name:'Waiting worker'});
+  await swarm.assign(first.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  const handle=fake.startSession.mock.results[0].value;swarm.setDraining(true);
+  await expect(swarm.assign(second.id,2)).rejects.toThrow('draining');expect(handle.stop).not.toHaveBeenCalled();
+  expect(await (fake.startSession.mock.calls[0][0] as SessionOptions).authorizeTool!()).toBeNull();
+  await swarm.message(first.id,'Synthetic existing-task follow-up');expect(handle.send).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(10000);expect(fake.startSession).toHaveBeenCalledOnce();
+  swarm.setDraining(false);await swarm.assign(second.id,2);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+});
 
 it('cannot apply an old failed readiness decision to a replacement assignment', async () => {
   const {swarm, fake} = await twoIssueOffice(); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});

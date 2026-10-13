@@ -319,6 +319,7 @@ export interface CeoInfo {
 }
 
 export interface WorldSnapshot {
+  draining?:boolean;
   user: string | null; // gh login
   ghReady: boolean;
   ghError?: string;
@@ -339,6 +340,7 @@ export interface WorldSnapshot {
 }
 
 export type ServerEvent =
+  | {type:'draining';draining:boolean}
   | { type: 'snapshot'; data: WorldSnapshot }
   | { type: 'repo'; repo: RepoView }
   | { type: 'repoRemoved'; repoId: string }

@@ -161,6 +161,7 @@ export const TOUR_WAYPOINTS: TourWaypoint[] = [
 ];
 
 interface State {
+  draining:boolean;
   connected: boolean;
   loaded: boolean;
   user: string | null;
@@ -257,6 +258,7 @@ export const useStore = create<State>((set, get) => ({
   user: null,
   ghReady: true,
   demo: false,
+  draining:false,
   workspaceRoot: '',
   // Until the server's snapshot arrives; setupDone stays true so the wizard doesn't flash while loading.
   settings: {
@@ -324,6 +326,7 @@ export const useStore = create<State>((set, get) => ({
           ghReady: d.ghReady,
           ghError: d.ghError,
           demo: d.demo,
+          draining:d.draining??false,
           workspaceRoot: d.workspaceRoot,
           settings: d.settings,
           repos: d.repos.sort((a, b) => a.floor - b.floor),
@@ -400,6 +403,9 @@ export const useStore = create<State>((set, get) => ({
       }
       case 'settings':
         set({ settings: ev.settings });
+        break;
+      case 'draining':
+        set({draining:ev.draining});
         break;
       case 'clis':
         set({ clis: ev.clis });

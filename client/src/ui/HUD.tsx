@@ -136,6 +136,7 @@ export function HUD() {
   const agents = useStore((s) => s.agents);
   const settings = useStore((s) => s.settings);
   const connected = useStore((s) => s.connected);
+  const draining = useStore((s)=>s.draining);
   const restarting = useStore((s) => s.restarting);
   const demo = useStore((s) => s.demo);
   const user = useStore((s) => s.user);
@@ -174,6 +175,7 @@ export function HUD() {
       <div className="hud-status">
         {demo && <span className="pill pill-demo">DEMO</span>}
         <span className={`pill ${connected ? 'pill-ok' : restarting ? 'pill-demo' : 'pill-bad'}`}>{connected ? '● live' : restarting ? '○ restarting' : '○ reconnecting'}</span>
+        {draining&&<span className="pill pill-demo" role="status" title="New tasks are paused while current work finishes">Maintenance · new starts paused</span>}
         <button
           className="pill"
           onClick={() => useStore.getState().toggleLightMode()}

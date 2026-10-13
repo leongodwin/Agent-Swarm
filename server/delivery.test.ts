@@ -192,6 +192,11 @@ it('does not accept independent verification after its delivery owner is replace
   }finally{warn.mockRestore();}
 });
 const validReview = (hash: string) => ({ evidenceHash: hash, scores: [4, 4, 4, 4, 4], notes: 'Inspected desktop/mobile hierarchy, accessibility, task clarity and recovery evidence.', recoveryReviewed: true });
+it('drains automatic and manual delivery starts without changing approved policy or releases',async()=>{
+  const {service,repo,calls,release}=await fixture();const before=service.view();calls.length=0;service.setDraining(true);
+  await expect(service.start(repo)).rejects.toThrow('draining');await service.tick([repo]);expect(calls).toEqual([]);expect(service.view().policy).toEqual(before.policy);expect(service.view().releases).toEqual(before.releases);
+  service.setDraining(false);await service.start(repo,false,release.id);await service.waitForIdle();expect(service.view().runs[0].phase).toBe('reviewing');
+});
 describe('Real solution delivery', () => {
   it('blocks an unconfigured governance provider before executing project build commands',async()=>{
     const {service,repo,calls,deps,root}=await fixture();delete deps.governance;

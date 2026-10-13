@@ -136,6 +136,9 @@ export class DeliveryService {
   private writer = new SerialWriter();
   private active: AbortController | null = null;
   private closed = false;
+  private draining = false;
+  get isDraining(){return this.draining;}
+  setDraining(value:boolean){this.requireReady();this.draining=value;}
   private stateFailed = false;
   private ownershipLost = false;
   private ready = false;
@@ -253,6 +256,7 @@ export class DeliveryService {
   }
   async start(repo: RepoView, retry = false, releaseId?: string) {
     this.requireReady();
+    if(this.draining)throw new HttpError(409,'Office is draining; new delivery work is paused');
     if (this.demo) throw new HttpError(409, 'Demo never runs delivery commands');
     if (!this.state.policy?.enabled) throw new HttpError(409, 'Real delivery is not enabled');
     if (this.active) throw new HttpError(409, 'A delivery is already running');
@@ -293,7 +297,7 @@ export class DeliveryService {
     finally { prepared(); this.preparing = null; }
   }
   async tick(repos: RepoView[]) {
-    if (this.closed || !this.ready || this.active || this.demo || !this.state.policy?.enabled) return;
+    if (this.closed || this.draining || !this.ready || this.active || this.demo || !this.state.policy?.enabled) return;
     for (const repo of repos) {
       const latest = this.state.runs.find((r) => r.repoId === repo.id && r.environmentUrl === this.state.policy?.environmentUrl);
       if (latest?.phase === 'complete' && latest.health && Date.parse(latest.health.nextCheckAt) <= Date.now()) { await this.monitor(repo, latest.id); return; }
@@ -323,7 +327,7 @@ export class DeliveryService {
     run.phase = 'complete'; run.endedAt = new Date().toISOString(); await this.changed(); return this.view(run.repoId);
   }
   async monitor(repo: RepoView, id: string) {
-    if (this.demo || this.closed || !this.ready || this.active || !this.state.policy?.enabled) return;
+    if (this.demo || this.closed || this.draining || !this.ready || this.active || !this.state.policy?.enabled) return;
     const run = this.state.runs.find((r) => r.id === id); const release = this.state.releases.find((r) => r.id === run?.releaseId);
     if (!run || run.repoId !== repo.id || !release || run.phase !== 'complete' || run.environmentUrl !== this.state.policy.environmentUrl) return;
     const controller = new AbortController(); this.active = controller;

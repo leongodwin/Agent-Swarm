@@ -386,6 +386,9 @@ export class Swarm {
   private saveTimer: NodeJS.Timeout | null = null;
   private stateLoaded = false;
   private closed = false;
+  private draining = false;
+  get isDraining(){return this.draining;}
+  setDraining(value:boolean){this.requireOpen();this.draining=value;this.broadcast({type:'draining',draining:value});if(!value)this.later(()=>this.schedule(),200);}
   private requireOpen() {
     if (this.closed) throw new HttpError(409, 'Office is shutting down');
   }
@@ -700,6 +703,7 @@ export class Swarm {
 
   snapshot(): WorldSnapshot {
     return {
+      draining:this.draining,
       user: this.user,
       ghReady: !this.ghError,
       ghError: this.ghError,
@@ -837,7 +841,7 @@ export class Swarm {
   /** True when the manager has set a session limit and every slot is taken. */
   private slotsFull() {
     const limit = this.state.settings.sessionLimit;
-    return limit > 0 && this.running() >= limit;
+    return this.draining || limit > 0 && this.running() >= limit;
   }
 
   private agentSlug(a: PersistedAgent) {
@@ -1608,6 +1612,7 @@ export class Swarm {
   }
 
   private ensureSlot() {
+    if(this.draining)throw new HttpError(409,'Office is draining; new agent work is paused');
     if (this.slotsFull()) {
       throw new HttpError(429, `All ${this.state.settings.sessionLimit} session slots are busy. Raise or clear the session limit in the manager's console, or wait.`);
     }
@@ -2794,7 +2799,7 @@ export class Swarm {
    * so no repo can hog the slots.
    */
   private schedule() {
-    if (this.closed) return;
+    if (this.closed || this.draining) return;
     this.tickUsage();
     if (this.officeUpdateTick()) return; // draining for the office's own update
     if (this.limited()) return;
