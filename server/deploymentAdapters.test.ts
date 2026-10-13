@@ -20,6 +20,17 @@ it('repairs with If-Match and reconciles a lost response without another write',
 });
 const table = { key: 'reports', kind: 'dataverse-table', id, logicalName: 'exp_report', entitySet: 'exp_reports', primaryId: 'exp_reportid' } as const;
 const schema = { id: 'schema', type: 'schema-check', component: 'reports', columns: [{ name: 'exp_title', type: 'String', required: 'None' }] } as const;
+it('reconciles declared structures without writes and rejects key drift before/import and after verification',async()=>{
+  let status='Active';
+  const attribute={LogicalName:'exp_title',AttributeType:'String',RequiredLevel:{Value:'None'}};
+  const action={...schema,columns:[...schema.columns],structure:{keys:[{schemaName:'exp_Report_Key',attributes:['exp_title']}]}};
+  const request=vi.fn<Request>(async(_method,resource)=>({value:resource.includes('/Keys?')?[{SchemaName:'exp_Report_Key',MetadataId:id,KeyAttributes:['exp_title'],EntityKeyIndexStatus:status}]:resource.startsWith('EntityDefinitions?')?[{LogicalName:table.logicalName,Attributes:[attribute]}]:[attribute]}));
+  await verifyMigrationCompatibility([action],[table],request);
+  const state=run();await reconcileAdditionalAction(action,table,request,state,async()=>{},async()=>{});expect(state.operations![0].status).toBe('verified');
+  status='Failed';await expect(verifyMigrationCompatibility([action],[table],request)).rejects.toThrow('Incompatible schema');
+  await expect(reconcileAdditionalAction(action,table,request,state,async()=>{},async()=>{})).rejects.toThrow('verification failed');
+  expect(request.mock.calls.every(([method])=>method==='GET')).toBe(true);
+});
 it('checks schema contracts and blocks incompatible pre-import migrations', async () => {
   const attributes = [{ LogicalName: 'exp_title', AttributeType: 'Integer', RequiredLevel: { Value: 'None' } }];
   const request = vi.fn<Request>(async (_method, resource) => ({ value: resource.startsWith('EntityDefinitions?') ? [{ LogicalName:table.logicalName,Attributes: attributes }] : attributes }));

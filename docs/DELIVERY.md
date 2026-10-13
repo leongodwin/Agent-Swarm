@@ -71,7 +71,26 @@ API-only acceptance cannot contain Canvas/Copilot components, frames or browser 
 ### Deployment adapter scope
 
 - `connection-reference-bind`: mapped reference, approved `connectorId`, desired `connectionId` and `expectedConnectionId` (nullable). Uses the observed Dataverse ETag in `If-Match`; refuses a different connector, inactive reference, changed source binding or absent ETag. A matching final `connection-reference-check` remains mandatory. Repair runs before final binding checks/flow activation. Lost responses are reconciled by observation rather than repeated writes. This changes an existing reference only; it creates no credentials/connections and grants no permissions.
-- `dataverse-table` components resolve their metadata GUID, entity set and primary ID from the target, then require named-solution membership. `schema-check` actions declare columns with logical `name`, `type` and `required` level. Before import, the runner refuses type/required-level changes to existing declared columns; missing tables/columns may be introduced through the supported solution import. After import, the declared contract must exist exactly. This is a bounded migration gate, not a general data-conversion engine: deleted/undeclared columns, length/range narrowing, relationships, option-set conversions and protected file/record restoration need separate reviewed migration/recovery evidence.
+- `dataverse-table` components resolve their metadata GUID, entity set and primary ID from the target, then require named-solution membership. `schema-check` actions declare columns with logical `name`, `type` and `required` level. Before import, the runner refuses incompatible changes to existing declared columns; missing tables/columns may be introduced through the supported solution import. After import, the declared contract must exist exactly. Optional `structure.relationships` and `structure.keys` pin approved relationships, cascade behavior and alternate-key columns. Existing structures must match before import; missing additive structures are allowed only before import. Post-import checks require every declared structure, and existing alternate keys must have an `Active` index. Metadata pagination, ambiguous identities and failed/pending indexes deny the check. These declarations do not certify undeclared columns/structures, source-package schema completeness, effective security or data conversion/restoration.
+
+A `schema-check` can include this structure contract. Use reviewed application requirements and actual metadata identifiers; these illustrative values are not a policy recommendation:
+
+```json
+"structure": {
+  "relationships": [{
+    "kind": "one-to-many",
+    "schemaName": "exp_Report_Line",
+    "referencedEntity": "exp_report",
+    "referencedAttribute": "exp_reportid",
+    "referencingEntity": "exp_line",
+    "referencingAttribute": "exp_report",
+    "cascade": {"Delete": "Restrict", "Assign": "NoCascade"}
+  }],
+  "keys": [{"schemaName": "exp_Report_Key", "attributes": ["exp_code"]}]
+}
+```
+
+Many-to-many declarations use `kind: "many-to-many"`, `schemaName`, `entity1`, `entity2` and `intersectEntity`. One-to-many declarations always require an explicit delete-cascade expectation and may also pin Assign, Share, Unshare, Reparent, Merge, Archive and RollupView. Keys compare column sets and active status; this verifier never creates or reactivates an index. [Microsoft describes the key index states](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/entitykeyindexstatus?view=dataverse-latest) and [cascade behaviors](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/cascadetype?view=dataverse-latest).
 - `record-share`: mapped table, one `recordId`, one `principalId`, `principalType: "systemuser" | "team"`, `expectedRights: []`, and explicit rights limited to Read/Write/Append/AppendTo. It checks target/principal existence, rejects disabled users or unexpected direct shares, then uses `GrantAccess` and verifies the direct share. It does not grant security roles, modify/revoke existing shares or certify inherited/role-based effective access. Obtain the user's approval for the exact principal, record, rights and environment before enabling a grant. Never treat independent QA approval as a substitute for required human security approval.
 - Canvas authoring ownership: workers use `canvas_authoring_acquire`/`canvas_authoring_release`; the HTTP equivalents are `POST /api/authoring/canvas/:app/lease` with `{owner}` and `POST /api/authoring/canvas/lease/release` with the opaque `{token}`. The connected environment is discovered live. Add affected target app GUIDs to `canvasAuthoringApps` in the delivery manifest so authoring and deployment contend for the same local resource. Save and close the actual Studio session before releasing. Tokens can release their persisted local lease after an office restart; live or interrupted ownership is never silently displaced. This coordinates participating local sessions; Microsoft Studio's remote editing lock still requires a supported session close, not a forced unlock or guessed table field.
 

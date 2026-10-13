@@ -445,4 +445,12 @@ The CEO's primary server previously captured unguarded definitions before sessio
 
 Validation: 1,031 tests passed with one TODO across 91 files; build/typecheck passed. Backend branch coverage is 4,806/7,974 (60.27%); the unchanged 90.01% coverage gate still fails. The command-containment and full lifecycle schema/effective-DLP gaps remain open. Copilot Studio remains paused.
 
+## Declared Dataverse relationships and alternate keys (2026-10-13)
+
+Schema-check actions can now include reviewed relationship/cascade and alternate-key declarations. Fresh metadata reads compare one-to-many endpoints, declared cascade actions, many-to-many endpoints/intersect identity and composite key columns. Existing keys require an Active index. Missing additive structures are permitted before import; final checks require them. Duplicate names/metadata IDs, truncated inventories, invalid identifiers and unrelated table declarations deny verification. Checks never create, modify or reactivate metadata. The same verifier runs in migration compatibility and post-deployment reconciliation; identity-bound schema observation invokes it at build, test, import, post-deploy, verification and health stages.
+
+Native read-only MyDevNet controls verified the actual Expense Report/Line Item relationship query, rejected a deliberately different delete-cascade expectation and rejected a synthetic absent alternate key. WhoAmI user/organization readings remained equal before/after. The successful relationship contract was taken from current metadata and is not an independent business-policy approval. The live report table has no alternate keys, so positive Active-key verification is synthetic only. No tenant metadata/data were changed. Tests also reject a formerly verified key that becomes Failed during reconciliation.
+
+Declared structures extend validation coverage; optional or absent declarations do not establish complete schema governance. Independent package-derived schema inventory, undeclared structures, effective security and complete tenant DLP remain required before full release authorization. The final full suite passed 1,057 tests with one TODO across 92 files; build/typecheck passed. The coverage run before the additional reconciliation regression measured 4,860/8,031 backend branches (60.51%), still below the unchanged 90.01% gate. Copilot Studio remains paused.
+
 References: https://geminicli.com/docs/hooks/reference/ and https://geminicli.com/docs/reference/configuration/ .

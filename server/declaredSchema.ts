@@ -5,6 +5,7 @@ import {verifyMigrationCompatibility} from './deploymentAdapters.ts';
 import {baseAttribute,verifyColumns} from './columnContracts.ts';
 import {governancePhase,manifestDigest,type LifecycleRequest} from './lifecycleGovernance.ts';
 import {targetBindingSchema,type Request} from './targetOperations.ts';
+import {verifyTableStructure} from './tableStructure.ts';
 
 export const declaredSchemaObservation=z.strictObject({
   scope:z.literal('declared-target-schema'),complete:z.literal(false),status:z.enum(['observed','unavailable']),
@@ -53,11 +54,12 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
         const action=actions.find(action=>action.component===table.key)!;
         const observed=z.object({value:z.array(baseAttribute).max(4999),'@odata.nextLink':z.never().optional()}).parse(await request('GET',`EntityDefinitions(LogicalName='${table.logicalName}')/Attributes?$select=LogicalName,MetadataId,AttributeType,AttributeTypeName,RequiredLevel`));
         await verifyColumns(action.columns,table.logicalName,observed.value,request);
+        if(action.structure)await verifyTableStructure(action.structure,table.logicalName,request);
       }
       await verifyPlatformAuthentication(command,request,url.origin,binding,identity);
       signal.throwIfAborted();
       return declaredSchemaObservation.parse({...base,status:'observed',checkedAt:new Date().toISOString(),identity,binding,tables:tables.map(table=>table.logicalName),observations,
-        reason:['build','test','import'].includes(input.phase)?'Declared target migration compatibility passed identity-bound checks; final columns and comprehensive schema remain unverified':'Declared target columns passed identity-bound checks; complete source/package schemas, relationships, keys and effective security remain unverified'});
+        reason:['build','test','import'].includes(input.phase)?'Declared target migration compatibility passed identity-bound checks; final columns and comprehensive schema remain unverified':'Declared target columns and any declared structure contracts passed identity-bound checks; complete source/package schemas, undeclared relationships/keys and effective security remain unverified'});
     }catch{return unavailable('Declared schema discovery or contract validation failed; no schema compliance is certified');}
   };
 }

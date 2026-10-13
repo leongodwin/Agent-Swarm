@@ -60,3 +60,18 @@ it('bounds total schema response bytes before parsing and publishing evidence',a
   run.mockImplementation(async command=>command.args.includes('api')?JSON.stringify({OrganizationId:guid,UserId:guid,padding:'x'.repeat(8*1024*1024)}):normal(command));
   const result=await observe(input);expect(result.status).toBe('unavailable');expect(result.observations).toEqual([]);
 });
+
+it.each(['build','test','import','post-deploy','verify','health'] as const)('binds declared relationship/key reads and rejects their drift during %s',async phase=>{
+  const structure={relationships:[{kind:'one-to-many',schemaName:'exp_Report_Line',referencedEntity:'exp_report',referencedAttribute:'exp_reportid',referencingEntity:'exp_line',referencingAttribute:'exp_report',cascade:{Delete:'Restrict'}}],keys:[{schemaName:'exp_Report_Key',attributes:['exp_title']}]};
+  const modified={...manifest,postDeployActions:[{...manifest.postDeployActions[0],structure}]};
+  let drift=false;const {run,observe}=fixture();const normal=run.getMockImplementation()!;
+  run.mockImplementation(async command=>{
+    const resource=command.args[command.args.indexOf('--path')+1]??'';
+    if(resource.includes('/Keys?'))return JSON.stringify({value:[{SchemaName:'exp_Report_Key',MetadataId:metadata,KeyAttributes:['exp_title'],EntityKeyIndexStatus:drift?'Failed':'Active'}]});
+    if(resource.includes('/OneToManyRelationships?'))return JSON.stringify({value:[{SchemaName:'exp_Report_Line',MetadataId:metadata,ReferencedEntity:'exp_report',ReferencedAttribute:'exp_reportid',ReferencingEntity:'exp_line',ReferencingAttribute:'exp_report',CascadeConfiguration:{Delete:'Restrict'}}]});
+    return normal(command);
+  });
+  const result=await observe({...input,phase,manifest:modified});expect(result.status).toBe('observed');expect(result.observations).toHaveLength(4);
+  expect(result.observations.map(row=>row.resource)).toContainEqual(expect.stringContaining('/Keys?'));expect(result.complete).toBe(false);
+  drift=true;const denied=await observe({...input,phase,manifest:modified});expect(denied.status).toBe('unavailable');expect(denied.observations).toEqual([]);
+});

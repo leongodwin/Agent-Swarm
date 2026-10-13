@@ -3,6 +3,7 @@ import type { DeliveryRun } from '../shared/delivery.ts';
 import type { TargetAction, MappedComponent, Request } from './targetOperations.ts';
 import { reconcile } from './platformLifecycle.ts';
 import {baseAttribute as attribute,verifyColumns} from './columnContracts.ts';
+import {verifyTableStructure} from './tableStructure.ts';
 
 export type AdditionalAction = Extract<TargetAction, { type: 'connection-reference-bind' | 'record-share' | 'schema-check' }>;
 const sameRights = (a: string[], b: string[]) => [...new Set(a)].sort().join(',') === [...new Set(b)].sort().join(',');
@@ -26,7 +27,7 @@ export async function reconcileAdditionalAction(action: AdditionalAction, compon
     observe = async () => {
       const metadata = z.object({ value: z.array(attribute),'@odata.nextLink':z.never().optional() }).parse(await request('GET', `EntityDefinitions(LogicalName='${component.logicalName}')/Attributes?$select=LogicalName,MetadataId,AttributeType,AttributeTypeName,RequiredLevel`));
       if (metadata.value.length >= 5000) throw new Error('Schema inventory may be truncated');
-      try {await verifyColumns(action.columns,component.logicalName!,metadata.value,request);return true;}
+      try {await verifyColumns(action.columns,component.logicalName!,metadata.value,request);if(action.structure)await verifyTableStructure(action.structure,component.logicalName!,request);return true;}
       catch {throw new Error('Schema contract verification failed; inspect metadata and use a reviewed solution import for changes');}
     };
   } else {
@@ -72,6 +73,6 @@ export async function verifyMigrationCompatibility(actions: TargetAction[], comp
     if(tables.value[0].LogicalName!==tableName)throw new Error('Schema response differs from the approved table identity');
     const result = tables.value[0].Attributes;
     if (result.length >= 5000) throw new Error('Schema inventory may be truncated');
-    try {await verifyColumns(action.columns,tableName,result,request,true);}catch {throw new Error(`Incompatible schema migration for ${tableName}; provide a separately reviewed data migration`);}
+    try {await verifyColumns(action.columns,tableName,result,request,true);if(action.structure)await verifyTableStructure(action.structure,tableName,request,true);}catch {throw new Error(`Incompatible schema migration for ${tableName}; provide a separately reviewed data migration`);}
   }
 }
