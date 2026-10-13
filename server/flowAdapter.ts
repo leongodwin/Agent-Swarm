@@ -7,6 +7,7 @@ import { discoverSkills } from './skillRegistry.ts';
 import type { PlatformIdentity } from './platformAuth.ts';
 import { verifyFlowIdentity } from './platformAuth.ts';
 import type { TargetAction, TargetComponent } from './targetOperations.ts';
+import {flowCleanup} from './flowCleanup.ts';
 export interface FlowAdapter { call(tool: string, args: Record<string, unknown>): Promise<unknown>; close(): Promise<void> }
 /** The Flow API adds this parameter reference to connector inputs on readback.
  * The save validator rejects it in authored definitions. Strip only that exact
@@ -30,17 +31,19 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
   if (!entry || !(await fs.stat(entry).catch(() => null))?.isFile()) throw new Error('FlowAgent runtime is unavailable; install/enable the Power Automate plugin or configure SWARM_FLOWAGENT_ENTRY');
   const transport = new StdioClientTransport({ command: process.execPath, args: [entry], cwd, stderr: 'ignore', env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)) });
   const client = new Client({ name: 'swarm-flow-delivery', version: '1' });
-  const abort = () => { void transport.close(); }; signal.addEventListener('abort', abort, { once: true });
-  const close = async () => { signal.removeEventListener('abort', abort); await client.close(); await transport.close(); };
+  const cleanup=flowCleanup(client,transport);
+  const close = () => {signal.removeEventListener('abort',abort);return cleanup.close();};
+  const abort = () => { void close().catch(()=>{/* Explicit finally/close preserves cleanup failure; cancellation cannot acknowledge exit. */}); }; signal.addEventListener('abort', abort, { once: true });
   try {
-    signal.throwIfAborted(); await client.connect(transport, { timeout: 15000 });
+    signal.throwIfAborted();cleanup.started(); await client.connect(transport, { timeout: 15000 });
     const names = new Set<string>(); let cursor: string | undefined;
     for (let page = 0; page < 20; page++) { const list = await client.listTools({ cursor }, { signal, timeout: 15000 }); list.tools.forEach((tool) => names.add(tool.name)); cursor = list.nextCursor; if (!cursor) break; }
     if (cursor) throw new Error('FlowAgent tool discovery exceeded its pagination limit');
     for (const tool of ['whoami', 'get_flow', 'get_flow_context', 'preflight_flow', 'publish_flow', 'disable_flow', 'get_run_history', 'get_run_action_content']) if (!names.has(tool)) throw new Error(`FlowAgent tool ${tool} is missing`);
     return { close, async call(tool, args) {
-      signal.throwIfAborted();
+      signal.throwIfAborted();cleanup.assertOpen();
       const result = await client.callTool({ name: tool, arguments: args }, undefined, { signal, timeout: 30000 });
+      signal.throwIfAborted();cleanup.assertOpen();
       if (result.isError) throw new Error(`FlowAgent ${tool} failed; check authentication, target access and managed-solution restrictions`);
       const content = z.array(z.object({ type: z.string(), text: z.string().optional() })).parse(result.content);
       const text = content.filter((item) => item.type === 'text').map((item) => item.text).join('');
@@ -49,7 +52,7 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
       if (value && typeof value === 'object' && !Array.isArray(value) && (value.success === false || value.found === false || value.error)) throw new Error(`FlowAgent ${tool} returned a blocked outcome`);
       return value;
     } };
-  } catch (error) { await close(); throw error; }
+  } catch (error) {try{await close();}catch(cleanupError){throw new AggregateError([error,cleanupError],'FlowAgent connection failed and runtime cleanup is unverified');}throw error;}
 }
 
 export async function verifyCloudFlowContext(adapter: FlowAdapter, identity: PlatformIdentity, flowId: string, workflowId: string, solutionName: string) {
