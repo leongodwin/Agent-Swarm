@@ -4,7 +4,7 @@ import { useStore } from '../store';
 import { api } from '../api';
 import { generateHldContent, type HldResult, type HldComponent } from '../../../shared/hld';
 import type {HldArtifact} from '../../../shared/hldArtifact';
-import type {SynthesisJob} from '../../../shared/hldSynthesis';
+import type {SynthesisJob,SynthesisSummary} from '../../../shared/hldSynthesis';
 const views = [['overview','Requirements & gaps'],['plan','Implementation plan'],['diagrams','Diagram scope'],['document','Full document']] as const;
 
 export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
@@ -14,6 +14,7 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
   const [activeTab,setActiveTab] = useState<'overview'|'plan'|'diagrams'|'document'>('overview');
   const [saving,setSaving] = useState<'save'|'load'|'synthesize'|null>(null);
   const [job,setJob]=useState<SynthesisJob|null>(null);
+  const [summary,setSummary]=useState<SynthesisSummary|null>(null);
   const [modelAvailable,setModelAvailable]=useState(false);
   const [telemetryError,setTelemetryError]=useState('');
   const activeJob=!!job&&(job.runtimeCleanup==='awaiting-completion'||!['completed','blocked','failed','cancelled'].includes(job.status));
@@ -21,8 +22,8 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
   const scope=useRef(repo?.id),epoch=useRef(0),currentInput=useRef('');scope.current=repo?.id;
   const [components,setComponents] = useState<HldComponent[]>([]);
   useEffect(()=>{
-    setJob(null);setModelAvailable(false);setTelemetryError('');if(!repo)return;let cancelled=false;
-    const refresh=async()=>{try{const data=await api.hldJobs<{jobs:SynthesisJob[];available:boolean;unavailableReason?:string}>(repo.id);if(!cancelled){setJob(data.jobs[0]??null);setModelAvailable(data.available);setTelemetryError(data.unavailableReason??'');}}catch{if(!cancelled)setTelemetryError('Synthesis telemetry is unavailable; its last status is unverified until refresh succeeds.');}};
+    setJob(null);setSummary(null);setModelAvailable(false);setTelemetryError('');if(!repo)return;let cancelled=false;
+    const refresh=async()=>{try{const data=await api.hldJobs<{jobs:SynthesisJob[];summary?:SynthesisSummary;available:boolean;unavailableReason?:string}>(repo.id);if(!cancelled){setJob(data.jobs[0]??null);setSummary(data.summary??null);setModelAvailable(data.available);setTelemetryError(data.unavailableReason??'');}}catch{if(!cancelled){setSummary(null);setTelemetryError('Synthesis telemetry is unavailable; its last status is unverified until refresh succeeds.');}}};
     void refresh();const timer=setInterval(()=>void refresh(),1500);return()=>{cancelled=true;clearInterval(timer);};
   },[repo?.id]);
   const [title,setTitle] = useState('');
@@ -103,6 +104,7 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
     </div>
     <p className="muted small">{draft.generationMethod==='model-synthesis'?'Model-generated draft. Independent architecture approval and tenant verification are pending.':'Requirements template. Model synthesis, architecture approval and tenant verification are pending.'}</p>
     {telemetryError&&<p role="alert">{telemetryError}</p>}
+    {summary&&<section aria-label="Synthesis retained history"><p><strong>Retained Codex synthesis history</strong> · complete 30-day completion rate: {summary.completeWindowCompletionPercent===null?'unverified':summary.completeWindowCompletionPercent.toFixed(2)+'%'}</p><p>Recorded subset: {summary.recorded.completed} completed · {summary.recorded.failed} failed · {summary.recorded.blocked} blocked · {summary.recorded.cancelled} cancelled · {summary.recorded.active} active · {summary.recorded.awaitingCleanup} awaiting cleanup</p><p>Successful draft timings ({summary.successfulDurationMs.count} samples): median {summary.successfulDurationMs.median===null?'unavailable':(summary.successfulDurationMs.median/1000).toFixed(2)+' seconds'} · p95 {summary.successfulDurationMs.p95===null?'unavailable':(summary.successfulDurationMs.p95/1000).toFixed(2)+' seconds'}</p><p className="muted small">Collection began {new Date(summary.coverageStartedAt).toLocaleString()} · {summary.recorded.legacyProviderJobs} legacy provider jobs excluded. {summary.reason}</p></section>}
     {job&&<section aria-label="Architecture synthesis telemetry"><p><strong>Model job: {job.status}</strong> · {Math.round((job.elapsedMs??Math.max(0,Date.now()-job.startedAt))/1000)} seconds · five-minute deadline</p>{job.error&&<p role="alert">{job.error}</p>}{job.runtimeCleanup==='awaiting-completion'&&['completed','failed','blocked','cancelled'].includes(job.status)&&<p role="status">Waiting for model completion acknowledgement; its session slot remains occupied.</p>}<ol>{job.events.slice(-5).map((event,index)=><li key={`${event.at}-${index}`}>{event.text}</li>)}</ol>{activeJob&&<button className="btn btn-small" onClick={()=>void cancel()}>Cancel synthesis</button>}{job.status==='completed'&&<button className="btn btn-small" disabled={!!saving} onClick={()=>void loadModel()}>Load model-generated draft</button>}</section>}
     {loaded?.repoId===repo?.id&&<p className="muted small">Showing stored requirements. <button className="btn btn-small" disabled={!!saving} onClick={()=>{setLoaded(null);setSaved(null);}}>Use current project brief</button></p>}
     <div className="row" role="tablist" aria-label="Architecture draft views" style={{flexWrap:'wrap',gap:8}} onKeyDown={event=>{

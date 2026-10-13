@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
+import crypto from 'node:crypto';
 import {HldSynthesisService,type SynthesisDependencies} from './hldSynthesis.ts';
 import type {SessionCallbacks,SessionOptions} from './agentRunner.ts';
 const cleanup:Array<()=>Promise<void>>=[];
@@ -88,4 +89,17 @@ it('denies altered saved model artifacts when a completed job is loaded',async()
   const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());f.callbacks.finished(success());
   await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('completed'));const docId=f.service.view('synthetic/project',job.id)[0].result!.docId;
   await fs.appendFile(path.join(f.checkout,'docs','architecture','drafts',`${docId}.md`),'Changed');await expect(f.service.result('synthetic/project',job.id)).rejects.toThrow('Markdown differs');
+});
+it('retains older failed jobs beyond the recent 30-job response and across restart',async()=>{
+  const f=await fixture(async()=> 'Synthetic authentication blocker');let first='';
+  for(let i=0;i<31;i++){const job=await f.service.start('synthetic/project',input);if(!i)first=job.id;await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('blocked'));}
+  expect(f.service.view('synthetic/project')).toHaveLength(30);expect(f.service.view('synthetic/project',first)[0].status).toBe('blocked');expect(f.service.summary('synthetic/project').recorded.blocked).toBe(31);expect(f.service.summary('other/project').recorded.blocked).toBe(0);
+  const marker=f.service.summary('synthetic/project').coverageStartedAt;await f.service.close();const saved=JSON.parse(await fs.readFile(path.join(f.root,'architecture-synthesis.json'),'utf8'));expect(saved.jobs).toHaveLength(31);
+  const restored=new HldSynthesisService(f.root,f.deps);try{await restored.init();expect(restored.summary('synthetic/project').coverageStartedAt).toBe(marker);expect(restored.view('synthetic/project',first)).toHaveLength(1);}finally{await restored.close();}
+});
+it.each(['count','bytes'] as const)('preserves a full history and refuses admission before reserving capacity: %s',async mode=>{
+  const f=await fixture();await f.service.close();const file=path.join(f.root,'architecture-synthesis.json'),now=Date.now();
+  const job={id:crypto.randomUUID(),repoId:'synthetic/project',status:'blocked',runtime:'codex-cli',runtimeCleanup:'released',startedAt:now,endedAt:now,elapsedMs:0,deadlineMs:300000,costUsd:0,turns:0,events:mode==='bytes'?Array.from({length:100},()=>({at:now,kind:'progress',text:'x'.repeat(1000)})):[]};
+  const saved=JSON.stringify({schemaVersion:1,historyStartedAt:now,jobs:Array.from({length:mode==='count'?1000:36},()=>({...job,id:crypto.randomUUID()}))});await fs.writeFile(file,saved);const reserve=vi.fn(f.deps.reserve),restored=new HldSynthesisService(f.root,{...f.deps,reserve});
+  try{await restored.init();const before=await fs.readFile(file,'utf8');await expect(restored.start('synthetic/project',input)).rejects.toThrow('retention is full');expect(reserve).not.toHaveBeenCalled();expect(f.start).not.toHaveBeenCalled();expect(await fs.readFile(file,'utf8')).toBe(before);}finally{await restored.close();}
 });

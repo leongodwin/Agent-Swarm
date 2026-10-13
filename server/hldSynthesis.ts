@@ -11,6 +11,7 @@ import type {SessionCallbacks,SessionHandle,SessionOptions} from './agentRunner.
 import {saveHldArtifact,loadHldVersion} from './hldArtifacts.ts';
 import {auditDlpCompliance} from '../shared/dlp.ts';
 import type {AuxiliarySessionLease} from '../shared/sessionUsage.ts';
+import {synthesisSummary} from './synthesisMetrics.ts';
 
 export interface SynthesisContext {checkoutPath:string;fingerprint:string;copilotPaused:boolean;skills:unknown[]}
 export interface SynthesisDependencies {
@@ -20,7 +21,7 @@ export interface SynthesisDependencies {
   start(options:SessionOptions,callbacks:SessionCallbacks):SessionHandle;
   assertOpen():void;
 }
-const storedSchema=z.strictObject({schemaVersion:z.literal(1),jobs:z.array(synthesisJobSchema).max(30)});
+const storedSchema=z.strictObject({schemaVersion:z.literal(1),historyStartedAt:z.number().int().nonnegative().optional(),jobs:z.array(synthesisJobSchema).max(1000)});
 const terminal=(job:SynthesisJob)=>['completed','blocked','failed','cancelled'].includes(job.status);
 const errorText=(error:unknown)=>String(error instanceof Error?error.message:error).slice(0,4000);
 const DEADLINE=300000 as const;
@@ -28,24 +29,26 @@ const DEADLINE=300000 as const;
 /** A structured model job with no tenant/tool authority. Only the server publishes its validated draft. */
 export class HldSynthesisService {
   private jobs:SynthesisJob[]=[];private writer=new SerialWriter();private closed=false;private ready=false;
+  private historyStartedAt=Date.now();
   private active?:{job:SynthesisJob;controller:AbortController;handle?:SessionHandle;timer:NodeJS.Timeout;work?:Promise<void>;lease:AuxiliarySessionLease;started:boolean;acknowledged:boolean};
   constructor(private home:string,private deps:SynthesisDependencies){}
   private file(){return path.join(this.home,'architecture-synthesis.json');}
   pendingCleanup(){return this.jobs.filter(job=>job.runtimeCleanup==='awaiting-completion').map(job=>({jobId:job.id,repoId:job.repoId,reservedAt:job.startedAt}));}
   async init(){
-    try{const stored=await readBoundedJson(this.file(),4*1024*1024);this.jobs=stored===undefined?[]:storedSchema.parse(stored).jobs;}
+    try{const stored=await readBoundedJson(this.file(),4*1024*1024);const parsed=stored===undefined?undefined:storedSchema.parse(stored);this.jobs=parsed?.jobs??[];this.historyStartedAt=parsed?.historyStartedAt??Date.now();}
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw new Error('Architecture synthesis state is unreadable; preserve and repair it before restart',{cause:error});}
     if(new Set(this.jobs.map(job=>job.id)).size!==this.jobs.length)throw new Error('Duplicate architecture synthesis identities');
     if(this.jobs.some(job=>job.runtimeCleanup==='awaiting-completion'))throw new Error('A prior architecture runtime lacks completion acknowledgement; preserve its records and verify it stopped before reopening synthesis');
     for(const job of this.jobs)if(!terminal(job)){job.status='blocked';job.error='Office restarted before synthesis completed; inspect saved drafts before explicitly starting a new job';job.endedAt=Date.now();job.elapsedMs=Math.max(0,job.endedAt-job.startedAt);}
     await this.persist();this.ready=true;
   }
-  private persist(){return this.writer.write(()=>{const data=JSON.stringify({schemaVersion:1,jobs:this.jobs});if(Buffer.byteLength(data)>4*1024*1024)throw new Error('Synthesis state exceeds its persisted bound');return atomicWrite(this.file(),data);});}
+  private persist(){return this.writer.write(()=>{const data=JSON.stringify({schemaVersion:1,historyStartedAt:this.historyStartedAt,jobs:this.jobs});if(Buffer.byteLength(data)>4*1024*1024)throw new Error('Synthesis state exceeds its persisted bound');return atomicWrite(this.file(),data);});}
   view(repoId:string,id?:string){
     if(!this.ready)throw new HttpError(503,'Architecture synthesis is unavailable');
     const jobs=this.jobs.filter(job=>job.repoId===repoId&&(!id||job.id===id));if(id&&!jobs.length)throw new HttpError(404,'Architecture job is outside this project');
-    return structuredClone(jobs);
+    return structuredClone(id?jobs:jobs.slice(0,30));
   }
+  summary(repoId:string){if(!this.ready)throw new HttpError(503,'Architecture synthesis is unavailable');return synthesisSummary(this.jobs.filter(job=>job.repoId===repoId),this.historyStartedAt);}
   async result(repoId:string,id:string){
     const job=this.view(repoId,id)[0],context=this.deps.context(repoId);
     if(job.status!=='completed'||!job.result)throw new HttpError(409,'Architecture synthesis has no completed artifact');
@@ -54,6 +57,9 @@ export class HldSynthesisService {
   async start(repoId:string,raw:unknown){
     this.deps.assertOpen();if(this.closed||!this.ready)throw new HttpError(503,'Architecture synthesis is closed');
     if(this.active)throw new HttpError(409,'An architecture synthesis job is already running');
+    // Keep failures rather than making a healthy-looking metric by pruning them.
+    // Reserve room for a worst-case bounded event/error record for the next job.
+    if(this.jobs.length>=1000||Buffer.byteLength(JSON.stringify({schemaVersion:1,historyStartedAt:this.historyStartedAt,jobs:this.jobs}))+768*1024>4*1024*1024)throw new HttpError(409,'Synthesis retention is full; preserve/export history before admitting another job');
     const input=hldInputSchema.parse(raw),context=this.deps.context(repoId);
     const requirements=JSON.stringify(input);
     if(Buffer.byteLength(requirements)>128*1024)throw new HttpError(413,'Synthesis requirements exceed their bound');
@@ -62,7 +68,7 @@ export class HldSynthesisService {
     const lease=this.deps.reserve(repoId,job.id);
     const controller=new AbortController();
     const timer=setTimeout(()=>this.finish(job,'failed','Architecture synthesis exceeded its five-minute deadline; late output is denied'),DEADLINE);
-    this.active={job,controller,timer,lease,started:false,acknowledged:false};this.jobs.unshift(job);this.jobs.length=Math.min(this.jobs.length,30);
+    this.active={job,controller,timer,lease,started:false,acknowledged:false};this.jobs.unshift(job);
     try{await this.persist();}catch(error){this.finish(job,'failed',errorText(error));throw error;}
     const active=this.active;
     if(active?.job===job)active.work=this.run(job,input,context,controller.signal).catch(error=>this.finish(job,'failed',errorText(error)));
@@ -70,7 +76,7 @@ export class HldSynthesisService {
   }
   private finish(job:SynthesisJob,status:SynthesisJob['status'],error?:string){
     if(terminal(job))return;
-    job.status=status;job.error=error;job.endedAt=Date.now();job.elapsedMs=Math.max(0,job.endedAt-job.startedAt);
+    job.status=status;job.error=error?.slice(0,4000);job.endedAt=Date.now();job.elapsedMs=Math.max(0,job.endedAt-job.startedAt);
     const active=this.active;if(active?.job===job){clearTimeout(active.timer);active.controller.abort();
       if(active.started&&!active.acknowledged){active.lease.stopping();job.runtimeCleanup='awaiting-completion';}
       try{active.handle?.stop();}catch{this.closed=true;job.error='Model runtime stop failed; verify the process before reopening synthesis';}

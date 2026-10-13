@@ -54,6 +54,8 @@ it('authenticates model jobs, binds their project, and exposes an actionable adm
     const response=await fetch(`${url}/api/hld/jobs`,{method:'POST',headers,body:JSON.stringify(input)});expect(response.status).toBe(202);const {job}=await response.json();
     await vi.waitFor(()=>expect(service.view('scoped/repo',job.id)[0].status).toBe('blocked'));
     const poll=await fetch(`${url}/api/hld/jobs/${job.id}?repoId=scoped%2Frepo`,{headers});expect((await poll.json()).job.error).toContain('not authenticated');
+    const history=await (await fetch(`${url}/api/hld/jobs?repoId=scoped%2Frepo`,{headers})).json();expect(history.summary).toMatchObject({scope:'retained-codex-synthesis-jobs',completeWindow:false,completeWindowCompletionPercent:null,recorded:{completed:0,blocked:1}});
+    const other=await (await fetch(`${url}/api/hld/jobs?repoId=other%2Frepo`,{headers})).json();expect(other.summary.recorded.blocked).toBe(0);
     expect((await fetch(`${url}/api/hld/jobs/${job.id}?repoId=other%2Frepo`,{headers})).status).toBe(404);
     expect((await fetch(`${url}/api/hld/jobs/${job.id}/result?repoId=scoped%2Frepo`,{headers})).status).toBe(409);
     expect((await fetch(`${url}/api/hld/jobs?repoId=scoped%2Frepo&repoPath=outside`,{headers})).status).toBe(400);expect(start).not.toHaveBeenCalled();

@@ -15,5 +15,11 @@ export const synthesisJobSchema=z.strictObject({id:z.uuid(),repoId:z.string().mi
   events:z.array(z.strictObject({at:z.number().int().nonnegative(),kind:z.enum(['progress','error']),text:z.string().max(1000)})).max(100),
   error:z.string().max(4000).optional(),costUsd:z.number().finite().nonnegative(),turns:z.number().int().nonnegative(),
   result:z.strictObject({docId:hldResultSchema.shape.docId,artifactSha256:z.string().regex(/^[a-f0-9]{64}$/)}).optional(),
-}).superRefine((job,ctx)=>{if(job.status==='completed'&&(!job.result||job.endedAt===undefined||job.elapsedMs===undefined||job.elapsedMs>=job.deadlineMs))ctx.addIssue({code:'custom',message:'Completed synthesis requires an intact result within its deadline'});});
+}).superRefine((job,ctx)=>{if(job.status==='completed'&&(!job.result||job.endedAt===undefined||job.elapsedMs===undefined||job.elapsedMs>=job.deadlineMs||job.endedAt<job.startedAt||job.elapsedMs!==job.endedAt-job.startedAt))ctx.addIssue({code:'custom',message:'Completed synthesis requires an intact result and consistent duration within its deadline'});});
 export type SynthesisJob=z.infer<typeof synthesisJobSchema>;
+export interface SynthesisSummary {
+  scope:'retained-codex-synthesis-jobs';observedAt:number;window:{from:number;to:number};coverageStartedAt:number;completeWindow:boolean;
+  recorded:{completed:number;failed:number;blocked:number;cancelled:number;active:number;awaitingCleanup:number;legacyProviderJobs:number};
+  successfulDurationMs:{count:number;median:number|null;p95:number|null};
+  recordedCompletionPercent:number|null;completeWindowCompletionPercent:number|null;reason:string;
+}
