@@ -36,8 +36,9 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
   const abort = () => { void close().catch(()=>{/* Explicit finally/close preserves cleanup failure; cancellation cannot acknowledge exit. */}); }; signal.addEventListener('abort', abort, { once: true });
   try {
     signal.throwIfAborted();cleanup.started(); await client.connect(transport, { timeout: 15000 });
-    const names = new Set<string>(); let cursor: string | undefined;
-    for (let page = 0; page < 20; page++) { const list = await client.listTools({ cursor }, { signal, timeout: 15000 }); list.tools.forEach((tool) => names.add(tool.name)); cursor = list.nextCursor; if (!cursor) break; }
+    signal.throwIfAborted();cleanup.assertOpen();
+    const names = new Set<string>(),cursors=new Set<string>(); let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) { const list = await client.listTools({ cursor }, { signal, timeout: 15000 });signal.throwIfAborted();cleanup.assertOpen();list.tools.forEach((tool) => names.add(tool.name));cursor = list.nextCursor;if (!cursor) break;if(cursors.has(cursor))throw new Error('FlowAgent tool discovery returned a repeated cursor');cursors.add(cursor); }
     if (cursor) throw new Error('FlowAgent tool discovery exceeded its pagination limit');
     for (const tool of ['whoami', 'get_flow', 'get_flow_context', 'preflight_flow', 'publish_flow', 'disable_flow', 'get_run_history', 'get_run_action_content']) if (!names.has(tool)) throw new Error(`FlowAgent tool ${tool} is missing`);
     return { close, async call(tool, args) {
@@ -47,8 +48,8 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
       if (result.isError) throw new Error(`FlowAgent ${tool} failed; check authentication, target access and managed-solution restrictions`);
       const content = z.array(z.object({ type: z.string(), text: z.string().optional() })).parse(result.content);
       const text = content.filter((item) => item.type === 'text').map((item) => item.text).join('');
-      if (text.length > 2 * 1024 * 1024) throw new Error(`FlowAgent ${tool} response is too large`);
-      const value = JSON.parse(text);
+      if (Buffer.byteLength(text,'utf8') > 2 * 1024 * 1024) throw new Error(`FlowAgent ${tool} response is too large`);
+      let value:Record<string,unknown>|unknown[]|string|number|boolean|null;try{value=JSON.parse(text);}catch{throw new Error(`FlowAgent ${tool} returned invalid JSON; response content is withheld`);}
       if (value && typeof value === 'object' && !Array.isArray(value) && (value.success === false || value.found === false || value.error)) throw new Error(`FlowAgent ${tool} returned a blocked outcome`);
       return value;
     } };
