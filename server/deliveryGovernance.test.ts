@@ -108,3 +108,13 @@ it('rejects independently packaged undeclared relationships at each stage before
   const fixed=structuredClone(declared);Object.assign(fixed.postDeployActions[fixed.postDeployActions.length-1],{structure:{relationships:[{kind:'one-to-many',schemaName:'exp_Report_Line',referencedEntity:'exp_report',referencedAttribute:'exp_reportid',referencingEntity:'exp_line',referencingAttribute:'exp_report',cascade:{Delete:'Restrict'}}]}});
   const result=await check({...input,manifest:fixed});expect(result.status).toBe('unavailable');expect(result.reasons.join(' ')).toContain('Supported packaged');
 });
+it('rejects conflicting packaged column limits at every stage without granting after a declaration repair',async()=>{
+  const xml='<Entities><Entity><Name>exp_report</Name><EntityInfo><entity Name="exp_report"><attributes><attribute><LogicalName>exp_code</LogicalName><Type>nvarchar</Type><RequiredLevel>none</RequiredLevel><MaxLength>200</MaxLength><Length>400</Length></attribute></attributes></entity></EntityInfo></Entity></Entities>';
+  const input=await packaged(xml,'<RootComponent type="1" schemaName="exp_report" behavior="0"/>');
+  const action={id:'schema',type:'schema-check',component:'report',columns:[{name:'exp_code',type:'String',required:'None',constraints:{maxLength:100}}]};
+  const approved={...input.manifest,targetComponents:[...input.manifest.targetComponents,{key:'report',kind:'dataverse-table',logicalName:'exp_report'}],postDeployActions:[...input.manifest.postDeployActions,action]};
+  const observe=vi.fn(()=>observation());const check=createDeliveryGovernance({observation:observe});
+  for(const phase of ['build','test','import','post-deploy','verify','health'] as const){const denied=await check({...input,phase,manifest:approved});expect(denied.status).toBe('blocked');expect(denied.reasons[0]).toContain('constraint');}
+  expect(observe).not.toHaveBeenCalled();action.columns[0].constraints.maxLength=200;
+  expect((await check({...input,manifest:approved})).status).toBe('unavailable');
+});

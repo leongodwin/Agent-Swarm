@@ -4,6 +4,7 @@ import * as zlib from 'node:zlib';
 import { fromBufferPromise } from 'yauzl';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import { standardConnectorId } from './standardPolicy.ts';
+import {packagedColumnConstraints,type PackagedConstraints} from './packagedColumnConstraints.ts';
 
 const sha=(value:Buffer|string)=>crypto.createHash('sha256').update(value).digest('hex');
 const array=(value:any):any[]=>value===undefined||value===''?[]:Array.isArray(value)?value:[value];
@@ -17,7 +18,7 @@ export interface PackageInventory {
   schemaVersion:1;scope:'package-metadata-inventory';packageSha256:string;archiveComplete:boolean;resourceInventoryComplete:boolean;
   solution?:{name:string;version:string;managed:boolean};files:PackageFile[];
   components:{type:number;id?:string;name?:string;behavior?:string}[];
-  tables:{name:string;partial:boolean;attributes:{name:string;type:string;required:string;metadataSha256:string}[];keys:{schemaName:string;attributes:string[];metadataSha256:string}[]}[];
+  tables:{name:string;partial:boolean;attributes:{name:string;type:string;required:string;metadataSha256:string;constraints:PackagedConstraints}[];keys:{schemaName:string;attributes:string[];metadataSha256:string}[]}[];
   relationships:PackageRelationship[];
   connections:{name:string;connector:string}[];resources:PackageResource[];issues:string[];complianceVerified:false;
 }
@@ -97,7 +98,7 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
       const name=logical(entity.Name),info=entity.EntityInfo?.entity;const root=report.components.find(component=>component.type===1&&component.name?.toLowerCase()===name);
       if(report.tables.some(table=>table.name===name)||info&&logical(info['@_Name'])!==name)throw new Error('Ambiguous table metadata identity');
       if(!root)issue(`Table ${name} is not a declared root component`);
-      const attributes=array(info?.attributes?.attribute).map(attribute=>({name:logical(attribute.LogicalName),type:text(attribute.Type),required:text(attribute.RequiredLevel),metadataSha256:sha(JSON.stringify(attribute))}));
+      const attributes=array(info?.attributes?.attribute).map(attribute=>({name:logical(attribute.LogicalName),type:text(attribute.Type),required:text(attribute.RequiredLevel),metadataSha256:sha(JSON.stringify(attribute)),constraints:packagedColumnConstraints(attribute)}));
       if(attributes.length>=5000)throw new Error('Attribute schema inventory limit');
       if(new Set(attributes.map(attribute=>attribute.name)).size!==attributes.length)throw new Error('Duplicate attribute');
       const keys=array(info?.EntityKeys?.EntityKey).map(key=>{

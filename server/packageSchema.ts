@@ -1,5 +1,6 @@
 import type {PackageInventory} from './packageInventory.ts';
 import type {TargetAction,TargetComponent} from './targetOperations.ts';
+import {comparePackagedConstraints} from './packagedColumnConstraints.ts';
 
 type Result={status:'matched'|'blocked'|'unavailable';reasons:string[]};
 const types:Record<string,string>={nvarchar:'String',ntext:'Memo',int:'Integer',decimal:'Decimal',money:'Money',datetime:'DateTime',bit:'Boolean',lookup:'Lookup',picklist:'Picklist',uniqueidentifier:'Uniqueidentifier',primarykey:'Uniqueidentifier',file:'File'};
@@ -24,6 +25,9 @@ export function comparePackageSchema(inventory:PackageInventory,manifest:{target
       const expected=action.columns.find(column=>column.name===attribute.name);
       if(!expected)return {status:'blocked',reasons:[`Package column ${table.name}.${attribute.name} lacks an approved declaration`]};
       if(expected.type!==type||expected.required!==level)return {status:'blocked',reasons:[`Package column ${table.name}.${attribute.name} differs from its approved type/required level`]};
+      const constraints=comparePackagedConstraints(attribute.constraints,expected.constraints);
+      if(constraints.status==='blocked')return {status:'blocked',reasons:[`Package column ${table.name}.${attribute.name}: ${constraints.reason}`]};
+      if(constraints.status==='unavailable')pending.push(`Package column ${table.name}.${attribute.name}: ${constraints.reason}`);
     }
     for(const key of table.keys){
       const expected=action.structure?.keys?.find(row=>row.schemaName.toLowerCase()===key.schemaName.toLowerCase());

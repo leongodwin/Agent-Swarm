@@ -463,4 +463,12 @@ The saved MyDevNet-verified ZIP passed integrity inspection with 87 attributes a
 
 Validation: 1,076 tests passed with one TODO across 93 files; build/typecheck passed. Backend branch coverage is 4,960/8,124 (61.05%), below the unchanged 90.01% gate, so the coverage command fails. Copilot Studio remains paused.
 
+## Explicit packaged column constraints (2026-10-13)
+
+Package inspection now records supported explicit character/file limits, numeric bounds, decimal/money precision, choice values and API access/security flags with each attribute's metadata digest. The package/approval comparison requires exact declarations for every observed supported value, including false and zero flags. It rejects broader/narrower limits, changed precision/choices and differing access flags. Invalid numeric values, reversed ranges, duplicate options and incompatible type/property combinations remain unavailable. Storage Length is never inferred as MaxLength; absent defaults, XML formats/date-time/precision-source behavior and encoded lookup targets remain unverified.
+
+Synthetic tests show a conflicting packaged character limit blocks all six delivery stages before policy observation; repairing the declaration does not grant full governance. Native read-only MyDevNet checks derived the Expense Line Item description contract from the saved source ZIP and matched its required level, 200-character limit and supported access flags against fresh typed metadata. A deliberately incorrect 400-character expectation was rejected. WhoAmI user/organization readings stayed equal. This verifies one supported column subset; source format, complete constraints and effective user/role permissions are not certified. No tenant changes occurred. Copilot Studio remains paused.
+
+Validation: 1,095 tests passed with one TODO across 94 files; build/typecheck passed. Backend branch coverage is 5,065/8,230 (61.54%), below the unchanged 90.01% gate, so the coverage command fails. Comprehensive schema/effective-DLP governance, containment and production reliability acceptance remain open.
+
 References: https://geminicli.com/docs/hooks/reference/ and https://geminicli.com/docs/reference/configuration/ .
