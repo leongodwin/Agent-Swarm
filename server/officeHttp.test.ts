@@ -21,6 +21,7 @@ import { TenantDlpService, type StartPolicyReader } from './tenantDlp.ts';
 import { CanvasOwnership } from './canvasOwnership.ts';
 import { createOfficeHttpApp } from './officeHttp.ts';
 import { OfficeMaintenance } from './officeMaintenance.ts';
+import {observeWorkflowReliability} from './workflowReliability.ts';
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -31,7 +32,7 @@ afterEach(async () => {
 afterAll(async () => fs.rm(HOME_DIR, { recursive: true, force: true }));
 const tenantId='11111111-1111-4111-8111-111111111111';
 const environment='https://synthetic.crm4.dynamics.com';
-async function office(withEvidence=false,requestHandoff?:()=>void) {
+async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability']) {
   await fs.writeFile(STATE_FILE, JSON.stringify({ version: 2, settings: { runtime: 'sdk', ceoHeartbeatMin: 0, autoUpdate: false },
     repos: [{ id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,color:'#000',description:'',url:'',autoAssign:false,autoMerge:false,browserTesting:false,addedAt:1 }] }));
   const tenancy = {status:'connected', user:'synthetic@example.com', environments:[{name:'Synthetic',url:environment,active:true}], isReal:true};
@@ -60,7 +61,7 @@ async function office(withEvidence=false,requestHandoff?:()=>void) {
   const reader=vi.fn<StartPolicyReader>(()=>({pid:123,refresh(){},stop(){}}));
   const tenantDlp=new TenantDlpService(path.join(HOME_DIR,'governance'),reader);await tenantDlp.init();cleanup.push(()=>tenantDlp.close());
   const canvasOwnership=new CanvasOwnership(path.join(HOME_DIR,'leases'));cleanup.push(()=>canvasOwnership.close());
-  const {app,closeAdmission}=createOfficeHttpApp({backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,changeDrain:(value,apply)=>maintenance.change(value,apply)});
+  const {app,closeAdmission}=createOfficeHttpApp({backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,workflowReliability,changeDrain:(value,apply)=>maintenance.change(value,apply)});
   const server=http.createServer(app);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
   const url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -68,6 +69,12 @@ async function office(withEvidence=false,requestHandoff?:()=>void) {
   const request=(resource:string,method='GET',body?:unknown,headers:Record<string,string>={})=>fetch(url+resource,{method,headers:{Cookie:cookie,...(body===undefined?{}:{'Content-Type':'application/json'}),...headers},body:body===undefined?undefined:JSON.stringify(body)});
   return {url,cookie,request,swarm,external,tenancy,delivery,features,capabilities,reader,closeAdmission,maintenance};
 }
+it('reads reliability only for authenticated connected repositories and rejects scope overrides',async()=>{
+  const observe=vi.fn(()=>observeWorkflowReliability('synthetic/repo',async()=>{throw new Error('Synthetic history unavailable');}));const {url,request}=await office(false,undefined,{observe});
+  expect((await fetch(url+'/api/repos/synthetic%2Frepo/reliability')).status).toBe(401);expect((await request('/api/repos/foreign%2Frepo/reliability')).status).toBe(404);
+  expect((await request('/api/repos/synthetic%2Frepo/reliability?branch=other')).status).toBe(400);expect(observe).not.toHaveBeenCalled();
+  expect((await request('/api/repos/synthetic%2Frepo/reliability')).status).toBe(200);expect(observe).toHaveBeenCalledExactlyOnceWith('synthetic/repo');
+});
 
 it('uses the production session boundary and reports actual initialized services',async()=>{
   const {request,url,external}=await office();

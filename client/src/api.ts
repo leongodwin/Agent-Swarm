@@ -40,6 +40,7 @@ export interface FloorOptions {
 export const api = {
   tenantDlp: () => call<import('../../shared/tenantDlp').TenantDlpView>('GET', '/api/governance/tenant'),
   toolGovernance: () => call<import('../../shared/toolGovernance').ToolGovernanceView>('GET', '/api/governance/tools'),
+  workflowReliability:(repo:string)=>call<import('../../shared/workflowReliability').WorkflowReliability>('GET',`/api/repos/${encodeURIComponent(repo)}/reliability`),
   capabilities: () => call<{ results: import('../../server/capabilityChecks').CapabilityResult[]; configuredProjects: string[] }>('GET', '/api/capabilities'),
   installedSkills: () => call<import('../../server/skillRegistry').SkillCatalogue>('GET', '/api/installed-skills'),
   configureCapabilities: (repoId: string, config: unknown) => call('POST', `${r(repoId)}/capabilities/configure`, config),

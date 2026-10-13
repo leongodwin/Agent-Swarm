@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
+import {WorkflowReliabilityService,observeWorkflowReliability} from './workflowReliability.ts';
 import { handleHook, handleMcp } from './cliRunner.ts';
 import { HttpError, type Swarm } from './swarm.ts';
 import type { Backend } from './backend.ts';
@@ -24,6 +25,7 @@ import { createBrowserAuth } from './browserAuth.ts';
 import { parseBody, proposalSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
 export interface OfficeHttpServices {
+  workflowReliability?:Pick<WorkflowReliabilityService,'observe'>;
   synthesis?:HldSynthesisService;
   synthesisUnavailableReason?:string;
   backend: Backend; swarm: Swarm; features: FeatureStore; capabilities: CapabilityService;
@@ -38,6 +40,7 @@ export interface OfficeHttpServices {
  * The launcher owns startup/shutdown; callers must initialize and close services. */
 export function createOfficeHttpApp(services: OfficeHttpServices) {
   const {backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir,runtimeStartedAt,policyReaderMode}=services;
+  const workflowReliability=services.workflowReliability??new WorkflowReliabilityService();
   const app = express();
   let closed = false;
   const requireOpen = () => { if (closed) throw new HttpError(503, 'Office is shutting down; retry after restart'); };
@@ -86,6 +89,12 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     const active = (await backend.tenancy.info()).environments.find((env) => env.active);
     return JSON.stringify([id || 'office', active?.url || 'disconnected']);
   };
+  app.get('/api/repos/:repo/reliability',route(async req=>{
+    parseBody(z.object({}).strict(),req.query);
+    const repo=connectedRepo(repoId(req));
+    if(backend.demo){const result=await observeWorkflowReliability(repo.fullName,async()=>{throw new Error('Demo');});return {...result,reason:'Demo has no authenticated workflow history; reliability is unverified'};}
+    return workflowReliability.observe(repo.fullName);
+  }));
 
   app.get('/api/state', route(() => swarm.snapshot()));
   app.get('/api/capabilities', route(() => capabilities.view()));

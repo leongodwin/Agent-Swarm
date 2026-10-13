@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { api } from '../api';
 import { useResource } from '../useResource';
 import { useStore } from '../store';
+import {WorkflowReliabilityPanel} from './WorkflowReliabilityPanel';
 
 export function ToolGovernancePanel() {
   const resource = useResource('office-tool-governance', api.toolGovernance);
@@ -16,6 +17,7 @@ export function ToolGovernancePanel() {
   return <section aria-label="Operations and tool audit">
     <div className="row"><h3>Operations &amp; tool audit</h3><span className="spacer" /><button className="btn btn-small" onClick={resource.refresh} disabled={resource.loading}>Refresh audit</button></div>
     <p className="muted small">Recorded request safeguards. These counts cover observed checkpoints, not all tool calls or verified tenant compliance.</p>
+    <WorkflowReliabilityPanel/>
     {sessions&&<div className="card" aria-label="Shared session budget"><strong>Shared session budget</strong><p>Occupied slots: {sessions.used} · limit {sessions.limit||'unlimited'} · {sessions.agentSessions} coding-agent sessions</p>{sessions.blockedReason&&<p role="alert">Session capacity is unverified: {sessions.blockedReason}</p>}<ul>{sessions.auxiliary.map(item=><li key={item.jobId}>Architecture {item.jobId} · {item.repoId} · {item.state}</li>)}{sessions.cleanup?.map(item=><li key={item.id}>Runtime cleanup · {agents[item.agentId]?.name??(item.agentId||'unknown worker')} · {item.cli} · PID {item.pid||'pending'} · {item.state}</li>)}</ul><p className="muted small">Stopping runtimes keep capacity quarantined until native root exit is acknowledged. These counts do not certify descendant termination or cross-machine capacity.</p></div>}
     <div className="card" aria-label="Tenant policy inventory">
       <strong>Standard tenant policy inventory</strong>
