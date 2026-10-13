@@ -56,6 +56,11 @@ export const capabilityConfigSchema = z.object({
 });
 export type CapabilityConfig = z.infer<typeof capabilityConfigSchema>;
 export interface CapabilityResult { repoId: string; checkedAt: string; expiresAt: string; status: 'ready' | 'blocked'; configHash?: string; checks: { id: string; category: string; passed: boolean; detail: string; remedy: string }[] }
+
+export function capabilityBlocker(result: Pick<CapabilityResult, 'status' | 'checks'>): string | null {
+  if (result.status === 'ready' && result.checks.length > 0 && result.checks.every(check => check.passed)) return null;
+  return result.checks.filter(check => !check.passed).map(check => `${check.id}: ${check.remedy}`).join('; ') || 'Capability verification is not ready; refresh project readiness';
+}
 export function azureResource(url: string) {
   const u = new URL(url);
   if (u.protocol !== 'https:' || u.port || u.username || u.password) return undefined;

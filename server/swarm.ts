@@ -288,7 +288,7 @@ export { HttpError };
 export class Swarm {
   capabilityFingerprint = () => '';
   capabilityStatus = () => '{}';
-  capabilityPreflight: (repoId: string, cli: string) => Promise<string | null> = async () => null;
+  capabilityPreflight: (repoId: string, cli: string) => Promise<string | null> = async () => { throw new Error('Capability service is not configured'); };
   taskPaused: (title: string) => boolean = () => false;
   deliveryRevision = () => 0;
   requestDeliveryReview: (id: string) => Promise<string> = async () => { throw new Error('Delivery unavailable'); };
@@ -1560,7 +1560,7 @@ export class Swarm {
 
   private newTerminal(agentId: string) {
     const t = new AgentTerminal();
-    // Typed at a CLI waiting at its prompt after its task: a follow-up, which starts synchronously when it can.
+    // Typed at an idle CLI prompt: reserve and check the follow-up before attaching its session.
     t.onIdlePrompt = (text) => {
       void this.message(agentId, text, true).catch(() => undefined);
       return !!this.agentRt.get(agentId)?.session;
@@ -1656,12 +1656,13 @@ export class Swarm {
   }
 
   private async prepare(a: PersistedAgent, repo: PersistedRepo, base: { pr?: number }, branch: string): Promise<string | null> {
+    const active = () => !this.closed && a.status === 'preparing' && this.state.agents.includes(a);
     try {
-      if (this.closed) return null;
+      if (!active()) return null;
       if (this.repoRt.get(repo.id)?.cloneStatus !== 'ready') await this.cloneRepo(repo.id);
-      if (this.closed) return null;
+      if (!active()) return null;
       await this.backend.releaseDesk(repo.fullName, this.agentSlug(a), this.port(a));
-      if (this.closed) return null;
+      if (!active()) return null;
       const cwd = await this.backend.prepareDesk(repo.fullName, { defaultBranch: repo.defaultBranch, pr: base.pr }, this.agentSlug(a), branch);
       return !this.closed && a.status === 'preparing' ? cwd : null;
     } catch (err) {
@@ -1676,19 +1677,26 @@ export class Swarm {
     }
   }
 
-  private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo) {
+  private async sessionReadiness(a: PersistedAgent, repo: PersistedRepo, resume?: string): Promise<string | null> {
+    if (this.backend.demo) return null;
+    const terminal = a.role === 'ceo' || this.state.settings.runtime === 'terminal' && this.backend.terminals;
+    const cli = !terminal ? 'node' : resume && a.sessionCli && a.role !== 'ceo' ? a.sessionCli : a.cli || this.state.settings.defaultCli;
+    try {
+      const decision = await this.capabilityPreflight(repo.id, cli);
+      return decision === null ? null : typeof decision === 'string' && decision.trim() ? decision : 'Capability check returned no usable decision';
+    } catch { return 'Capability check unavailable; refresh project readiness before assigning work'; }
+  }
+
+  private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo, resume?: string) {
     if (this.closed) return false;
     if (this.taskPaused?.(a.issueTitle ?? '')) {
       a.status = 'stopped'; a.lastError = 'This platform is paused by the manager';
       this.emitAgent(a); this.save(); return false;
     }
-    if (this.backend.demo) return true;
-    try {
-      const blocker = await this.capabilityPreflight(repo.id, this.state.settings.runtime === 'terminal' ? a.cli || this.state.settings.defaultCli : 'node');
-      if (this.closed) return false;
-      if (!blocker) return true;
-      a.lastError = blocker;
-    } catch { if (this.closed) return false; a.lastError = 'Capability check unavailable; refresh project readiness before assigning work'; }
+    const blocker = await this.sessionReadiness(a, repo, resume);
+    if (this.closed) return false;
+    if (blocker === null) return true;
+    a.lastError = blocker;
     a.status = 'error'; a.endedAt = Date.now();
     this.appendLog(a, [{ kind: 'error', text: a.lastError! }]); this.emitAgent(a); this.save(); return false;
   }
@@ -1936,7 +1944,7 @@ export class Swarm {
     const key = `${repo.id}#${a.issueNumber}`;
     if (this.nudged.has(key)) return this.releaseIssue(a, repo);
     this.nudged.add(key);
-    // message() starts the session before its first await, so the scheduler can't hand this developer other work first.
+    // message() reserves the developer before its first await, so the scheduler cannot assign them during readiness checks.
     void this.message(
       a.id,
       `You finished without opening a pull request for #${a.issueNumber}. Finish the remaining steps now: commit, push your branch and open the PR with "Closes #${a.issueNumber}". If the issue can't be done, open a draft PR that explains why.`,
@@ -2238,7 +2246,8 @@ export class Swarm {
             : `Fixing PR #${rec.prNumber} after QA round ${rec.round}`,
       `Checking out PR #${rec.prNumber}…`,
     );
-    if (!await this.checkTaskCapabilities(dev, repo)) { this.setQa(rec, { status: 'failed' }); return; }
+    const resume = original && rec.devSessionId ? rec.devSessionId : undefined;
+    if (!await this.checkTaskCapabilities(dev, repo, resume)) { this.setQa(rec, { status: 'failed' }); return; }
     const cwd = await this.prepare(dev, repo, { pr: rec.prNumber }, branch);
     if (!cwd) {
       if (rec.status === 'fixing') this.setQa(rec, { status: 'failed' });
@@ -2287,7 +2296,6 @@ export class Swarm {
     ];
     const mergeEnd = 'Then reply with a short summary of what you did. Do not open a new pull request; the office merges it once the checks pass, after another QA round if the code changed.';
     const prompt = (mergeFix ? [...mergeFix, '', mergeEnd] : qaFix).filter((l) => l !== '').join('\n');
-    const resume = original && rec.devSessionId ? rec.devSessionId : undefined;
     this.startAgentSession(dev, repo, cwd, prompt, this.buildSystemAppend(dev, repo, cwd, branch, { pr: rec.prNumber, headRef }), resume);
   }
 
@@ -2321,15 +2329,21 @@ export class Swarm {
 
   /** A message for an agent: sent into their running session, or a follow-up that resumes it. typed: the manager typed it at their CLI's prompt, where it's already running. */
   async message(id: string, text: string, typed = false) {
+    if (this.closed) throw new HttpError(409, 'Office is shutting down');
     const a = this.agent(id);
     if (a.role === 'ceo') return this.messageCeo(text);
     const repo = this.repo(a.repoId);
     if (!text.trim()) throw new HttpError(400, 'Empty message');
+    if (this.taskPaused(text) || this.taskPaused(a.issueTitle ?? '')) throw new HttpError(409, 'This platform is paused by the manager');
     const rt = this.agentRt.get(id)!;
     if (rt.session) {
+      const session = rt.session;
       if (!typed && a.sessionCli === 'copilot') {
         throw new HttpError(409, `${a.name} is running a non-interactive Copilot task; send a follow-up after it finishes.`);
       }
+      const blocker = await this.sessionReadiness(a, repo, a.sessionId ?? undefined);
+      if (blocker) throw new HttpError(409, blocker);
+      if (this.closed || rt.session !== session) throw new HttpError(409, 'Session changed during readiness verification; retry the follow-up');
       this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${text}` }]);
       if (!typed) rt.session.send(text);
       return;
@@ -2338,6 +2352,9 @@ export class Swarm {
     if (a.status === 'preparing') throw new HttpError(409, `${a.name} is still setting up; try again in a moment`);
     if (!a.sessionId || !a.branch || a.task === 'qa') throw new HttpError(409, `${a.name} has no session to continue. Assign an issue instead.`);
     this.ensureSlot();
+    a.status = 'preparing'; this.emitAgent(a); this.save();
+    if (!await this.checkTaskCapabilities(a, repo, a.sessionId)) throw new HttpError(409, a.lastError || 'Session readiness is unavailable');
+    if (this.closed || a.status !== 'preparing' || !this.state.agents.includes(a)) throw new HttpError(409, 'Session stopped during readiness verification');
     this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${text}` }]);
     const cwd = this.backend.deskDir(repo.fullName, this.agentSlug(a));
     a.lastError = null;
@@ -2991,11 +3008,15 @@ export class Swarm {
     this.enqueueCeo({ kind: 'chat', text: t, at: Date.now() });
   }
 
-  reviewDeliveryRelease(agentId: string, repoId: string, releaseId: string) {
+  async reviewDeliveryRelease(agentId: string, repoId: string, releaseId: string) {
+    if (this.closed) throw new HttpError(409, 'Office is shutting down');
     const a = this.state.agents.find((a) => a.id === agentId && a.repoId === repoId && a.role === 'qa');
-    if (!a || !FREE.includes(a.status) || this.slotsFull()) throw new HttpError(409, 'Assigned QA reviewer or session slot is busy; request the release review when available');
+    if (!a || BUSY.includes(a.status) || this.agentRt.get(a.id)?.session || this.slotsFull()) throw new HttpError(409, 'Assigned QA reviewer or session slot is busy; request the release review when available');
     const repo = this.repo(repoId);
     a.task = 'qa'; a.prNumber = null; a.issueNumber = null; a.issueTitle = `Release review ${releaseId}`; a.startedAt = Date.now(); a.lastError = null;
+    a.status = 'preparing'; this.emitAgent(a); this.save();
+    if (!await this.checkTaskCapabilities(a, repo)) throw new HttpError(409, a.lastError || 'Release-review readiness is unavailable');
+    if (this.closed || a.status !== 'preparing' || !this.state.agents.includes(a)) throw new HttpError(409, 'Reviewer stopped during readiness verification');
     this.startAgentSession(a, repo, this.backend.mainDir(repo.fullName),
       `Independently review release ${releaseId}. If its run is reviewing, inspect every captured desktop/mobile screenshot, accessibility report, usability results and recovery rehearsal evidence, then call approve_visual with the run ID, evidence hash, five visual scores and specific review notes. Otherwise review the plan. Call delivery_status, inspect the exact pinned commit with git show, read docs/DELIVERY.md, and inspect all acceptance scenarios. Do not modify source or approve weak/static assertions. Every required issue must be implemented in the pinned commit, each component packaged, authorization must exercise denied access, and persistence must prove a write survives reload. If adequate call approve_release with the exact plan hash. Otherwise explain the specific gaps without approving.`, DELIVERY_ENGINEERING);
     this.save(); return 'Assigned QA review started';

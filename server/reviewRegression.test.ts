@@ -33,14 +33,14 @@ describe('Review regressions', () => {
     const before = fingerprint.call(fake); expect(fingerprint.call(fake)).toBe(before);
     revision++; expect(fingerprint.call(fake)).not.toBe(before);
   });
-  it('starts a release review only with its free assigned QA agent and no PR side effects', () => {
+  it('starts a release review only with its free assigned QA agent and no PR side effects', async () => {
     const agent = { id: 'sherlock', role: 'qa', repoId: 'test/repo', status: 'idle' };
     const startAgentSession = vi.fn();
-    const fake = { state: { agents: [agent] }, slotsFull: () => false, repo: () => ({ fullName: 'test/repo' }), backend: { mainDir: () => 'checkout' }, startAgentSession, save: vi.fn() };
-    const review = (Swarm.prototype as unknown as { reviewDeliveryRelease(...args: string[]): string }).reviewDeliveryRelease;
-    expect(review.call(fake, 'sherlock', 'test/repo', 'release')).toContain('started');
+    const fake = { state: { agents: [agent] }, agentRt: new Map(), slotsFull: () => false, repo: () => ({ fullName: 'test/repo' }), backend: { mainDir: () => 'checkout' }, startAgentSession, save: vi.fn(), emitAgent: vi.fn(), checkTaskCapabilities: vi.fn(async () => true) };
+    const review = (Swarm.prototype as unknown as { reviewDeliveryRelease(...args: string[]): Promise<string> }).reviewDeliveryRelease;
+    expect(await review.call(fake, 'sherlock', 'test/repo', 'release')).toContain('started');
     expect(startAgentSession.mock.calls[0][3]).toContain('exact pinned commit');
-    agent.status = 'working'; expect(() => review.call(fake, 'sherlock', 'test/repo', 'release')).toThrow('busy');
+    agent.status = 'working'; await expect(review.call(fake, 'sherlock', 'test/repo', 'release')).rejects.toThrow('busy');
   });
   it('blocks an unavailable DLP scan without merging', async () => {
     const mergePull = vi.fn(); const mergeNote = vi.fn((_rec: unknown, _note: string) => false);

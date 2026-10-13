@@ -1,5 +1,15 @@
 # Reliability priorities 5–8
 
+## Follow-up and release-review readiness
+
+Non-demo Swarm instances deny readiness when no capability provider is configured or its reply is empty/unknown. The server adapter requires a nonempty ready result with every check passing; a blocked result with no failed-check remedies still returns a blocker. Providers are installed before Swarm initialization and restart recovery.
+
+Worker follow-up prompts to active sessions and resumed worker sessions now check readiness. Resume checks use the effective runtime: the saved session's CLI for terminal continuation, or Node for SDK execution (including terminal configurations where native terminals are unavailable). New continuations reserve their agent before awaiting checks, retain their saved checkpoint when blocked, and cannot start after cancellation or shutdown. Workspace preparation also stops if the assignment was cancelled during readiness checks.
+
+Release reviews reserve their assigned QA agent, run the same capability check, and revalidate the agent/session before dispatch. Failed readiness can be retried without resetting the reviewer; a live session or reserved reviewer still blocks concurrent review. Fix sessions preflight the runtime selected by their current dispatch context; historic QA fix-checkpoint CLI provenance still needs validation.
+
+These changes cover capability admission, not comprehensive policy/schema approval. Retained CLI processes, directly typed native execution, CEO dispatch, and full governance across all runtime paths remain unverified or incomplete. Existing authenticated policy inventory does not authorize these paths. Evidence: `.swarm-reliability/session-admission-coverage-2026-10-13.txt`, `session-admission-coverage-exit-2026-10-13.txt`, and `session-admission-api-e2e-2026-10-13.txt`.
+
 ## QA evidence and merge admission
 
 QA reports use one bounded runtime schema for both the authoring output contract and server parsing. Empty summaries/checks, unknown outcomes, malformed entries and coerced values are rejected. A pass requires every reported check to pass; skipped or unverified required checks cannot support approval. Failed reports need actionable findings. Interrupted/failed sessions cannot approve, terminal parsing uses the final JSON report without falling back to an earlier pass, and screenshot captions must match captured images. A pass also requires the task's tested commit. These constraints validate reported evidence; they do not independently prove each claimed command ran or each acceptance criterion was covered.

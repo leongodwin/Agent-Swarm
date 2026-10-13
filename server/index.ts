@@ -15,7 +15,7 @@ import { generateHld } from './hldAgent.ts';
 import { parseSolutionFolder } from '../shared/solutionParser.ts';
 import { scanDirectoryDlp } from './dlpScanner.ts';
 import { FeatureStore } from './features.ts';
-import { CapabilityService, capabilityConfigSchema } from './capabilityChecks.ts';
+import { CapabilityService, capabilityConfigSchema, capabilityBlocker } from './capabilityChecks.ts';
 import { templateCatalog, templateFiles, installTemplate, type TemplateId } from './implementationTemplates.ts';
 import { DeliveryService, containedFile } from './delivery.ts';
 import { createDeliveryQaTools, createEngineeringTools } from './ceo.ts';
@@ -61,7 +61,7 @@ swarm.capabilityPreflight = async (repoId, cli) => {
   const repo = swarm.snapshot().repos.find((r) => r.id === repoId);
   if (!repo) return 'Project not connected';
   const result = await capabilities.check(repoId, repo.checkoutPath, repo.targetTenancy?.environmentUrl ?? (fs.existsSync(path.join(repo.checkoutPath, 'cubefarm.delivery.json')) ? delivery.view().policy?.environmentUrl : undefined), cli);
-  return result.status === 'ready' ? null : result.checks.filter((c) => !c.passed).map((c) => `${c.id}: ${c.remedy}`).join('; ');
+  return capabilityBlocker(result);
 };
 delivery.checkCapabilities = (repoId, cwd, environment, force) => capabilities.check(repoId, cwd, environment, 'git', force);
 swarm.deliveryStatus = () => JSON.stringify({ ...delivery.view(), projects: swarm.snapshot().repos.map((repo) => ({ repo: repo.fullName, manifest: fs.existsSync(path.join(repo.checkoutPath, 'cubefarm.delivery.json')) ? 'present in checkout; release validates committed copy' : 'missing: plan real build, test, deployment and live verification scripts' })) });
