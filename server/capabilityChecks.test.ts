@@ -40,6 +40,61 @@ const target = 'https://test.crm4.dynamics.com';
 const config = capabilityConfigSchema.parse({ environmentUrl: target, checks: ['authentication', 'environment', 'licence', 'mcp', 'cli', 'connector'].map((category) => ({ id: category, category, remedy: `Reconnect the ${category} capability`, probe: category === 'cli' ? { kind: 'cli', executable: 'node', minimumVersion: '22.0.0' } : category === 'mcp' ? { kind: 'mcp', url: 'http://localhost:1234/mcp', tools: ['compile_canvas'] } : { kind: 'http', url: 'https://provider.test/status', pointer: [category], equals: true } })) });
 async function fixture() { const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-capabilities-')); dirs.push(root); const probe = vi.fn<typeof runCapabilityProbe>(async () => {}); const service = new CapabilityService(root, false, probe); await service.init(); return { root, probe, service }; }
 
+it('rejects malformed or contradictory saved capability state without running probes or replacing its bytes',async()=>{
+  const {root,probe}=await fixture();const file=path.join(root,'capabilities.json');
+  const checkedAt=new Date().toISOString(),expiresAt=new Date(Date.now()+60000).toISOString();
+  const good={repoId:'repo',checkedAt,expiresAt,status:'ready',checks:[{id:'worker-cli',category:'cli',passed:true,detail:'Observed',remedy:''}]};
+  const badConfig={...config,checks:config.checks.map(check=>check.category==='cli'?{...check,probe:{kind:'cli',executable:'unapproved-executable',minimumVersion:'1.0.0'}}:check)};
+  for(const raw of ['broken JSON','null','[]','{"configs":{"__proto__":{}},"results":{}}','{"configs":{"constructor":{}},"results":{}}',JSON.stringify({configs:{repo:badConfig},results:{}}),JSON.stringify({configs:{},results:{},schemaVersion:99}),
+    JSON.stringify({configs:{},results:{repo:{...good,checks:[]}}}),JSON.stringify({configs:{},results:{repo:{...good,repoId:'different-project'}}}),
+    JSON.stringify({configs:{},results:{repo:{...good,expiresAt:checkedAt}}}),JSON.stringify({configs:{},results:{repo:{...good,checks:[{...good.checks[0],passed:false}]}}}),
+    JSON.stringify({configs:{},results:{repo:{...good,checks:[...good.checks,...good.checks]}}})]) {
+    await fs.writeFile(file,raw);const restored=new CapabilityService(root,false,probe);
+    await expect(restored.init()).rejects.toThrow('preserve and repair');
+    await expect(restored.check('repo',root,target)).rejects.toThrow('not initialized');
+    await expect(restored.configure('repo',config)).rejects.toThrow('not initialized');
+    await restored.close();expect(await fs.readFile(file,'utf8')).toBe(raw);
+  }
+  expect(probe).not.toHaveBeenCalled();
+});
+
+it('restores valid plans while treating saved readiness as historical until live checks complete',async()=>{
+  const {root,service}=await fixture();await service.configure('repo',config);await service.check('repo',root,target);
+  const probe=vi.fn<typeof runCapabilityProbe>(async()=>{});const restored=new CapabilityService(root,false,probe);
+  await restored.init();await restored.init();
+  expect(restored.view().configuredProjects).toEqual(['repo']);
+  expect(restored.view().results[0]).toMatchObject({status:'blocked'});
+  expect(restored.view().results[0].checks.at(-1)?.id).toBe('current-evidence');expect(probe).not.toHaveBeenCalled();
+  expect((await restored.check('repo',root,target)).status).toBe('ready');expect(restored.view().results[0].status).toBe('ready');
+  await restored.close();await expect(restored.init()).rejects.toThrow('closing');
+});
+
+it('preserves oversized capability state and rejects a file that disappears after discovery',async()=>{
+  const {root,probe}=await fixture();const file=path.join(root,'capabilities.json');
+  await fs.writeFile(file,'x'.repeat(4*1024*1024+1));const large=new CapabilityService(root,false,probe);
+  await expect(large.init()).rejects.toThrow('preserve and repair');expect((await fs.stat(file)).size).toBe(4*1024*1024+1);
+  await fs.writeFile(file,JSON.stringify({configs:{},results:{}}));
+  const read=vi.spyOn(fs,'readFile').mockRejectedValueOnce(Object.assign(new Error('disappeared'),{code:'ENOENT'}));
+  const missing=new CapabilityService(root,false,probe);await expect(missing.init()).rejects.toThrow('preserve and repair');read.mockRestore();
+  expect(probe).not.toHaveBeenCalled();
+});
+
+it('does not present expired or future-dated runtime observations as ready',async()=>{
+  const {root,service}=await fixture();await service.configure('repo',config);vi.useFakeTimers();
+  try {
+    await service.check('repo',root,target);expect(service.view().results[0].status).toBe('ready');
+    const observed=Date.now();await vi.advanceTimersByTimeAsync(60001);expect(service.view().results[0].status).toBe('blocked');
+    vi.setSystemTime(observed-60000);expect(service.view().results[0].status).toBe('blocked');
+    expect((await service.check('repo',root,target)).status).toBe('ready');
+  } finally {vi.useRealTimers();}
+});
+
+it('rejects configured check IDs that would collide with automatic or freshness evidence',()=>{
+  for(const id of ['configuration','configuration-changed','github-auth','worker-cli','current-evidence']) {
+    expect(capabilityConfigSchema.safeParse({...config,checks:config.checks.map((check,index)=>index===0?{...check,id}:check)}).success).toBe(false);
+  }
+});
+
 it('blocks unknown Power Platform capabilities without claiming readiness from installed skills', async () => {
   const { root, service } = await fixture();
   const result = await service.check('repo', root, target);

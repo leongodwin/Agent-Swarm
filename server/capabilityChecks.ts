@@ -40,6 +40,7 @@ export const capabilityConfigSchema = z.object({
 }).strict().superRefine((config, ctx) => {
   for (const kind of category.options.filter((kind) => kind !== 'workflow')) if (!config.checks.some((c) => c.category === kind)) ctx.addIssue({ code: 'custom', message: `Missing ${kind} capability check` });
   if (new Set(config.checks.map((c) => c.id)).size !== config.checks.length) ctx.addIssue({ code: 'custom', message: 'Duplicate check IDs' });
+  if (config.checks.some(check => ['configuration', 'configuration-changed', 'github-auth', 'worker-cli', 'current-evidence'].includes(check.id))) ctx.addIssue({code:'custom',message:'Check ID is reserved for system evidence'});
   for (const check of config.checks) {
     if (check.category === 'mcp' && check.probe.kind !== 'mcp' || check.category === 'cli' && check.probe.kind !== 'cli' || ['authentication', 'environment'].includes(check.category) && !['http', 'platform-auth'].includes(check.probe.kind) || ['licence', 'workflow'].includes(check.category) && check.probe.kind !== 'http' || check.category === 'connector' && !['http', 'pac-connection'].includes(check.probe.kind)) ctx.addIssue({ code: 'custom', message: `Use a live ${check.category} probe for ${check.id}` });
     if (check.probe.kind === 'platform-auth' && new URL(check.probe.environmentUrl).origin !== new URL(config.environmentUrl).origin) ctx.addIssue({ code: 'custom', message: 'Platform authentication must target the project environment' });
@@ -56,6 +57,23 @@ export const capabilityConfigSchema = z.object({
 });
 export type CapabilityConfig = z.infer<typeof capabilityConfigSchema>;
 export interface CapabilityResult { repoId: string; checkedAt: string; expiresAt: string; status: 'ready' | 'blocked'; configHash?: string; checks: { id: string; category: string; passed: boolean; detail: string; remedy: string }[] }
+const projectKey = z.string().min(1).max(240).refine(id => !['__proto__', 'prototype', 'constructor'].includes(id) && !/[\x00-\x1f]/.test(id));
+const resultSchema = z.object({repoId: projectKey, checkedAt: z.iso.datetime(), expiresAt: z.iso.datetime(), status: z.enum(['ready','blocked']), configHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  checks: z.array(z.object({id: key, category, passed: z.boolean(), detail: z.string().max(2000), remedy: z.string().max(1000)}).strict()).min(1).max(40),
+}).strict().superRefine((result, context) => {
+  const duration = Date.parse(result.expiresAt) - Date.parse(result.checkedAt);
+  if (duration <= 0 || duration > 65_000) context.addIssue({code:'custom',message:'Invalid capability observation lifetime'});
+  if ((result.status === 'ready') !== result.checks.every(check => check.passed)) context.addIssue({code:'custom',message:'Capability status contradicts its checks'});
+  if (new Set(result.checks.map(check => check.id)).size !== result.checks.length) context.addIssue({code:'custom',message:'Duplicate capability evidence checks'});
+});
+const savedSchema = z.object({configs: z.record(projectKey, capabilityConfigSchema), results: z.record(projectKey, resultSchema)}).strict().superRefine((saved, context) => {
+  if (Object.keys(saved.configs).length > 1024 || Object.keys(saved.results).length > 1024) context.addIssue({code:'custom',message:'Capability state exceeds project limit'});
+  for (const [id, result] of Object.entries(saved.results)) if (result.repoId !== id) context.addIssue({code:'custom',message:'Capability evidence belongs to another project'});
+});
+function currentObservation(result: CapabilityResult) {
+  const now = Date.now(), checked = Date.parse(result.checkedAt), expires = Date.parse(result.expiresAt);
+  return checked <= now + 30_000 && now - checked <= 60_000 && expires > now;
+}
 
 export function capabilityBlocker(result: Pick<CapabilityResult, 'status' | 'checks'>): string | null {
   if (result.status === 'ready' && result.checks.length > 0 && result.checks.every(check => check.passed)) return null;
@@ -156,32 +174,61 @@ export class CapabilityService {
   private pending = new Map<string, Promise<CapabilityResult>>();
   private writer = new SerialWriter();
   private stop = new AbortController();
+  private initialized = false;
+  private liveResults = new Set<string>();
   onChange = () => {};
   constructor(private root: string, private demo: boolean, private probe = runCapabilityProbe) {}
   async init() {
-    if (this.demo) return;
-    try { const saved = JSON.parse(await fs.readFile(path.join(this.root, 'capabilities.json'), 'utf8')); this.configs = saved.configs; this.results = saved.results; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    if (this.stop.signal.aborted) throw new Error('Capability service is closing');
+    if (this.initialized) return;
+    if (this.demo) {this.initialized = true; return;}
+    let found = false;
+    try {
+      const file = path.join(this.root, 'capabilities.json');
+      if ((await fs.stat(file)).size > 4 * 1024 * 1024) {found = true; throw new Error('oversized');}
+      found = true;
+      const raw = await fs.readFile(file, 'utf8');
+      if (Buffer.byteLength(raw) > 4 * 1024 * 1024) throw new Error('oversized');
+      const input = JSON.parse(raw);
+      for (const map of [input?.configs, input?.results]) if (map && typeof map === 'object') {
+        const keys = Object.keys(map);
+        if (keys.length > 1024) throw new Error('oversized project map');
+        for (const id of keys) projectKey.parse(id); // parsers may otherwise discard reserved prototype keys
+      }
+      const saved = savedSchema.parse(input); this.configs = saved.configs; this.results = saved.results;
+    } catch (error) { if (found || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Capability state is unreadable or invalid; preserve and repair capabilities.json before execution'); }
+    this.initialized = true;
   }
   private save() { return this.writer.write(() => atomicWrite(path.join(this.root, 'capabilities.json'), JSON.stringify({ configs: this.configs, results: this.results }, null, 2))); }
-  view() { return structuredClone({ results: Object.values(this.results), configuredProjects: Object.keys(this.configs) }); }
+  view() {
+    const results = Object.values(this.results).map(result => {
+      if (this.liveResults.has(result.repoId) && currentObservation(result)) return result;
+      return {...result, status: 'blocked' as const, checks: [...result.checks, {id:'current-evidence', category:'environment', passed:false, detail:'Saved or expired observation is not current verification', remedy:'Refresh capability checks in this office process'}]};
+    });
+    return structuredClone({results, configuredProjects: Object.keys(this.configs)});
+  }
   configurationFingerprint(repoIds: string[]) {
     return crypto.createHash('sha256').update(JSON.stringify([...new Set(repoIds)].sort().map(id => [id, this.configs[id] ?? null]))).digest('hex');
   }
   async configure(repoId: string, input: unknown) {
+    if (!this.initialized) throw new Error('Capability state is not initialized; preserve and repair before execution');
+    projectKey.parse(repoId);
     if (this.stop.signal.aborted) throw new Error('Capability service is closing');
     if (this.demo) throw new HttpError(409, 'Demo cannot configure live capability probes');
     this.configs[repoId] = capabilityConfigSchema.parse(input);
+    this.liveResults.delete(repoId);
     for (const [key, entry] of this.cache) if (entry.result.repoId === repoId) this.cache.delete(key);
     delete this.results[repoId]; await this.save(); this.onChange();
   }
   async check(repoId: string, cwd: string, environmentUrl: string | undefined, cli = 'git', force = false): Promise<CapabilityResult> {
+    if (!this.initialized) throw new Error('Capability state is not initialized; preserve and repair before execution');
+    projectKey.parse(repoId);
     if (this.stop.signal.aborted) throw new Error('Capability service is closing');
     if (this.demo) return { repoId, status: 'ready', checkedAt: new Date().toISOString(), expiresAt: new Date().toISOString(), checks: [] };
     const config = this.configs[repoId];
     const hash = crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl, cli, cwd: path.resolve(cwd) })).digest('hex');
     const pendingKey = `${repoId}:${hash}`;
-    for (const [key, entry] of this.cache) if (Date.parse(entry.result.expiresAt) <= Date.now()) this.cache.delete(key);
+    for (const [key, entry] of this.cache) if (!currentObservation(entry.result)) this.cache.delete(key);
     const cache = this.cache.get(pendingKey);
     if (!force && cache?.key === hash && Date.parse(cache.result.expiresAt) > Date.now()) return structuredClone(cache.result);
     if (this.pending.has(pendingKey)) return this.pending.get(pendingKey)!;
@@ -202,6 +249,7 @@ export class CapabilityService {
       const result: CapabilityResult = { repoId, configHash: crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl })).digest('hex'), checkedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), status: checks.every((c) => c.passed) ? 'ready' : 'blocked', checks };
       const changed = JSON.stringify(this.results[repoId]?.checks) !== JSON.stringify(result.checks);
       this.results[repoId] = result;
+      this.liveResults.add(repoId);
       if (this.cache.size >= 1024) {const oldest = this.cache.keys().next().value; if (oldest !== undefined) this.cache.delete(oldest);}
       this.cache.set(pendingKey, { key: hash, result }); await this.save(); if (changed) this.onChange(); return structuredClone(result);
     })().finally(() => this.pending.delete(pendingKey));

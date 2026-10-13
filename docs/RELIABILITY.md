@@ -1,5 +1,11 @@
 # Reliability priorities 5–8
 
+## Restored capability evidence
+
+Capability startup validates saved plans with the same probe/schema rules as new configuration and validates result identities, timestamps, lifetimes, check IDs and status/check consistency. Reserved dictionary keys are rejected before parsing, avoiding silent prototype-key removal. State is bounded by file size and project/check limits. Only a genuinely missing file initializes empty state; malformed, oversized, contradictory or disappearing files fail closed and retain their original bytes. An uninitialized/failed service cannot configure probes or execute checks.
+
+Restored observations remain historical: the operations API marks them blocked with a refresh requirement until this office process completes live probes. Expired or future-dated current-process observations also lose their ready presentation; cached checks cannot reuse them. Valid plans are restored without silently resetting configuration. These checks establish persisted-state integrity and honest readiness presentation, not complete tenant compliance or authentication persistence. Evidence: `.swarm-reliability/capability-state-coverage-2026-10-13.txt`, `capability-state-coverage-exit-2026-10-13.txt`, `capability-state-api-e2e-2026-10-13.txt`, and `capability-state-live-runtime-2026-10-13.json`.
+
 ## Tool-time prerequisite refresh
 
 Worker and CEO session authorization now supports asynchronous capability refresh before supported tool dispatch. Workers check their launch runtime and directly linked projects; the CEO checks its host and captured project scope. Concurrent requests share one in-flight refresh, then recheck task ownership and worker configuration before granting authority. Supported SDK/CLI hooks check authorization around request-local governance, and office MCP handlers await it before calling their handler.
