@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Session tool authority
+
+Supported SDK pre-tool/permission callbacks and native CLI pre-tool hooks now require session authorization before request-local governance and recheck it after asynchronous policy/audit work. Missing, malformed or throwing authorization denies execution. Worker authority is bound to the active task generation, its launch configuration and completion state; legitimate runtime checkpoint updates preserve that binding. CEO authority is bound to its active job and working state. Cancellation, replacement, completion and shutdown revoke subsequent grants.
+
+Worker/QA/CEO office-tool definitions apply the same authorization at handler dispatch for both SDK and per-request HTTP MCP servers, including direct tool-call helpers. A revoked reviewer cannot approve a release, and a revoked developer cannot initiate a Canvas lease. Idle CLIs deny pre-tool requests until a follow-up is admitted. Read-only tools also require an active task; manager-facing office APIs remain separate.
+
+Tests exercise SDK callbacks, actual CLI hook routing with a synthetic PTY backend, MCP handlers in linked transports, and real coordinator options. They do not execute or authenticate a native model CLI. Authorization denials occur around the existing request-local audit, whose counters remain observed checkpoints rather than a complete authorization ledger. Already-dispatched handlers or external requests cannot be revoked by these checks. Untrusted/unhooked native tools, physical process containment, complete CEO callback ownership, temporal revalidation and full effective tenant schema/DLP enforcement remain open. Evidence: `.swarm-reliability/session-authority-coverage-2026-10-13.txt`, `session-authority-coverage-exit-2026-10-13.txt`, `session-authority-api-e2e-2026-10-13.txt`, and `session-authority-live-runtime-2026-10-13.json`.
+
 ## Worker execution context
 
 Capability admission is bound to the worker task generation and its execution configuration: runtime/defaults, CLI checkpoint, model/effort, actor instructions, primary/linked project identities and requirements, target tenancy, browser mode and platform pause. The office also binds the scoped capability configuration digest and delivery policy. Probe observations and unrelated projects do not change this configuration digest.

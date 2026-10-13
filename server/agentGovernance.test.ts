@@ -7,8 +7,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk',()=>({query:({options}:any)=>{
 }}));
 import { startSession } from './agentRunner.ts';
 afterEach(()=>{setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'}));captured.options=null;});
-async function options(){
- await new Promise<void>(resolve=>startSession({cwd:process.cwd(),prompt:'synthetic',systemAppend:'',model:'test',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'developer-1'},
+async function options(authorizeTool: (() => string | null) | undefined = () => null){
+ await new Promise<void>(resolve=>startSession({cwd:process.cwd(),prompt:'synthetic',systemAppend:'',model:'test',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'developer-1',authorizeTool},
  {log:()=>{},tool:()=>{},sessionId:()=>{},browserUrl:()=>{},screenshot:()=>{},finished:()=>resolve()}));return captured.options;
 }
 it('checks tools through the SDK pre-tool hook even when edit permissions would otherwise bypass canUseTool',async()=>{
@@ -20,6 +20,15 @@ it('checks tools through the SDK pre-tool hook even when edit permissions would 
  expect(await callback({hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{file_path:'Workflows/flow.json'}},'tool-2',{})).toEqual({});
  expect(await opts.canUseTool('Bash',{command:'pac copilot publish'},{})).toMatchObject({behavior:'deny'});
  expect(calls.at(-1).source).toBe('sdk-permission');
+});
+it('revokes SDK hook and permission grants when the task ends during governance evaluation', async () => {
+ let active=true; let complete!: () => void;
+ setToolGovernanceGate(()=>new Promise(resolve=>{complete=()=>resolve({status:'allowed',reason:'Synthetic gate passed'});}));
+ const opts=await options(()=>active?null:'Task revoked');
+ const pending=opts.canUseTool('Read',{},{}); active=false; complete();
+ expect(await pending).toMatchObject({behavior:'deny',message:'Task revoked'});
+ const result=await opts.hooks.PreToolUse[0].hooks[0]({hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}},'tool-4',{});
+ expect(result.hookSpecificOutput.permissionDecision).toBe('deny');
 });
 it('keeps governance failures closed in both SDK dispatch paths',async()=>{
  setToolGovernanceGate(async()=>{throw new Error('secret failure');});const opts=await options();

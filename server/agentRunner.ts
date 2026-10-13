@@ -7,7 +7,7 @@ import type { OfficeTools } from './ceo.ts';
 import type { UsageWarning } from './pacing.ts';
 import type { AgentTerminal } from './terminal.ts';
 import { VERSION } from './config.ts';
-import { governTool, hookDecision } from './toolGovernance.ts';
+import { governSessionTool, hookDecision, type SessionAuthorization } from './toolGovernance.ts';
 
 // One Claude Code instance (via the Claude Agent SDK) working one issue in its own git worktree.
 // The CEO runs through here too, with the office tools instead of a shell.
@@ -26,6 +26,8 @@ export interface SessionOptions {
   resumeSessionId?: string;
   /** The CEO's in-process MCP server (mcp__office__*). */
   office?: OfficeTools;
+  /** Task-owned authorization, checked for every supported pre-tool request. */
+  authorizeTool?: SessionAuthorization;
   /** The terminal runtime: the agent's terminal and the CLI to run in it. Without one: an Agent SDK session. */
   terminal?: AgentTerminal;
   cli?: AgentCli;
@@ -340,12 +342,12 @@ export function startSession(opts: SessionOptions, callbacks: SessionCallbacks):
     },
     permissionMode: 'acceptEdits',
     canUseTool: async (name, input) => {
-      const decision = await governTool(name, input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-permission' });
+      const decision = await governSessionTool(name, input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-permission' }, opts.authorizeTool);
       return decision.status === 'allowed' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
     },
     hooks: { PreToolUse: [{ hooks: [async (input) => {
       if (input.hook_event_name !== 'PreToolUse') return {};
-      const decision = await governTool(input.tool_name, input.tool_input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-hook' });
+      const decision = await governSessionTool(input.tool_name, input.tool_input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-hook' }, opts.authorizeTool);
       if (decision.status !== 'allowed') cb.log([{ kind: 'error', text: decision.reason }]);
       return decision.status === 'allowed' ? {} : hookDecision(decision);
     }] }] },

@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createOfficeTools, createDeliveryQaTools, createEngineeringTools, IssueCap, jobLabel, planRoute, specialtyLabel, specialtySlug, type CeoJob, type RouteRequest } from './ceo.ts';
 
 it('gives developers readiness and templates without QA approval authority', async () => {
@@ -32,6 +32,30 @@ it('exposes only status and session-bound release approval to QA', async () => {
     await client.callTool({ name: 'approve_release', arguments: { release_id: 'release', plan_hash: 'hash' } });
     expect(approved).toEqual([['release', 'hash']]);
   } finally { await client.close(); await tools.server.instance.close(); }
+});
+
+it.each(['sdk', 'http'])('revokes QA tools at handler dispatch in the %s server', async transportKind => {
+  let active=true; const approve=vi.fn(async()=> 'approved');
+  const tools=createDeliveryQaTools(()=> 'status',approve,undefined,()=>active?null:'Task superseded');
+  const server=transportKind==='sdk'?tools.server.instance:tools.serve();
+  const client=new Client({name:'revocation-test',version:'1'});
+  const [outbound,inbound]=InMemoryTransport.createLinkedPair();
+  await server.connect(inbound);await client.connect(outbound);
+  try {
+    await client.callTool({name:'approve_release',arguments:{release_id:'release',plan_hash:'hash'}});
+    expect(approve).toHaveBeenCalledOnce();active=false;
+    const denied=await client.callTool({name:'approve_release',arguments:{release_id:'release',plan_hash:'hash'}});
+    expect(denied.isError).toBe(true);expect(denied.content).toEqual([{type:'text',text:'Task superseded'}]);
+    expect(approve).toHaveBeenCalledOnce();
+    expect(JSON.parse(await tools.call('approve_release',{release_id:'release',plan_hash:'hash'})).isError).toBe(true);
+  } finally {await client.close();await server.close();}
+});
+
+it('does not acquire Canvas authority after a developer session is revoked',async()=>{
+  const acquire=vi.fn(async()=> 'lease');const release=vi.fn(async()=>{});
+  const tools=createEngineeringTools(()=> 'status',{acquire,release},()=> 'Task cancelled');
+  const result=JSON.parse(await tools.call('canvas_authoring_acquire',{app:'11111111-1111-4111-8111-111111111111',owner:'synthetic'}));
+  expect(result.isError).toBe(true);expect(acquire).not.toHaveBeenCalled();
 });
 
 describe('specialtySlug', () => {

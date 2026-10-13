@@ -26,7 +26,7 @@ import {
 import type { OfficeTools } from './ceo.ts';
 import type { AgentTerminal } from './terminal.ts';
 import type { AgentCli } from '../shared/types.ts';
-import { governTool, hookDecision, hookFailure } from './toolGovernance.ts';
+import { governSessionTool, hookDecision, hookFailure } from './toolGovernance.ts';
 
 // One agent session as the real CLI in a pseudo-terminal: the same contract as the Agent SDK runner (log lines, the
 // current tool, the final text, finished), so the rest of the office doesn't care which runtime an agent uses.
@@ -322,7 +322,7 @@ export async function releaseClis(restart: boolean): Promise<void> {
 async function idleHook(live: LiveCli, b: Record<string, unknown>): Promise<Record<string, unknown>> {
   switch (String(b.hook_event_name ?? '')) {
     case 'PreToolUse':
-      return hookDecision(await governTool(String(b.tool_name ?? ''), toolInput(b), { actor: live.agentId, runtime: live.cli, source: 'cli-hook' }));
+      return hookDecision({status: 'blocked', reason: 'No active admitted task owns this CLI; submit a checked follow-up first'});
     case 'UserPromptSubmit': {
       const text = String(b.prompt ?? '').trim();
       if (!text || live.term.onIdlePrompt?.(text)) return {};
@@ -499,7 +499,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
           cb.tool(name);
           if (name === 'mcp__playwright__browser_navigate' && typeof input.url === 'string') cb.browserUrl(input.url);
         }
-        const decision = await governTool(name, input, { actor: opts.agentId ?? opts.role, runtime: cli, source: 'cli-hook' });
+        const decision = await governSessionTool(name, input, { actor: opts.agentId ?? opts.role, runtime: cli, source: 'cli-hook' }, opts.authorizeTool);
         if (decision.status !== 'allowed') log([{ kind: 'error', text: decision.reason }]);
         return hookDecision(decision);
       }

@@ -2,6 +2,7 @@ import { deliveryCapabilitiesPrompt } from './deliveryCapabilities.ts';
 import { discoverSkills, selectSkills } from './skillRegistry.ts';
 import { templateCatalog, templateFiles, type TemplateId } from './implementationTemplates.ts';
 import { DELIVERY_CEO } from '../shared/delivery.ts';
+import { sessionAuthority, type SessionAuthorization } from './toolGovernance.ts';
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { blockers, holdUps, setDependsOn } from '../shared/issues.ts';
@@ -54,7 +55,16 @@ export interface OfficeTools {
 
 const EFFORT = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 
-export function createOfficeTools(h: OfficeHandlers): OfficeTools {
+type OfficeToolDefinition = NonNullable<Parameters<typeof createSdkMcpServer>[0]['tools']>[number];
+function authorizeDefinitions<T extends OfficeToolDefinition>(defs: T[], authorize?: SessionAuthorization): T[] {
+  return defs.map(def => ({...def, handler: async (args: Parameters<OfficeToolDefinition['handler']>[0], extra: Parameters<OfficeToolDefinition['handler']>[1]) => {
+    const denied = authorize ? sessionAuthority(authorize) : null;
+    if (denied) return {isError: true, content: [{type: 'text', text: denied.reason}]};
+    return def.handler(args, extra);
+  }}));
+}
+
+export function createOfficeTools(h: OfficeHandlers, authorize?: SessionAuthorization): OfficeTools {
   const run = async (fn: () => string | Promise<string>) => {
     try {
       return { content: [{ type: 'text' as const, text: await fn() }] };
@@ -62,7 +72,7 @@ export function createOfficeTools(h: OfficeHandlers): OfficeTools {
       return { content: [{ type: 'text' as const, text: `Refused: ${(err as Error).message}` }], isError: true };
     }
   };
-  const defs = [
+  let defs = [
     tool('installed_skills', 'Discover installed Power Platform instructions and content hashes. Installation does not prove tools or tenant access.', { task: z.string().max(2000).optional() }, (a) => run(() => { const catalogue = discoverSkills(); return JSON.stringify(a.task ? { ...catalogue, skills: selectSkills(catalogue, a.task) } : catalogue); })),
     tool('capability_status', 'Pre-assignment authentication, environment, licence, MCP, CLI and connector readiness; failed/unknown checks block new work.', {}, () => run(() => h.capabilityStatus?.() ?? 'Capability service unavailable')),
     tool('implementation_templates', 'List tested starter contracts or read a platform recipe. Tenant validation status is explicit.', { platform: z.enum(['canvas', 'power-pages', 'dataverse', 'flow', 'deployment', 'copilot-studio']).optional() }, (a) => run(() => JSON.stringify(a.platform ? templateFiles(a.platform as TemplateId) : templateCatalog()))),
@@ -160,6 +170,7 @@ export function createOfficeTools(h: OfficeHandlers): OfficeTools {
     ),
   ];
   const server = createSdkMcpServer({ name: 'office', version: '1.0.0', tools: defs });
+  defs = authorizeDefinitions(defs, authorize);
   return {
     server,
     serve: () => createSdkMcpServer({ name: 'office', version: '1.0.0', tools: defs }).instance,
@@ -421,30 +432,32 @@ export function specialtySlug(s: string | undefined) {
 export const specialtyLabel = (slug: string) => `swarm:${slug}`;
 
 /** QA-only authority: reviewer identity is captured from the session, never accepted as an argument. */
-export function createDeliveryQaTools(status: () => string, approve: (id: string, hash: string) => Promise<string>, visual?: (id: string, review: unknown) => Promise<string>): OfficeTools {
+export function createDeliveryQaTools(status: () => string, approve: (id: string, hash: string) => Promise<string>, visual?: (id: string, review: unknown) => Promise<string>, authorize?: SessionAuthorization): OfficeTools {
   const run = async (fn: () => string | Promise<string>) => {
     try { return { content: [{ type: 'text' as const, text: await fn() }] }; }
     catch (err) { return { content: [{ type: 'text' as const, text: String((err as Error).message) }], isError: true }; }
   };
-  const defs = [
+  let defs = [
     tool('delivery_status', 'Read pinned releases and their immutable acceptance plans for independent QA review.', {}, () => run(status)),
     tool('approve_backend', 'Inspect runner-owned API assertions, correlated transaction evidence and recovery rehearsal for an API-only release. Does not approve UI or permission isolation.', { run_id: z.string(), evidence_hash: z.string(), notes: z.string().min(40), recovery_reviewed: z.literal(true) }, (a) => run(() => visual ? visual(a.run_id, { evidenceHash: a.evidence_hash, scores: [], notes: a.notes, recoveryReviewed: a.recovery_reviewed }) : 'Backend review unavailable')),
     tool('approve_visual', 'Inspect actual screenshots, accessibility/UX evidence and recovery rehearsal. Scores are hierarchy, readability, consistency, responsiveness and task clarity (each 4 or 5).', { run_id: z.string(), evidence_hash: z.string(), scores: z.array(z.number()).length(5), notes: z.string().min(40), recovery_reviewed: z.literal(true) }, (a) => run(() => visual ? visual(a.run_id, { evidenceHash: a.evidence_hash, scores: a.scores, notes: a.notes, recoveryReviewed: a.recovery_reviewed }) : 'Visual review unavailable')),
     tool('approve_release', 'Approve the exact release head and plan after inspecting its coverage and assertions. No self-approval.', { release_id: z.string(), plan_hash: z.string() }, (a) => run(() => approve(a.release_id, a.plan_hash))),
   ];
+  defs = authorizeDefinitions(defs, authorize);
   return { server: createSdkMcpServer({ name: 'office', tools: defs }), serve: () => createSdkMcpServer({ name: 'office', tools: defs }).instance,
     async call(name, args) { const def = defs.find((d) => d.name === name); if (!def) throw new Error('Unknown QA tool'); const result = await def.handler(args as never, undefined); return JSON.stringify(result); } };
 }
 
 /** Developer sessions can discover starters/readiness without obtaining release approval authority. */
-export function createEngineeringTools(capabilities: () => string, authoring?: { acquire(app: string, owner: string): Promise<unknown>; release(token: string): Promise<void> }): OfficeTools {
-  const defs = [
+export function createEngineeringTools(capabilities: () => string, authoring?: { acquire(app: string, owner: string): Promise<unknown>; release(token: string): Promise<void> }, authorize?: SessionAuthorization): OfficeTools {
+  let defs = [
     tool('installed_skills', 'Discover installed Power Platform skills and hashes; verify their tools inside your session before using them.', { task: z.string().max(2000).optional() }, async (a) => { const catalogue = discoverSkills(); return { content: [{ type: 'text' as const, text: JSON.stringify(a.task ? { ...catalogue, skills: selectSkills(catalogue, a.task) } : catalogue) }] }; }),
     tool('capability_status', 'Read verified project capabilities and actionable blockers.', {}, async () => ({ content: [{ type: 'text' as const, text: capabilities() }] })),
     tool('canvas_authoring_acquire', 'Acquire exclusive local Canvas ownership before Studio/MCP edits. Keep the token until saving and closing your session. This does not force a remote Studio unlock.', { app: z.uuid(), owner: z.string().min(1).max(80) }, async (a) => { if (!authoring) throw new Error('Canvas ownership unavailable'); return { content: [{ type: 'text' as const, text: JSON.stringify(await authoring.acquire(a.app, a.owner)) }] }; }),
     tool('canvas_authoring_release', 'Release only your saved/closed Canvas authoring session using its ownership token.', { token: z.uuid() }, async (a) => { if (!authoring) throw new Error('Canvas ownership unavailable'); await authoring.release(a.token); return { content: [{ type: 'text' as const, text: 'Released local Canvas ownership.' }] }; }),
     tool('implementation_templates', 'Read a supported, versioned starter recipe. Copy/adapt files inside your own worktree; tenant verification remains required.', { platform: z.enum(['canvas', 'power-pages', 'dataverse', 'flow', 'deployment', 'copilot-studio']).optional() }, async (a) => ({ content: [{ type: 'text' as const, text: JSON.stringify(a.platform ? templateFiles(a.platform) : templateCatalog()) }] })),
   ];
+  defs = authorizeDefinitions(defs, authorize);
   return { server: createSdkMcpServer({ name: 'office', tools: defs }), serve: () => createSdkMcpServer({ name: 'office', tools: defs }).instance,
     async call(name, args) { const def = defs.find((d) => d.name === name); if (!def) throw new Error('Unknown engineering tool'); return JSON.stringify(await def.handler(args as never, undefined)); } };
 }

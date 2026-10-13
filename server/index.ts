@@ -49,14 +49,14 @@ setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, in
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();
 swarm.capabilityStatus = () => JSON.stringify(capabilities.view());
-swarm.engineeringTools = () => createEngineeringTools(swarm.capabilityStatus, {
+swarm.engineeringTools = authorize => createEngineeringTools(swarm.capabilityStatus, {
   async acquire(app, owner) {
     if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
     const tenancy = await backend.tenancy.info(); const target = tenancy.environments.find((environment) => environment.active);
     if (!target || tenancy.status !== 'connected') throw new HttpError(409, 'Connect the authoring environment first');
     return canvasOwnership.acquire(target.url, app, owner);
   }, release: (token) => canvasOwnership.release(token),
-});
+}, authorize);
 swarm.capabilityFingerprint = () => JSON.stringify(capabilities.view().results.map((r) => [r.repoId, r.status, r.configHash, r.checks]));
 swarm.workerAdmissionContext = repoIds => JSON.stringify([capabilities.configurationFingerprint(repoIds), delivery.view().policy]);
 swarm.capabilityPreflight = async (repoId, cli) => {
@@ -87,13 +87,13 @@ swarm.createDeliveryRelease = async (repoId, input) => {
   if (!snapshot.agents.some((a) => a.id === plan.owner && a.repoId === repoId && a.role === 'dev') || !snapshot.agents.some((a) => a.id === plan.qaOwner && a.repoId === repoId && a.role === 'qa')) throw new HttpError(400, 'Assign a developer and a separate QA agent from this project');
   return JSON.stringify(await delivery.createRelease(repo, plan));
 };
-swarm.deliveryQaTools = (agentId, repoId) => createDeliveryQaTools(() => JSON.stringify(delivery.view(repoId)), async (id, hash) => {
+swarm.deliveryQaTools = (agentId, repoId, authorize) => createDeliveryQaTools(() => JSON.stringify(delivery.view(repoId)), async (id, hash) => {
   if (!delivery.view(repoId).releases.some((r) => r.id === id)) throw new HttpError(403, 'Release belongs to another project');
   return JSON.stringify(await delivery.approveRelease(id, agentId, hash));
 }, async (id, review) => {
   if (!delivery.view(repoId).runs.some((r) => r.id === id)) throw new HttpError(403, 'Run belongs to another project');
   return JSON.stringify(await delivery.approveVisual(id, agentId, review));
-});
+}, authorize);
 swarm.requestDeliveryReview = async (id) => {
   const release = delivery.view().releases.find((r) => r.id === id);
   if (!release) throw new HttpError(404, 'Release not found');

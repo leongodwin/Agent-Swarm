@@ -2,12 +2,32 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { evaluateToolRequest, ToolGovernanceService, governTool, setToolGovernanceGate, hookDecision, hookFailure } from './toolGovernance.ts';
+import { evaluateToolRequest, ToolGovernanceService, governTool, governSessionTool, sessionAuthority, setToolGovernanceGate, hookDecision, hookFailure } from './toolGovernance.ts';
 import { handleHook } from './cliRunner.ts';
 
 const roots: string[] = [];
 const checkpoint = { actor: 'qa-1', runtime: 'claude', source: 'cli-hook' } as const;
 const fixture = async () => { const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-tool-governance-'));roots.push(root);return root; };
+
+it('denies missing, invalid and failed session authorization before issuing policy work', async () => {
+ let calls=0; setToolGovernanceGate(async()=>{calls++;return {status:'allowed',reason:'synthetic'};});
+ for(const authorize of [undefined,()=>'',()=>{throw new Error('secret failure');}]) {
+   expect((await governSessionTool('Read',{},checkpoint,authorize)).status).not.toBe('allowed');
+ }
+ expect(calls).toBe(0); expect(sessionAuthority(()=>null)).toBeNull();
+ expect(JSON.stringify(sessionAuthority(()=>{throw new Error('secret failure');}))).not.toContain('secret failure');
+});
+
+it('checks session ownership again after asynchronous governance before granting execution', async () => {
+ let active=true;let finish!:()=>void;
+ setToolGovernanceGate(()=>new Promise(resolve=>{finish=()=>resolve({status:'allowed',reason:'synthetic'});}));
+ const pending=governSessionTool('Read',{},checkpoint,()=>active?null:'Task was cancelled');
+ active=false; finish(); expect(await pending).toEqual({status:'blocked',reason:'Task was cancelled'});
+ setToolGovernanceGate(async()=>({status:'blocked',reason:'Policy denied'}));
+ expect(await governSessionTool('Read',{},checkpoint,()=>null)).toEqual({status:'blocked',reason:'Policy denied'});
+ setToolGovernanceGate(async()=>({status:'allowed',reason:'synthetic'}));
+ expect((await governSessionTool('Read',{},checkpoint,()=>null)).status).toBe('allowed');
+});
 afterEach(async () => {setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'}));await Promise.all(roots.splice(0).map(root=>fs.rm(root,{recursive:true,force:true})));});
 
 it('blocks known connector and anonymous-auth requests while retaining diagnostic reads and remediation documentation', () => {

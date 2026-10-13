@@ -9,6 +9,24 @@ export { hookDecision, hookFailure } from '../shared/hookDecision.ts';
 
 export interface ToolCheckpoint { actor: string; runtime: string; source: 'sdk-hook' | 'sdk-permission' | 'cli-hook'; }
 export interface ToolDecision { status: 'allowed' | 'blocked' | 'unavailable'; reason: string; }
+export type SessionAuthorization = () => string | null;
+
+export function sessionAuthority(authorize?: SessionAuthorization): ToolDecision | null {
+  if (!authorize) return {status: 'unavailable', reason: 'Session authorization is unavailable; execution denied'};
+  try {
+    const reason = authorize();
+    return reason === null ? null : {status: 'blocked', reason: typeof reason === 'string' && reason ? reason : 'Session authorization is invalid; execution denied'};
+  } catch { return {status: 'unavailable', reason: 'Session authorization failed; execution denied'}; }
+}
+
+/** Recheck cancellation after asynchronous policy/audit work, immediately before
+ * returning an execution grant. This cannot revoke a request already dispatched. */
+export async function governSessionTool(name: string, input: unknown, checkpoint: ToolCheckpoint, authorize?: SessionAuthorization): Promise<ToolDecision> {
+  const denied = sessionAuthority(authorize);
+  if (denied) return denied;
+  const decision = await governTool(name, input, checkpoint);
+  return decision.status === 'allowed' ? sessionAuthority(authorize) ?? decision : decision;
+}
 type Gate = (name: string, input: unknown, checkpoint: ToolCheckpoint) => Promise<ToolDecision>;
 let gate: Gate = async () => ({ status: 'unavailable', reason: 'Tool governance is not initialized; retry after office readiness' });
 export const setToolGovernanceGate = (value: Gate) => { gate = value; };

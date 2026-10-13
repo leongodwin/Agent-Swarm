@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Backend } from './backend.ts';
 import type { SessionCallbacks } from './agentRunner.ts';
+import type { SessionOptions } from './agentRunner.ts';
 import type { PullInfo } from '../shared/types.ts';
 import {CEO_ID} from '../shared/types.ts';
 
@@ -380,6 +381,25 @@ it('blocks new prompts to a working session when readiness expires without sendi
   expect(swarm.snapshot().agents.find(a => a.id === agent.id)?.status).toBe('working');
 });
 
+it('keeps tool authority through a legitimate checkpoint update and revokes it on configuration change and cancellation', async () => {
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  await swarm.assign(agent.id,1);for(let i=0;i<60&&!fake.startSession.mock.calls.length;i++)await Promise.resolve();
+  const opts=fake.startSession.mock.calls[0][0] as SessionOptions;
+  const callbacks=fake.startSession.mock.calls[0][1];
+  expect(opts.authorizeTool?.()).toBeNull();callbacks.sessionId('synthetic-runtime-checkpoint');
+  expect(opts.authorizeTool?.()).toBeNull();
+  swarm.updateAgent(agent.id,{model:'claude-changed'});expect(opts.authorizeTool?.()).toContain('configuration changed');
+  swarm.stopAgent(agent.id);expect(opts.authorizeTool?.()).toContain('no longer owns');
+});
+
+it('revokes worker authority on completion before a replacement is dispatched', async () => {
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  await swarm.assign(agent.id,1);for(let i=0;i<60&&!fake.startSession.mock.calls.length;i++)await Promise.resolve();
+  const opts=fake.startSession.mock.calls[0][0] as SessionOptions;
+  fake.startSession.mock.calls[0][1].finished({ok:false,text:'synthetic',costUsd:0,turns:1,errors:['synthetic failure']});
+  expect(opts.authorizeTool?.()).toContain('no longer owns');
+});
+
 it('does not send a checked follow-up after shutdown changes its session', async () => {
   const {swarm, fake} = await office(true); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
   await swarm.assign(agent.id, 1); for (let i = 0; i < 30 && !fake.startSession.mock.calls.length; i++) await Promise.resolve();
@@ -498,6 +518,18 @@ it('blocks CEO work without native terminal readiness and retains the queued job
   expect(preflight).not.toHaveBeenCalled(); expect(fake.startSession).not.toHaveBeenCalled();
   expect(swarm.snapshot().ceo).toMatchObject({job: null, blockedReason: expect.stringContaining('terminal runtime'), queue: [{kind: 'chat'}]});
   expect(swarm.snapshot().ceo.retryAt).toBeGreaterThan(Date.now());
+});
+
+it('binds CEO tool authority to its active job and revokes it when stopped', async () => {
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});
+  swarm.ceoPreflight=async()=>null;
+  swarm.messageCeo('Synthetic company review');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  const opts=fake.startSession.mock.calls[0][0] as SessionOptions;
+  expect(opts.authorizeTool?.()).toBeNull();swarm.stopAgent(CEO_ID);
+  expect(opts.authorizeTool?.()).toContain('no longer owns');
+  const result=await opts.office!.call('company_status',{});
+  expect(result).toContain('no longer owns');
 });
 
 it.each(['missing', 'empty', 'blocked'])('blocks %s CEO readiness without dropping the job or spamming retries', async mode => {

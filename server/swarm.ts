@@ -1,4 +1,5 @@
 import { deliveryCapabilitiesPrompt } from './deliveryCapabilities.ts';
+import type { SessionAuthorization } from './toolGovernance.ts';
 import { DELIVERY_ENGINEERING } from '../shared/delivery.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -305,8 +306,8 @@ export class Swarm {
   deliveryRevision = () => 0;
   requestDeliveryReview: (id: string) => Promise<string> = async () => { throw new Error('Delivery unavailable'); };
   createDeliveryRelease: (repoId: string, plan: unknown) => Promise<string> = async () => { throw new Error("Delivery unavailable"); };
-  engineeringTools: () => OfficeTools | undefined = () => undefined;
-  deliveryQaTools: (agentId: string, repoId: string) => OfficeTools | undefined = () => undefined;
+  engineeringTools: (authorize?: SessionAuthorization) => OfficeTools | undefined = () => undefined;
+  deliveryQaTools: (agentId: string, repoId: string, authorize?: SessionAuthorization) => OfficeTools | undefined = () => undefined;
   deliveryStatus = () => JSON.stringify({ message: 'Delivery service is unavailable' });
   private state: Persisted = {
     version: 2,
@@ -339,7 +340,7 @@ export class Swarm {
    * The CEO's office tools. Every session gets its own server: one can only be connected to one session at a time, so
    * a shared one left the next session connected but without any tools while an earlier session still held it.
    */
-  private officeTools(): OfficeTools {
+  private officeTools(authorize?: SessionAuthorization): OfficeTools {
     return createOfficeTools({
       companyStatus: () => this.companyStatus(),
       deliveryStatus: () => this.deliveryStatus(),
@@ -353,7 +354,7 @@ export class Swarm {
       proposeLetGo: (a) => this.proposeLetGo(a),
       fileIssue: (a) => this.fileIssue(a),
       routeIssue: (a) => this.routeIssue(a),
-    });
+    }, authorize);
   }
   private ceoIssues = new IssueCap(MAX_ISSUES_PER_JOB); // issues filed during the current CEO job
   private messageSeq = 1;
@@ -1754,13 +1755,13 @@ export class Swarm {
     });
   }
 
-  private workerContext(a: PersistedAgent, repo: PersistedRepo, resume?: string, retainedCli?: AgentCli) {
+  private workerContext(a: PersistedAgent, repo: PersistedRepo, resume?: string, retainedCli?: AgentCli, checkpointCli = a.sessionCli) {
     const project = (r: PersistedRepo) => [r.id, r.fullName, r.localPath, r.defaultBranch, r.targetTenancy, r.browserTesting, r.mission, r.summary, r.qaBrief];
     try {
     return JSON.stringify([
       this.state.repos.includes(repo), this.state.agents.includes(a), project(repo),
       repo.links.map(id => { const linked = this.state.repos.find(r => r.id === id); return linked ? project(linked) : [id, null]; }),
-      a.repoId, a.name, a.role, a.cli, a.sessionCli, a.model, a.effort, a.brief,
+      a.repoId, a.name, a.role, a.cli, checkpointCli, a.model, a.effort, a.brief,
       this.state.settings.runtime, this.state.settings.defaultCli, this.state.settings.defaultModel, this.state.settings.defaultEffort,
       this.backend.terminals, resume, retainedCli, this.taskPaused(a.issueTitle ?? ''),
       this.workerAdmissionContext([repo.id, ...repo.links]),
@@ -1859,6 +1860,13 @@ export class Swarm {
     const generation = this.taskGeneration(a);
     let completed = false;
     const live = () => !completed && this.ownsTask(a, generation);
+    const admission = this.workerAdmissions.get(a.id)!;
+    const checkpointCli = a.sessionCli;
+    const authorizeTool: SessionAuthorization = () => {
+      if (!live() || a.status !== 'working') return 'This task no longer owns the session; execution denied';
+      return admission.context === this.workerContext(a, repo, admission.resume, admission.retainedCli, checkpointCli)
+        ? null : 'Execution configuration changed; stop and retry with fresh readiness';
+    };
     a.status = 'working';
     const how = this.sessionRuntime(a, resumeSessionId, mode === 'reattach' ? a.sessionCli ?? undefined : undefined);
     this.emitAgent(a);
@@ -1871,7 +1879,8 @@ export class Swarm {
         effort: a.effort || this.state.settings.defaultEffort,
         browserTesting: repo.browserTesting,
         additionalDirectories: this.linkedRepos(repo).map((r) => this.backend.mainDir(r.fullName)),
-        office: a.role === 'qa' ? this.deliveryQaTools(a.id, repo.id) : this.engineeringTools(),
+        office: a.role === 'qa' ? this.deliveryQaTools(a.id, repo.id, authorizeTool) : this.engineeringTools(authorizeTool),
+        authorizeTool,
         role: a.task === 'qa' ? 'qa' : a.role, // a developer covering QA works under QA's rules
         outputSchema,
         // A developer's CLI stays at its prompt afterwards, for the manager and for follow-ups; QA's closes.
@@ -3077,6 +3086,8 @@ export class Swarm {
     // A chat carries on from the CEO's last session, so "why did you propose that?" has an answer.
     try {
     const how = this.sessionRuntime(a, job.kind === 'chat' ? (a.sessionId ?? undefined) : undefined);
+    const authorizeTool: SessionAuthorization = () => !this.closed && this.state.ceo.job === job && a.status === 'working'
+      ? null : 'This CEO job no longer owns the session; execution denied';
     rt.session = this.backend.startSession(
       {
         cwd: CEO_DIR,
@@ -3095,7 +3106,8 @@ export class Swarm {
         browserTesting: false,
         additionalDirectories: this.state.repos.filter((r) => scopeIds.includes(r.id) && this.repoRt.get(r.id)?.cloneStatus === 'ready').map((r) => this.backend.mainDir(r.fullName)),
         role: 'ceo',
-        office: this.officeTools(),
+        office: this.officeTools(authorizeTool),
+        authorizeTool,
         ...how,
       },
       {
