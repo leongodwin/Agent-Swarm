@@ -1,0 +1,15 @@
+# Synthesis requirements traceability
+
+A valid-shaped model response could previously complete with one generic requirement entry regardless of the brief's requested components and deliverables. New jobs receive a server-generated catalogue for the brief, optional declared tenant context, each component's title/role/platform/details and every deliverable. Position-based identities distinguish repeated source text; SHA-256 binds each catalogue item to its captured identity/kind/text.
+
+Each model requirement must return its catalogue ID and exact source hash, design and acceptance text, and one or more existing implementation-plan step IDs. Validation requires exactly one entry per catalogue item, unique plan identities, nonempty plan deliverables/acceptance and unique valid links. Missing, duplicate, invented or changed coverage blocks publication and retains a failed job. The validated catalogue and plan links appear in the hashed Markdown draft for independent review. Existing saved artifacts are not rewritten.
+
+The catalogue is bounded at 1,000 items and requirements/context/output byte limits still apply. An oversized catalogue is rejected before session reservation; the remedy is to split the brief. List/input size constraints do not imply that every possible maximum-sized brief can complete inside five minutes.
+
+This establishes source coverage and structural plan linkage, not semantic correctness, comprehensive Dataverse/DLP compliance, tool availability, model quality or tenant acceptance. Repeating generic design text against every valid ID is still possible; independent architecture QA remains mandatory. A source hash proves binding, not that the model reasoned correctly. The declared tenant context remains unverified until authenticated target checks. Installed skill references remain in planning context with their runtime availability unverified, and Copilot Studio implementation remains paused.
+
+Tests use synthetic model callbacks and temporary repositories. An incomplete multi-deliverable draft is denied before files are published; a subsequent fully linked draft is saved with source traceability. Focused tests also cover source changes, missing/duplicate/unknown identities, incorrect digests, invalid plan links and ambiguous/empty plans. Admission tests reject a catalogue exceeding the bound without taking capacity, changing job history or starting a runtime.
+
+Evidence: ignored `.swarm-reliability/synthesis-trace-tests.txt`, `synthesis-trace-build.txt` and `synthesis-trace-coverage.txt`. No real model inference or tenant mutation is claimed by these checks. Codex remains default; only Codex, Gemini and OpenCode are permitted. Maintenance drain and the Copilot Studio pause remain preserved; the full production goal remains active.
+
+Full verification: 1,292 tests passed, one existing TODO across 108 files; build/typecheck passed. Whole-backend branches reached 5,762/8,915 (64.63%), failing the unchanged 90.01% gate. Structural coverage tests do not replace a new real-model synthesis, semantic QA or sustained latency measurement.

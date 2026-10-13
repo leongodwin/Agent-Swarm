@@ -5,12 +5,13 @@ import path from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
 import crypto from 'node:crypto';
 import {HldSynthesisService,type SynthesisDependencies} from './hldSynthesis.ts';
+import {synthesisRequirements} from './synthesisTraceability.ts';
 import type {SessionCallbacks,SessionOptions} from './agentRunner.ts';
 const cleanup:Array<()=>Promise<void>>=[];
 afterEach(async()=>{vi.useRealTimers();for(const close of cleanup.splice(0))await close();});
 const input={solutionName:'Synthetic expense design',problemContext:'Capture GBP expenses with a receipt for each item.',components:[]};
 const detail='Synthetic explicit design decision with independently observable acceptance evidence.';
-const output={summary:detail,architecture:detail,dataModel:detail,securityAndGovernance:detail,operationsAndRecovery:detail,decisions:[{decision:detail,rationale:detail,alternatives:detail}],risks:[{risk:detail,mitigation:detail}],requirements:[{requirement:detail,design:detail,acceptance:detail}],missingEvidence:['Tenant validation remains unavailable.'],implementationPlan:['data','app','verify'].map(id=>({id,title:id,deliverables:['Synthetic artifact'],acceptance:[detail]})),mermaidDiagrams:{topology:'flowchart LR\n A-->B',erd:'erDiagram\n REPORT ||--o{ ITEM : contains',sequence:'sequenceDiagram\n A->>B: Submit'}};
+const output={summary:detail,architecture:detail,dataModel:detail,securityAndGovernance:detail,operationsAndRecovery:detail,decisions:[{decision:detail,rationale:detail,alternatives:detail}],risks:[{risk:detail,mitigation:detail}],requirements:synthesisRequirements(input).map(source=>({requirementId:source.id,sourceSha256:source.sourceSha256,planStepIds:['data'],requirement:detail,design:detail,acceptance:detail})),missingEvidence:['Tenant validation remains unavailable.'],implementationPlan:['data','app','verify'].map(id=>({id,title:id,deliverables:['Synthetic artifact'],acceptance:[detail]})),mermaidDiagrams:{topology:'flowchart LR\n A-->B',erd:'erDiagram\n REPORT ||--o{ ITEM : contains',sequence:'sequenceDiagram\n A->>B: Submit'}};
 async function fixture(admission:SynthesisDependencies['admission']=async()=>null){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'hld-synthesis-')),checkout=path.join(root,'repo');await fs.mkdir(checkout);
   let fingerprint='original';let callbacks!:SessionCallbacks;
@@ -22,6 +23,18 @@ async function fixture(admission:SynthesisDependencies['admission']=async()=>nul
   return {service,root,checkout,start,stop,deps,lease,get callbacks(){return callbacks;},change:()=>{fingerprint='changed';}};
 }
 const success=(structured:unknown=output)=>({ok:true,text:'',structured,costUsd:0.01,turns:1,errors:[]});
+it('requires component/deliverable coverage before publishing a model draft',async()=>{
+  const f=await fixture(),brief={...input,components:[{title:'Expense Canvas',role:'Maker',badge:'Canvas',details:'Capture GBP expenses and every receipt.',deliverables:['Expense.msapp','Deployment runbook']}]};
+  const job=await f.service.start('synthetic/project',brief);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());expect(f.start.mock.calls[0][0].prompt).toContain('component-1-deliverable-2');f.callbacks.finished(success());
+  await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('failed'));expect(f.service.view('synthetic/project',job.id)[0].error).toContain('every declared requirement');expect(await fs.readdir(f.checkout)).toEqual([]);
+  const retry=await f.service.start('synthetic/project',brief);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledTimes(2));f.callbacks.finished(success({...output,requirements:synthesisRequirements(brief).map(source=>({...output.requirements[0],requirementId:source.id,sourceSha256:source.sourceSha256}))}));
+  await vi.waitFor(()=>expect(f.service.view('synthetic/project',retry.id)[0].status).toBe('completed'));const artifact=await f.service.result('synthetic/project',retry.id);expect(artifact.result.markdownContent).toContain('Declared-source traceability');expect(artifact.result.markdownContent).toContain('component-1-deliverable-2: Deployment runbook');
+});
+it('rejects an oversized requirement catalogue before reserving a model session',async()=>{
+  const f=await fixture(),reserve=vi.spyOn(f.deps,'reserve'),file=path.join(f.root,'architecture-synthesis.json'),before=await fs.readFile(file,'utf8');
+  const components=Array.from({length:10},()=>({title:'Synthetic',role:'Maker',badge:'Canvas',details:'Bounded synthetic scope',deliverables:Array.from({length:100},()=> 'Artifact')}));
+  await expect(f.service.start('synthetic/project',{...input,components})).rejects.toThrow('1,000');expect(reserve).not.toHaveBeenCalled();expect(f.start).not.toHaveBeenCalled();expect(await fs.readFile(file,'utf8')).toBe(before);expect(f.service.view('synthetic/project')).toEqual([]);
+});
 it('runs structured model synthesis with no tool authority and retains a validated version across restart',async()=>{
   const f=await fixture();const job=await f.service.start('synthetic/project',input);
   await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());

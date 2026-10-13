@@ -12,6 +12,7 @@ import {saveHldArtifact,loadHldVersion} from './hldArtifacts.ts';
 import {auditDlpCompliance} from '../shared/dlp.ts';
 import type {AuxiliarySessionLease} from '../shared/sessionUsage.ts';
 import {synthesisSummary} from './synthesisMetrics.ts';
+import {synthesisRequirements,requireSynthesisTraceability} from './synthesisTraceability.ts';
 
 export interface SynthesisContext {checkoutPath:string;fingerprint:string;copilotPaused:boolean;skills:unknown[]}
 export interface SynthesisDependencies {
@@ -64,6 +65,7 @@ export class HldSynthesisService {
     const requirements=JSON.stringify(input);
     if(Buffer.byteLength(requirements)>128*1024)throw new HttpError(413,'Synthesis requirements exceed their bound');
     if(auditDlpCompliance(requirements,'architecture-requirements').length)throw new HttpError(409,'Architecture requirements failed the local connector safeguard');
+    try{synthesisRequirements(input);}catch(error){throw new HttpError(413,errorText(error));}
     const job:SynthesisJob={id:crypto.randomUUID(),repoId,status:'queued',runtime:'codex-cli',startedAt:Date.now(),deadlineMs:DEADLINE,events:[],costUsd:0,turns:0};
     const lease=this.deps.reserve(repoId,job.id);
     const controller=new AbortController();
@@ -105,7 +107,8 @@ export class HldSynthesisService {
     const blocker=await Promise.race([this.deps.admission(job.repoId),new Promise<string>(resolve=>{if(signal.aborted)resolve('Synthesis cancelled');else signal.addEventListener('abort',()=>resolve('Synthesis cancelled'),{once:true});})]);
     this.guard(job,context,signal);if(blocker){this.finish(job,'blocked',blocker);return;}
     job.status='running';this.event(job,'progress','Model synthesis started in isolated read-only Codex planning with inherited configuration disabled');await this.persist();this.guard(job,context,signal);
-    const prompt=JSON.stringify({requirements:input,installedSkillReferences:context.skills,copilotStudioPaused:context.copilotPaused});
+    const catalogue=synthesisRequirements(input);
+    const prompt=JSON.stringify({requirements:input,requirementCatalogue:catalogue,traceabilityRule:'Cover every catalogue ID exactly once; copy its sourceSha256, and link to existing unique implementationPlan step IDs. Design and acceptance text require independent QA review.',installedSkillReferences:context.skills,copilotStudioPaused:context.copilotPaused});
     if(Buffer.byteLength(prompt)>256*1024)throw new HttpError(413,'Architecture planning context exceeds its bound');
     let finish!:(result:Parameters<SessionCallbacks['finished']>[0])=>void;
     const output=new Promise<Parameters<SessionCallbacks['finished']>[0]>(resolve=>{finish=resolve;});
@@ -120,10 +123,12 @@ export class HldSynthesisService {
     if(!result.ok){const message=result.errors.join('; ')||'Model synthesis returned no successful response';if(/not logged in|authentication|please.*login|subscription|quota|usage.*limit/i.test(message)){this.finish(job,'blocked',message);return;}throw new Error(message);}
     const serialized=JSON.stringify(result.structured);if(!serialized||Buffer.byteLength(serialized)>2*1024*1024)throw new Error('Model synthesis returned absent or oversized structured output');
     const design=synthesisOutputSchema.parse(result.structured);
+    requireSynthesisTraceability(catalogue,design);
     if(auditDlpCompliance(serialized,'architecture-model-output').length)throw new Error('Model architecture failed the local connector safeguard');
     job.status='saving';this.event(job,'progress','Validating and publishing the model-generated draft');await this.persist();this.guard(job,context,signal);
     const docId=`HLD-${crypto.randomUUID()}`,elapsedMs=Date.now()-job.startedAt;
     const sections=[['Summary',design.summary],['Architecture',design.architecture],['Data model',design.dataModel],['Security and governance',design.securityAndGovernance],['Operations and recovery',design.operationsAndRecovery]];
+    sections.push(['Declared-source traceability',catalogue.map(source=>`${source.id}: ${source.text}\nSource SHA-256: ${source.sourceSha256}\nPlan steps: ${design.requirements.find(row=>row.requirementId===source.id)!.planStepIds.join(', ')}`).join('\n\n')]);
     const missingEvidence=[...new Set([...design.missingEvidence,'Independent architecture approval and live tenant schema, DLP, deployment and runtime verification remain required.'])];
     const markdownContent=`# Architecture draft: ${input.solutionName}\n\nDocument: ${docId}\nStatus: Draft, unreviewed. Model synthesis; no deployment or compliance approval.\n\n${sections.map(([title,text])=>`## ${title}\n${text}`).join('\n\n')}\n\n## Decisions and alternatives\n${design.decisions.map(item=>`${item.decision}\nRationale: ${item.rationale}\nAlternatives: ${item.alternatives}`).join('\n\n')}\n\n## Requirements and acceptance\n${design.requirements.map(item=>`${item.requirement}\nDesign: ${item.design}\nAcceptance: ${item.acceptance}`).join('\n\n')}\n\n## Risks\n${design.risks.map(item=>`${item.risk}\nMitigation: ${item.mitigation}`).join('\n\n')}\n\n## Implementation plan\n${design.implementationPlan.map(item=>`### ${item.id}: ${item.title}\nDeliverables: ${item.deliverables.join('; ')}\nAcceptance: ${item.acceptance.join('; ')}`).join('\n\n')}\n\n## Diagrams\n${Object.entries(design.mermaidDiagrams).map(([name,text])=>`### ${name}\n\`\`\`mermaid\n${text}\n\`\`\``).join('\n\n')}\n\n## Missing evidence\n${missingEvidence.map(text=>`- ${text}`).join('\n')}`;
     const draft:HldResult={docId,generatedAt:Date.now(),solutionName:input.solutionName,status:'draft',generationMethod:'model-synthesis',synthesis:{runtime:'codex-cli',jobId:job.id,startedAt:job.startedAt,elapsedMs,deadlineMs:DEADLINE},missingEvidence,implementationPlan:design.implementationPlan,markdownContent,mermaidDiagrams:design.mermaidDiagrams};
