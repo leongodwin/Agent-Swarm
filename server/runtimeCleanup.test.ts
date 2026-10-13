@@ -72,13 +72,13 @@ it('retains local evidence and removes the temporary snapshot when its durable f
   const flush=vi.spyOn(fs,'fsyncSync').mockImplementationOnce(()=>{throw new Error('Synthetic I/O failure');});
   try{store.begin(record);}finally{flush.mockRestore();}
   expect(store.view().unavailableReason).toContain('could not be saved');expect(store.view().records).toEqual([record]);
-  expect(fs.readdirSync(path.dirname(file))).toEqual([]);
+  expect(fs.readdirSync(path.dirname(file))).toEqual([path.basename(file+'.lock.queue')]);expect(fs.readdirSync(file+'.lock.queue')).toEqual([]);
 });
 it('keeps admission quarantined if lock ownership changes after snapshot replacement',()=>{
   const file=fixture(),store=new RuntimeCleanupStore(file);store.begin(record);
   const rename=fs.renameSync;
   const changed=JSON.stringify({pid:process.pid,token:'22222222-2222-4222-8222-222222222222'});
-  const spy=vi.spyOn(fs,'renameSync').mockImplementation((from,to)=>{rename(from,to);fs.writeFileSync(file+'.lock',changed);});
+  const spy=vi.spyOn(fs,'renameSync').mockImplementation((from,to)=>{rename(from,to);if(String(to)===file)fs.writeFileSync(file+'.lock',changed);});
   try{store.confirmed(record.id);}finally{spy.mockRestore();}
   expect(store.view().unavailableReason).toContain('ownership is unverified');
   expect(fs.readFileSync(file+'.lock','utf8')).toBe(changed);
@@ -89,6 +89,17 @@ it('never treats an inaccessible PID as a dead writer',()=>{
   const spy=vi.spyOn(process,'kill').mockImplementation(()=>{throw Object.assign(new Error('Synthetic access denied'),{code:'EPERM'});});
   try{expect(store.view().unavailableReason).toContain('writer');}finally{spy.mockRestore();}
   expect(fs.readFileSync(file+'.lock','utf8')).toBe(lock);
+});
+it.each([false,true])('retries transient exclusive-create sharing errors without granting ownership on permanent denial: %s',permanent=>{
+  const file=fixture(),open=fs.openSync;let failures=0;
+  const spy=vi.spyOn(fs,'openSync').mockImplementation((...args)=>{
+    if(String(args[0]).endsWith('.queue-lock')&&args[1]==='wx'&&(permanent||failures<2)){failures++;throw Object.assign(new Error('Synthetic sharing denial'),{code:'EPERM'});}
+    return open(...args);
+  });
+  let view;
+  try{const store=new RuntimeCleanupStore(file);store.begin(record);view=store.view();}finally{spy.mockRestore();}
+  if(permanent){expect(view.unavailableReason).toContain('quarantined');expect(view.failureSystemCode).toBe('EPERM');expect(fs.existsSync(file)).toBe(false);}
+  else{expect(failures).toBe(2);expect(view.unavailableReason).toBeUndefined();expect(JSON.parse(fs.readFileSync(file,'utf8')).records).toEqual([record]);}
 });
 it.each(['live','incomplete','corrupt','oversized'])('retains local quarantine and preserves the %s writer lock',kind=>{
   const file=fixture(),store=new RuntimeCleanupStore(file);
@@ -104,6 +115,28 @@ it('temporarily blocks a reader while a live writer has not published its record
   fs.writeFileSync(file,JSON.stringify({schemaVersion:1,records:[record]}));fs.unlinkSync(file+'.lock');
   expect(store.view()).toEqual({records:[{...record,state:'unverified'}]});
 });
+it('does not let new callers overtake a live queued writer or remove its ticket on timeout',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
+  const ticket={pid:process.pid,token:'11111111-1111-4111-8111-111111111111',sequence:0};const name=path.join(queue,ticket.token+'.json');fs.writeFileSync(name,JSON.stringify(ticket));
+  store.begin(record);expect(store.view().failureCode).toBe('contention');expect(store.view().records).toEqual([record]);
+  expect(fs.readdirSync(queue)).toEqual([ticket.token+'.json']);expect(JSON.parse(fs.readFileSync(name,'utf8'))).toEqual(ticket);
+});
+it('reports queue backpressure without publishing a sixty-fifth ticket',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
+  for(let i=0;i<64;i++){const token=`11111111-1111-4111-8111-${i.toString(16).padStart(12,'0')}`;fs.writeFileSync(path.join(queue,token+'.json'),JSON.stringify({pid:process.pid,token,sequence:i}));}
+  store.begin(record);expect(store.view().failureCode).toBe('contention');expect(fs.readdirSync(queue)).toHaveLength(64);
+});
+it.each(['malformed','wrong-name','duplicate-sequence','unknown-file','oversized'])('preserves %s queued evidence and emits a safe diagnostic code',fault=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
+  const ticket={pid:process.pid,token:'11111111-1111-4111-8111-111111111111',sequence:0},name=path.join(queue,ticket.token+'.json');
+  if(fault==='malformed')fs.writeFileSync(name,'private invalid evidence');
+  else if(fault==='wrong-name')fs.writeFileSync(name,JSON.stringify({...ticket,token:'22222222-2222-4222-8222-222222222222'}));
+  else if(fault==='unknown-file')fs.writeFileSync(path.join(queue,'unexpected'),'private invalid evidence');
+  else if(fault==='oversized')fs.writeFileSync(name,' '.repeat(4097));
+  else{fs.writeFileSync(name,JSON.stringify(ticket));const other={...ticket,token:'22222222-2222-4222-8222-222222222222'};fs.writeFileSync(path.join(queue,other.token+'.json'),JSON.stringify(other));}
+  const before=fs.readdirSync(queue);store.begin(record);const view=store.view();
+  expect(view.failureCode).toBe('evidence');expect(view.unavailableReason).not.toContain('private');expect(fs.readdirSync(queue)).toEqual(before);expect(fs.existsSync(file)).toBe(false);
+});
 it.each(['missing','oversized','duplicate','non-file'])('quarantines %s evidence without silently clearing known roots',kind=>{
   const file=fixture(),store=new RuntimeCleanupStore(file);store.begin(record);
   if(kind==='missing')fs.unlinkSync(file);
@@ -112,25 +145,27 @@ it.each(['missing','oversized','duplicate','non-file'])('quarantines %s evidence
   if(kind==='non-file'){fs.unlinkSync(file);fs.mkdirSync(file);}
   expect(store.view().unavailableReason).toContain('quarantined');expect(store.view().records).toHaveLength(1);
 });
-it('serializes two native processes initialized against the same empty journal',async()=>{
+it.each([{writers:2,count:20,delay:0},{writers:3,count:20,delay:10}])('serializes $writers native processes with $delay ms flush latency',async({writers,count,delay})=>{
   const file=fixture(),script=path.join(path.dirname(file),'writer.mjs');
   const module=new URL('./runtimeCleanup.ts',import.meta.url).href;
-  fs.writeFileSync(script,`import {RuntimeCleanupStore} from ${JSON.stringify(module)};
+  fs.writeFileSync(script,`import fs from 'node:fs';import {RuntimeCleanupStore} from ${JSON.stringify(module)};
+    const flush=fs.fsyncSync;fs.fsyncSync=fd=>{if(${delay})Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${delay});return flush(fd);};
     const [file,prefix]=process.argv.slice(2);const store=new RuntimeCleanupStore(file);
     process.send('ready');process.once('message',()=>{
-      for(let i=0;i<20;i++)store.begin({id:prefix+'-'+i,agentId:prefix,cli:'codex',pid:process.pid,keeperInstance:null,requestedAt:i,state:'stopping'});
+      for(let i=0;i<${count};i++)store.begin({id:prefix+'-'+i,agentId:prefix,cli:'codex',pid:process.pid,keeperInstance:null,requestedAt:i,state:'stopping'});
       store.confirmed(prefix+'-0');const view=store.view();
-      if(view.unavailableReason){console.error(view.unavailableReason);process.exitCode=1;}
+      if(view.unavailableReason){console.error(JSON.stringify({reason:view.unavailableReason,code:view.failureCode,systemCode:view.failureSystemCode,pid:process.pid,count:view.records.length}));process.exitCode=1;}
       process.disconnect();
     });`);
-  const children=['a','b'].map(prefix=>fork(script,[file,prefix],{execArgv:['--import','tsx'],stdio:['ignore','ignore','pipe','ipc']}));
+  const prefixes=Array.from({length:writers},(_,i)=>String.fromCharCode(97+i));
+  const children=prefixes.map(prefix=>fork(script,[file,prefix],{execArgv:['--import','tsx'],stdio:['ignore','ignore','pipe','ipc']}));
   const exits=children.map(async child=>{let stderr='';child.stderr?.on('data',chunk=>{stderr+=chunk;});const [code]=await once(child,'exit');return {code,stderr};});
   try{
     await Promise.all(children.map(child=>once(child,'message')));
     for(const child of children)child.send('start');
-    expect(await Promise.all(exits)).toEqual([{code:0,stderr:''},{code:0,stderr:''}]);
+    expect(await Promise.all(exits)).toEqual(prefixes.map(()=>({code:0,stderr:''})));
     const view=new RuntimeCleanupStore(file).view();expect(view.unavailableReason).toBeUndefined();
-    expect(view.records.map(row=>row.id).sort()).toEqual(['a','b'].flatMap(prefix=>Array.from({length:19},(_,i)=>prefix+'-'+(i+1))).sort());
+    expect(view.records.map(row=>row.id).sort()).toEqual(prefixes.flatMap(prefix=>Array.from({length:count-1},(_,i)=>prefix+'-'+(i+1))).sort());
     expect(fs.existsSync(file+'.lock')).toBe(false);
   }finally{for(const child of children)if(child.exitCode===null)child.kill();await Promise.allSettled(exits);}
 },15000);
@@ -140,6 +175,7 @@ it('recovers a complete interrupted local-writer lock only after its native proc
   const child=fork(script,[],{execArgv:[],stdio:['ignore','ignore','ignore','ipc']});const exit=once(child,'exit');
   await once(child,'message');const pid=child.pid!;await exit;
   const lock=JSON.stringify({pid,token:'11111111-1111-4111-8111-111111111111'});
+  const queue=file+'.lock.queue';fs.mkdirSync(queue);fs.writeFileSync(path.join(queue,'11111111-1111-4111-8111-111111111111.json'),JSON.stringify({pid,token:'11111111-1111-4111-8111-111111111111',sequence:0}));
   fs.writeFileSync(file+'.lock',lock);
   const store=new RuntimeCleanupStore(file);expect(store.view()).toEqual({records:[]});
   store.begin(record);expect(store.view().unavailableReason).toBeUndefined();

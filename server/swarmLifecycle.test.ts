@@ -116,7 +116,7 @@ it('quarantines cancelled worker roots even with an unlimited session budget',as
   swarm.runtimeCleanup=()=>({records:[record]});expect(swarm.sessionUsage()).toMatchObject({used:1,agentSessions:0,freeSlots:null,cleanup:[record],blockedReason:expect.stringContaining('quarantined')});
   expect(()=>swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111')).toThrow('capacity is unverified');
   swarm.runtimeCleanup=()=>({records:[]});const lease=swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111');lease.release();
-  swarm.runtimeCleanup=()=>({records:[],unavailableReason:'Unreadable native cleanup evidence'});expect(()=>swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111')).toThrow('Unreadable native');
+  swarm.runtimeCleanup=()=>({records:[],unavailableReason:'Unreadable native cleanup evidence',failureCode:'evidence'});expect(swarm.sessionUsage().cleanupFailureCode).toBe('evidence');expect(()=>swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111')).toThrow('Unreadable native');
 });
 afterEach(async () => {
   vi.useRealTimers(); // allow real terminal-emulator flushes during cleanup
