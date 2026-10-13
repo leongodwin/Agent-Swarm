@@ -12,6 +12,7 @@ import { HOME_DIR } from './config.ts';
 import { CODEX_HOOK_EVENTS,codexHookInvocation,codexHookCommand,cliLabel, CODEX_HOOK_SOURCE, codexThread, commandFor, hookReviewKey, interruptions, isCli, launchArgs, NOTIFY_SOURCE, OPENCODE_PLUGIN_SOURCE, STATUSLINE_SOURCE, trustKey } from './clis.ts';
 import { adoptPty, discardPty, hooksReady, keeperHookUrl, keeperPid,keeperInstance, leaveKeeper, spawnPty, startKeeper, terminalsAvailable, type Pty } from './ptyClient.ts';
 import {RuntimeCleanupStore} from './runtimeCleanup.ts';
+import {terminalCallback} from './terminalCallbacks.ts';
 import {
   clip,
   describeTool,
@@ -494,8 +495,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       if (keep && (opts.keepAlive || preserveRecovery) && l.proc) waitAtPrompt(l);
       else endLive(l);
     }
-    cb.tool(null);
-    cb.finished({ ...r, costUsd, turns });
+    terminalCallback(cb.tool,null);
+    terminalCallback(cb.finished,{ ...r, costUsd, turns });
   };
 
   /** A turn ended: finished, unless the CLI picks up another prompt within the grace period. */

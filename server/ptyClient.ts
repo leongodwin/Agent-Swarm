@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {terminalCallback,terminalListeners} from './terminalCallbacks.ts';
 import { hookFailure } from '../shared/hookDecision.ts';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -79,18 +80,18 @@ export class RemotePty implements Pty {
     this.dataFns.push(cb);
   }
   onExit(cb: (code: number) => void) {
-    if(this.done){queueMicrotask(()=>cb(this.exitCode!));return;}
+    if(this.done){queueMicrotask(()=>terminalCallback(cb,this.exitCode!));return;}
     this.exitFns.push(cb);
   }
   data(data: string) {
-    for (const fn of this.dataFns) fn(data);
+    terminalListeners(this.dataFns,data);
   }
   exit(code: number,verified=true) {
     if (this.done) return;
     this.done = true;
     this.verifiedExit=verified;this.exitCode=code;
     remote.delete(this.id);
-    for (const fn of this.exitFns) fn(code);
+    terminalListeners(this.exitFns.splice(0),code);this.dataFns=[];
   }
 }
 
@@ -247,7 +248,7 @@ export function spawnPty(file: string, args: string[], o: PtyOptions, meta: unkn
   const p = nodePty.spawn(file, args, { name: 'xterm-256color', cols: o.cols, rows: o.rows, cwd: o.cwd, env: o.env, useConptyDll: true });
   let exitCode:number|undefined;
   const exits:((code:number)=>void)[]=[];
-  p.onExit(event=>{exitCode=event.exitCode;for(const callback of exits.splice(0))callback(exitCode);});
+  p.onExit(event=>{exitCode=event.exitCode;terminalListeners(exits.splice(0),exitCode);});
   return {
     get verifiedExit(){return exitCode!==undefined;},
     get pid() {
@@ -257,8 +258,8 @@ export function spawnPty(file: string, args: string[], o: PtyOptions, meta: unkn
     resize: (cols, rows) => p.resize(cols, rows),
     kill: () => killTree(p),
     setMeta: () => undefined,
-    onData: (cb) => void p.onData(cb),
-    onExit: (cb) => {if(exitCode!==undefined)queueMicrotask(()=>cb(exitCode!));else exits.push(cb);},
+    onData: (cb) => void p.onData(data=>terminalCallback(cb,data)),
+    onExit: (cb) => {if(exitCode!==undefined)queueMicrotask(()=>terminalCallback(cb,exitCode!));else exits.push(cb);},
   };
 }
 

@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {commandFor} from './clis.ts';
-import type {SessionOptions,SessionCallbacks,SessionHandle} from './agentRunner.ts';
+import type {SessionOptions,SessionCallbacks,SessionHandle,SessionResult} from './agentRunner.ts';
+import {terminalCallback} from './terminalCallbacks.ts';
 
 /** Planning uses a separate empty directory and accepts only a bounded structured final answer. */
 export function startCodexPlanning(opts:SessionOptions,cb:SessionCallbacks):SessionHandle {
@@ -11,12 +12,14 @@ export function startCodexPlanning(opts:SessionOptions,cb:SessionCallbacks):Sess
   if(!opts.noTools||!opts.outputSchema)throw new Error('Nonterminal execution requires structured planning');
   const command=commandFor('codex');if(!command)throw new Error('Codex CLI is not installed');
   let child:ReturnType<typeof spawn>|undefined,stopped=false;
+  let delivered=false;
+  const finished=(result:SessionResult)=>{if(delivered)return;delivered=true;terminalCallback(cb.finished,result,()=>console.warn('Planning completion callback failed; result was not redelivered'));};
   void (async()=>{
     let dir:string|undefined;
     try {
       dir=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-codex-planning-'));
       await fs.writeFile(path.join(dir,'schema.json'),JSON.stringify(opts.outputSchema));
-      if(stopped){cb.finished({ok:false,text:'',errors:['Cancelled before launch'],turns:0,costUsd:0});return;}
+      if(stopped){finished({ok:false,text:'',errors:['Cancelled before launch'],turns:0,costUsd:0});return;}
       const disabled=['shell_tool','unified_exec','apps','browser_use','browser_use_external','computer_use','image_generation','multi_agent','memories','hooks','skill_search','workspace_dependencies','code_mode_host','view_image'];
       const args=[...command.args,'exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',path.join(dir,'schema.json'),'-c','web_search="disabled"',...disabled.flatMap(feature=>['--disable',feature]),'-'];
       child=spawn(command.file,args,{cwd:dir,windowsHide:true,shell:false,stdio:['pipe','pipe','pipe']});
@@ -36,9 +39,9 @@ export function startCodexPlanning(opts:SessionOptions,cb:SessionCallbacks):Sess
           if(event.type==='error'||event.type==='turn.failed')failure=String(event.message??event.error?.message??'Codex planning failed');
         }
         const structured=code===0&&!stopped&&!failure?JSON.parse(text):undefined;
-        cb.finished({ok:code===0&&!stopped&&!failure,text,structured,turns,costUsd:0,errors:failure||code!==0||stopped?[failure||(stopped?'Cancelled':stderr.slice(-4000)||`Codex exited ${code}`)]:[]});
-      }catch(error){cb.finished({ok:false,text:'',turns,costUsd:0,errors:[String(error)]});}
-    }catch(error){cb.finished({ok:false,text:'',turns:0,costUsd:0,errors:[String(error)]});}
+        finished({ok:code===0&&!stopped&&!failure,text,structured,turns,costUsd:0,errors:failure||code!==0||stopped?[failure||(stopped?'Cancelled':stderr.slice(-4000)||`Codex exited ${code}`)]:[]});
+      }catch(error){finished({ok:false,text:'',turns,costUsd:0,errors:[String(error)]});}
+    }catch(error){finished({ok:false,text:'',turns:0,costUsd:0,errors:[String(error)]});}
     finally{if(dir)await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
   })();
   return {send(){throw new Error('Planning input is immutable');},stop(){stopped=true;child?.kill();}};

@@ -771,16 +771,20 @@ export class Swarm {
     if (this.closed) { ws.close(1001, 'Office is shutting down'); return; }
     this.clients.add(ws);
     ws.on('close', () => this.clients.delete(ws));
+    ws.on('error',()=>this.disconnectClient(ws));
     this.send(ws, { type: 'snapshot', data: this.snapshot() });
   }
 
   private send(ws: WebSocket, ev: ServerEvent) {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(ev));
+    if (ws.readyState === ws.OPEN) this.sendSerialized(ws,JSON.stringify(ev));
   }
+
+  private disconnectClient(ws:WebSocket){this.clients.delete(ws);try{ws.terminate();}catch{/* A broken browser cannot interrupt delivery or other observers. */}}
+  private sendSerialized(ws:WebSocket,message:string){try{ws.send(message,error=>{if(error)this.disconnectClient(ws);});}catch{this.disconnectClient(ws);}}
 
   private broadcast(ev: ServerEvent) {
     const msg = JSON.stringify(ev);
-    for (const ws of this.clients) if (ws.readyState === ws.OPEN) ws.send(msg);
+    for (const ws of this.clients) if (ws.readyState === ws.OPEN) this.sendSerialized(ws,msg);
   }
 
   private toast(level: 'info' | 'success' | 'error', text: string) {
@@ -2046,7 +2050,12 @@ export class Swarm {
         },
         limited: (at) => {if (live()) this.pauseForLimit(at);},
         usageWarning: (info) => {if (live()) this.paceForWarning(info);},
-        finished: (result) => {if (!live()) return; completed = true; void this.onFinished(a, repo, result, generation);},
+        finished: (result) => {if (!live()) return; completed = true; return this.onFinished(a, repo, result, generation).catch(()=>{
+          if(!this.ownsTask(a,generation))return;
+          rt.session=null;rt.currentTool=null;a.status='error';a.endedAt=Date.now();
+          a.lastError='Completion processing failed; reconcile artifacts and external actions before retrying';
+          this.appendLog(a,[{kind:'error',text:a.lastError}]);this.emitAgent(a);this.save();
+        });},
       },
     );
     if (this.ownsTask(a, generation)) rt.session = completed ? null : handle;

@@ -43,6 +43,7 @@ describe.skipIf(!terminalsAvailable)('the terminal keeper', () => {
     expect(held.map((h) => [h.meta, h.exit])).toEqual([[{ agentId: 'ada' }, null]]);
 
     const again = adoptPty(held[0]);
+    again.onExit(()=>{throw new Error('synthetic callback fault');});
     expect(keeperInstance()).toMatch(/^[a-f0-9-]{36}$/);
     let after = '';
     again.onData((d) => (after += plain(d)));

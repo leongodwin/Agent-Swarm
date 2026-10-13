@@ -6,6 +6,7 @@ import type { SessionCallbacks } from './agentRunner.ts';
 import type { SessionOptions } from './agentRunner.ts';
 import type { PullInfo } from '../shared/types.ts';
 import {CEO_ID} from '../shared/types.ts';
+import type {WebSocket} from 'ws';
 
 vi.mock('./config.ts', async importOriginal => {
   const real = await importOriginal<typeof import('./config.ts')>();
@@ -57,6 +58,32 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it.each(['throw','callback','event'] as const)('isolates a browser telemetry failure by %s without failing state transitions',async mode=>{
+  const {swarm}=await office();let fail=false;const events=new Map<string,()=>void>();
+  const broken={OPEN:1,readyState:1,on:(type:string,fn:()=>void)=>events.set(type,fn),terminate:vi.fn(()=>{throw new Error('private terminate failure');}),send:vi.fn((_message:string,callback?:(error?:Error)=>void)=>{if(!fail)return;if(mode==='throw')throw new Error('private send error');if(mode==='callback')callback?.(new Error('private send error'));})};
+  const healthy={OPEN:1,readyState:1,on:vi.fn(),terminate:vi.fn(),send:vi.fn()};
+  swarm.addClient(broken as unknown as WebSocket);swarm.addClient(healthy as unknown as WebSocket);fail=true;if(mode==='event')events.get('error')?.();
+  expect(()=>swarm.setDraining(true)).not.toThrow();expect(swarm.snapshot().draining).toBe(true);expect(healthy.send.mock.calls.at(-1)?.[0]).toContain('draining');expect(broken.terminate).toHaveBeenCalledOnce();
+  const calls=broken.send.mock.calls.length;swarm.setDraining(false);expect(broken.send).toHaveBeenCalledTimes(calls);
+});
+it('reports unexpected async completion failure without exposing provider details or leaving the worker busy',async()=>{
+  const {swarm,fake}=await office(true);const developer=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  await swarm.assign(developer.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  // Fault injection at the completion transaction boundary, before a business
+  // result can be considered processed or retried.
+  const internal=swarm as unknown as {onFinished:()=>Promise<void>};vi.spyOn(internal,'onFinished').mockRejectedValueOnce(new Error('private provider credentials'));
+  await fake.startSession.mock.calls[0][1].finished({ok:true,text:'synthetic',costUsd:0,turns:1,errors:[]});
+  const current=swarm.snapshot().agents.find(agent=>agent.id===developer.id)!;expect(current.status).toBe('error');expect(current.lastError).toContain('reconcile');expect(current.lastError).not.toContain('private provider');expect(swarm.sessionUsage().agentSessions).toBe(0);
+});
+it('does not apply an old completion failure to a replacement task generation',async()=>{
+  const {swarm,fake}=await office(true);const developer=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  await swarm.assign(developer.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  let reject!:(error:Error)=>void;const internal=swarm as unknown as {onFinished:()=>Promise<void>};vi.spyOn(internal,'onFinished').mockImplementationOnce(()=>new Promise<void>((_resolve,no)=>{reject=no;}));
+  const pending=fake.startSession.mock.calls[0][1].finished({ok:true,text:'synthetic',costUsd:0,turns:1,errors:[]});
+  swarm.stopAgent(developer.id);await swarm.assign(developer.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+  reject(new Error('stale completion fault'));await pending;
+  const current=swarm.snapshot().agents.find(agent=>agent.id===developer.id)!;expect(current.status).toBe('working');expect(current.lastError).toBeNull();
+});
 it('shares a reserved architecture slot with manual workers, release QA and the queued CEO',async()=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.updateSettings({sessionLimit:1});swarm.ceoPreflight=async()=>null;
   const developer=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'}),qa=swarm.snapshot().agents.find(a=>a.role==='qa')!;

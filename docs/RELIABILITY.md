@@ -493,4 +493,12 @@ GitHub's [workflow-run API reference](https://docs.github.com/en/rest/actions/wo
 
 Validation: 1,127 tests passed with one TODO across 98 files; build/typecheck and the isolated Chromium history test passed. Backend branch coverage is 5,195/8,390 (61.91%), below the unchanged 90.01% gate, so the coverage command fails.
 
+## Runtime consumer fault isolation (2026-10-13)
+
+Terminal data/exit consumers now run independently. Synchronous exceptions, returned promise rejections, throwing thenables and failed diagnostic loggers cannot prevent later native-exit observers from running. Late exit replay uses the same boundary; disconnect remains unverified. Diagnostics omit exception contents and callback values. The real keeper/PTY fixture deliberately throws from its first exit listener and still reports the native exit to later listeners.
+
+CLI completion/tool-clearing notifications use the same isolation. Structured Codex planning delivers its result once: a consumer fault no longer triggers another failure result. Synthetic tests cover throwing/rejecting consumers. Worker completion processing now catches unexpected asynchronous failures, records a generic error requiring reconciliation of artifacts/external actions, and preserves task-generation ownership. A stale completion failure cannot overwrite a replacement task. Browser WebSocket send throws, callback errors and socket errors remove the failed consumer without preventing other clients or state transitions. Synthetic failure injection verifies these boundaries; it does not prove that arbitrary detached asynchronous work, every coding-model path or external actions complete correctly. No tenant or credential changes occurred. Copilot Studio remains paused.
+
+Validation: 1,138 tests passed with one TODO across 99 files; build/typecheck passed. Backend branch coverage is 5,208/8,401 (61.99%), below the unchanged 90.01% gate, so the coverage command fails. Comprehensive governance, descendant containment, current-head multi-platform CI and production acceptance remain open.
+
 References: https://geminicli.com/docs/hooks/reference/ and https://geminicli.com/docs/reference/configuration/ .
