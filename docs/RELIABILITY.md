@@ -1,5 +1,15 @@
 # Reliability priorities 5–8
 
+## Launcher-owned authentication reuse
+
+The office launcher now owns the authenticated standard-policy PowerShell reader, so server development reloads can release their subscription while leaving the reader's in-memory native authentication intact. Replacement servers request a fresh inventory over Node's inherited IPC channel. No network listener, exported token cache, arbitrary executable path or caller-supplied command is added. A direct launch, or a launcher without the new capability flag, retains the server-owned reader fallback. `/api/runtime` reports `policyReaderMode` as `launcher` or `direct`.
+
+The launcher retains at most one tenant/account scope and one queued read behind detached authentication. Competing owners are rejected. Account changes, reader-script digest changes, update/full shutdown, missing scripts, failures and expiry retire the process. Busy reads expire after ten minutes; idle authentication expires after thirty minutes. Server observations still expire after fifteen minutes and must match the requested identity. A warm reader or zero-policy inventory does not grant full compliance. Request/process ownership from the prior batch remains enforced before evidence persistence.
+
+Two actual server-client subprocesses using the default factory reused the same actual PowerShell PID and performed separate inventory reads with one synthetic authentication call. The provider/account functions in this regression are synthetic: this proves IPC/process reuse and fresh persistence, not live Microsoft authentication across a reload. Existing protocol/pager tests and owner, disconnect, expiry, identity and script-change regressions remain separate evidence.
+
+The existing running launcher still reports direct mode; restarting only its server cannot load the new parent host. A launcher restart enables the new mode, after which an initial interactive sign-in and a fresh tenant observation/reload test remain required. Copilot Studio remains paused. Coverage now includes backend `.mjs` modules as well as TypeScript, retaining unimported backend code in the denominator. Evidence: `.swarm-reliability/policy-reader-launcher-coverage-2026-10-13.txt`, `policy-reader-launcher-coverage-exit-2026-10-13.txt`, `policy-reader-launcher-api-e2e-2026-10-13.txt` and `policy-reader-launcher-live-runtime-2026-10-13.json`.
+
 ## Policy reader request ownership
 
 Each standard-policy refresh now has a unique request ID, and each reader process has an independent generation. The PowerShell response echoes the request ID through a strict envelope; warm refreshes carry it in a JSON command. Unsupported/malformed commands terminate the loop. Callbacks from replaced processes, earlier requests or duplicate replies cannot complete or fail a newer request for the same tenant/account.

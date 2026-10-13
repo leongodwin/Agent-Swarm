@@ -13,6 +13,7 @@ import { execFile, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import {PolicyReaderHost} from '../server/policyReaderHost.mjs';
 import { clientPort, isUpdateCommand, parseOfficeArgs, parseSymref, refusal, rollbackPlan, stepsFor, swarmHome } from './officeSteps.mjs';
 
 const HELP = `
@@ -45,6 +46,7 @@ if (opts.help) {
   process.exit(0);
 }
 const startMode = !opts.dev;
+const policyReaderHost=new PolicyReaderHost(path.join(root,opts.dev?'server':'dist-server','tenantDlpReader.ps1'));
 
 const color = process.stdout.isTTY && !process.env.NO_COLOR;
 const paint = (code) => (s) => (color ? `\x1b[${code}m${s}\x1b[39m` : s);
@@ -102,8 +104,9 @@ function startServer() {
   const args = opts.dev
     ? ['--import', 'tsx', path.join('server', 'index.ts'), ...demo]
     : [path.join('bin', 'cubefarm.js'), ...demo, ...(opts.open && firstStart ? [] : ['--no-open'])];
-  const child = spawnChild('server', args, { ipc: true, env: { ...process.env, SWARM_LAUNCHER: '1' } });
+  const child = spawnChild('server', args, { ipc: true, env: { ...process.env, SWARM_LAUNCHER: '1',SWARM_POLICY_READER_HOST:opts.demo?'0':'1' } });
   child.proc.on('message', (msg) => {
+    if(!opts.demo&&policyReaderHost.handle(child.proc,msg))return;
     if (msg?.type === 'office:update') void update(`the office asked, from ${short(String(msg.from ?? ''))}`);
   });
 }
@@ -130,6 +133,7 @@ function startChildren() {
 }
 
 function onExit(child, how) {
+  if(child.name==='server')policyReaderHost.disconnect(child.proc,opts.dev&&!shuttingDown&&!updating);
   if (children[child.name] === child) children[child.name] = null;
   if (child.stopped || shuttingDown) return;
   if (child.name === 'server' && opts.dev) {
@@ -231,6 +235,7 @@ function update(trigger) {
 async function runUpdate(trigger) {
   log(`Updating the office (${trigger}): stopping it first`);
   await stopChildren('update');
+  policyReaderHost.clear();
 
   const result = { from: '', to: '', ok: true, installed: false, built: false };
   const ran = { installed: false, built: false }; // started, even if it then failed
@@ -317,7 +322,7 @@ function writeLastUpdate(result) {
 // merely reading a server file (the CEO reviewing this repo, git status, grep) restarted the office mid-work and
 // interrupted every agent. Here a file only counts as changed when its modification time or size does.
 const WATCHED = ['server', 'shared'];
-const CODE = /\.(ts|tsx|js|mjs|json)$/;
+const CODE = /\.(ts|tsx|js|mjs|json|ps1)$/;
 const stamps = new Map(); // file → "mtime:size", or "gone"
 const stamp = (file) => {
   try {
@@ -368,6 +373,7 @@ async function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
   log('Stopping the office');
+  policyReaderHost.clear();
   await stopChildren('stop');
   if (updating) {
     log('Letting the update finish so this folder stays consistent (press Ctrl+C again to quit now)');
@@ -381,6 +387,7 @@ for (const sig of WIN ? ['SIGINT', 'SIGTERM', 'SIGBREAK'] : ['SIGINT', 'SIGTERM'
 }
 // Last resort (a second Ctrl+C, a crash): no child outlives the launcher.
 process.on('exit', () => {
+  policyReaderHost.clear();
   for (const child of Object.values(children)) {
     const { proc } = child ?? {};
     if (!proc || proc.exitCode !== null || proc.signalCode !== null) continue;

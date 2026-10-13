@@ -26,7 +26,7 @@ import { createBrowserAuth } from './browserAuth.ts';
 import { CanvasOwnership } from './canvasOwnership.ts';
 import { z } from 'zod';
 import { ToolGovernanceService, setToolGovernanceGate } from './toolGovernance.ts';
-import { TenantDlpService } from './tenantDlp.ts';
+import { TenantDlpService, policyReaderMode } from './tenantDlp.ts';
 import { createDeliveryGovernance } from './deliveryGovernance.ts';
 import { OfficeShutdown } from './officeShutdown.ts';
 import { parseBody, proposalSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
@@ -107,7 +107,7 @@ const officeShutdown = new OfficeShutdown([
   { name: 'swarm', close: restart => swarm.shutdown(restart) },
   { name: 'tenancy', close: () => backend.tenancy.close() },
   { name: 'scheduler', close: () => clearInterval(deliveryTimer) },
-  { name: 'policy reader', close: () => tenantDlp.close() },
+  { name: 'policy reader', close: restart => tenantDlp.close(restart) },
   { name: 'capabilities', close: () => capabilities.close() },
   { name: 'delivery', close: () => delivery.close() },
 ]);
@@ -181,7 +181,7 @@ const featureScope = async (req: Request, repo?: string) => {
 app.get('/api/state', route(() => swarm.snapshot()));
 app.get('/api/capabilities', route(() => capabilities.view()));
 app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
-app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, demo: backend.demo, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, demo: backend.demo, policyReaderMode, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
 app.get('/api/governance/tools', route(() => toolGovernance.view()));
 app.get('/api/governance/tenant', route(() => tenantDlp.view()));
 app.post('/api/governance/tenant/refresh', route(async (req) => {

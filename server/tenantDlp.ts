@@ -1,5 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -8,6 +6,8 @@ import { z } from 'zod';
 import { atomicWrite } from './atomicFile.ts';
 import { HttpError } from './httpError.ts';
 import type { TenantDlpView } from '../shared/tenantDlp.ts';
+import {nativePolicyReader} from './policyReaderHost.mjs';
+import {launcherPolicyReader} from './launcherPolicyReader.ts';
 
 const identitySchema = z.object({ tenantId: z.uuid(), caller: z.email().max(254) }).strict();
 export const tenantSnapshotSchema = identitySchema.extend({ schemaVersion: z.literal(1), observedAt: z.iso.datetime(), source: z.literal('Get-DlpPolicy module route'), moduleVersion: z.literal('2.0.219'), scope: z.literal('standard-policy-inventory'), complete: z.literal(true), pages: z.number().int().min(1).max(100), policies: z.array(z.record(z.string(), z.unknown())).max(5000) }).strict();
@@ -25,30 +25,11 @@ export function verifyTenantSnapshot(input: unknown, identity: Identity, now = D
 export interface PolicyReader {
   pid?: number;
   refresh(requestId: string): void;
-  stop(): void;
+  stop(keepWarm?: boolean): void;
 }
 export type StartPolicyReader = (identity: Identity, result: (value: unknown, requestId: string) => void, ended: () => void, requestId: string) => PolicyReader;
-const startReader: StartPolicyReader = (identity, result, ended, requestId) => {
-  if (process.platform !== 'win32') throw new Error('This policy reader requires Windows PowerShell 5');
-  const child: ChildProcessWithoutNullStreams = spawn('powershell.exe', ['-NoProfile', '-File', fileURLToPath(new URL('./tenantDlpReader.ps1', import.meta.url)), '-TenantId', identity.tenantId, '-ExpectedUser', identity.caller, '-RequestId', requestId], { windowsHide: true, stdio: 'pipe' });
-  const lines = createInterface({ input: child.stdout });
-  let bytes = 0;
-  child.stdout.on('data', (buffer: Buffer) => { bytes += buffer.length; if (bytes > 8 * 1024 * 1024) child.kill(); });
-  child.stderr.on('data', () => {}); // drain without retaining tokens or raw provider diagnostics
-  lines.on('line', (line) => {
-    if (!line.startsWith('SWARM_DLP ')) return;
-    bytes = 0;
-    try {
-      const envelope = z.object({ requestId: z.uuid(), result: z.unknown() }).strict().parse(JSON.parse(line.slice(10)));
-      result(envelope.result, envelope.requestId);
-    } catch { finish(); child.kill(); }
-  });
-  let stopped = false;
-  const finish = () => { if (!stopped) { stopped = true; lines.close(); ended(); } };
-  child.stdin.on('error', finish);
-  child.once('error', finish); child.once('close', finish);
-  return { pid: child.pid, refresh(id) { child.stdin.write(JSON.stringify({command:'refresh',requestId:id})+'\n'); }, stop() { child.stdin.end('close\n'); child.kill(); } };
-};
+export const policyReaderMode=process.env.SWARM_POLICY_READER_HOST==='1'&&process.connected&&process.send?'launcher':'direct';
+const startReader:StartPolicyReader=policyReaderMode==='launcher'?launcherPolicyReader():nativePolicyReader(fileURLToPath(new URL('./tenantDlpReader.ps1',import.meta.url)));
 
 /** A user-triggered read-only reader. A warm process reuses native MSAL authentication;
  * requests cannot supply policies or tokens, and failed refreshes never become an empty passing inventory. */
@@ -112,7 +93,7 @@ export class TenantDlpService {
     return this.view();
   }
   private fail(reason: string) { clearTimeout(this.pending?.timer); this.pending = undefined; this.reading = false; this.unavailable = true; this.reason = reason; }
-  private stopReader() { const old=this.reader; this.reader=undefined; this.readerGeneration=undefined; old?.stop(); }
+  private stopReader(keepWarm=false) { const old=this.reader; this.reader=undefined; this.readerGeneration=undefined; old?.stop(keepWarm); }
   private async observe(value: unknown, identity: Identity, pending: NonNullable<TenantDlpService['pending']>, generation: symbol) {
     const owns=()=>!this.closed&&this.identity===identity&&this.pending===pending&&this.readerGeneration===generation;
     if (!owns()) return;
@@ -125,5 +106,5 @@ export class TenantDlpService {
     } catch { if(owns())this.fail('Policy discovery or evidence persistence failed; previous evidence is not current verification'); }
   }
   async settled() { await this.saving; }
-  async close() { this.closed = true; clearTimeout(this.pending?.timer); this.pending = undefined; this.reading = false; this.stopReader(); await this.saving; }
+  async close(restart=false) { this.closed = true; clearTimeout(this.pending?.timer); this.pending = undefined; this.reading = false; this.stopReader(restart); await this.saving; }
 }

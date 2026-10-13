@@ -14,7 +14,7 @@ export default defineConfig({
     env: { SWARM_HOME: path.join(os.tmpdir(), `cubefarm-vitest-${process.pid}`), SWARM_PORT: '0' },
     coverage: {
       provider: 'v8',
-      include: ['server/**/*.ts'],
+      include: ['server/**/*.{ts,mjs}'],
       exclude: ['server/**/*.test.ts', 'server/**/*.d.ts'],
       reporter: ['text', 'json-summary', 'lcov', 'html'],
       reportsDirectory: 'coverage/backend',
