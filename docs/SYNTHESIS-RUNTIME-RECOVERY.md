@@ -1,0 +1,11 @@
+# Synthesis startup and stream recovery
+
+Codex planning discovery now runs inside the owned completion path. If readiness previously passed but the CLI then disappears or discovery throws, the planner returns a failed completion without spawning a child. The synthesis service can acknowledge that outcome and release its reservation instead of persisting an indefinite awaiting-completion record. Structured/no-tools request validation remains required; no alternate provider is substituted.
+
+Planning stdout/stderr use independent fatal streaming UTF-8 decoders. A multi-byte character split across native pipe chunks is retained intact. Invalid bytes or an incomplete trailing character deny the result rather than silently corrupting architecture text. The existing combined byte bound remains enforced. Rejected OS stop signals in data/stdin-error handlers are contained; a failed result still waits for the child close event. This does not treat a stop request or elapsed observation timeout as proof that a running process exited.
+
+Tests cover missing and throwing discovery, the actual synthesis-service reservation/restart path, Unicode split at every byte boundary, invalid and truncated UTF-8 in stdout/stderr, rejected stop signals and existing cancellation, forbidden-tool, callback and structured-output controls. Two owned Node subprocess fixtures exercise actual spawn, pipes, signalling and process-close acknowledgement without invoking a model or touching a tenant. Focused result: 32 tests passed across three files; build/typecheck passed.
+
+Evidence is retained locally in ignored `.swarm-reliability/synthesis-stream-tests-final.txt`, `synthesis-stream-native-tests.txt`, `synthesis-stream-build.txt` and `synthesis-stream-coverage.txt`. These results do not establish model quality, comprehensive governance, tenant acceptance, sustained pipeline reliability or the full under-five-minute synthesis target. Codex remains default; only Codex, Gemini and OpenCode are permitted. Copilot Studio and office maintenance drain remain preserved.
+
+Full verification: 1,272 tests passed, one existing TODO across 106 files. Whole-backend branches reached 5,704/8,859 (64.38%), failing the unchanged 90.01% gate. The original full production goal remains active.
