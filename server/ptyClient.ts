@@ -22,6 +22,7 @@ export const terminalsAvailable = nodePty !== null;
 /** A CLI's pseudo-terminal, held by the keeper or by this process. */
 export interface Pty {
   readonly pid: number;
+  readonly verifiedExit?:boolean;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   /** Stop the CLI and everything it started. */
@@ -43,6 +44,7 @@ let conn: net.Socket | null = null;
 let leaving = false; // the office is closing its connection on purpose (a restart): the terminals carry on
 let hookPort = 0;
 let hostPid = 0;
+let hostInstance:string|null=null;
 let found: HeldPty[] = [];
 const remote = new Map<string, RemotePty>();
 let hookHandler: (token: string, body: unknown) => unknown = () => ({});
@@ -51,8 +53,10 @@ const send = (m: Parameters<typeof encode>[0]) => {
   if (conn && !conn.destroyed) conn.write(encode(m));
 };
 
-class RemotePty implements Pty {
+export class RemotePty implements Pty {
   pid = 0;
+  verifiedExit=false;
+  private exitCode:number|undefined;
   private dataFns: ((data: string) => void)[] = [];
   private exitFns: ((code: number) => void)[] = [];
   private done = false;
@@ -75,14 +79,16 @@ class RemotePty implements Pty {
     this.dataFns.push(cb);
   }
   onExit(cb: (code: number) => void) {
+    if(this.done){queueMicrotask(()=>cb(this.exitCode!));return;}
     this.exitFns.push(cb);
   }
   data(data: string) {
     for (const fn of this.dataFns) fn(data);
   }
-  exit(code: number) {
+  exit(code: number,verified=true) {
     if (this.done) return;
     this.done = true;
+    this.verifiedExit=verified;this.exitCode=code;
     remote.delete(this.id);
     for (const fn of this.exitFns) fn(code);
   }
@@ -143,7 +149,7 @@ function connect(socket: string, secret: string): Promise<{ ready: Ready; sock: 
       if (leaving) return;
       // The keeper is gone, and its terminals with it.
       console.warn('  the terminal keeper stopped; running agents lost their terminals');
-      for (const p of [...remote.values()]) p.exit(-1);
+      for (const p of [...remote.values()]) p.exit(-1,false);
     });
   });
 }
@@ -181,6 +187,16 @@ export async function startKeeper(home: string, onHook: (token: string, body: un
   const secret = fs.readFileSync(secretFile, 'utf8').trim();
   let hello = await connect(socket, secret);
   if (hello && hello.ready.version !== PTY_PROTOCOL) {
+    if(hello.ready.ptys.some(terminal=>terminal.exit===null)){
+      if(hello.ready.version!==1)throw new Error('An incompatible keeper holds live terminals; preserve it and verify shutdown before replacement');
+      // v2 adds an instance identity; the v1 command/event subset is compatible.
+      // Preserve live legacy terminals rather than calling shutdown and assuming
+      // their processes disappeared. Missing instance identity quarantines any
+      // unresolved cleanup after a process restart.
+      conn=hello.sock;leaving=false;hookPort=hello.ready.hookPort;hostPid=hello.ready.pid??0;hostInstance=null;found=hello.ready.ptys;
+      console.warn('  preserving a legacy keeper with live terminals; persistent cleanup cannot use a keeper instance identity until it is safely upgraded');
+      return found;
+    }
     // A keeper from another version of the office: its terminals can't be picked up, so they stop and it goes.
     console.log(`  replacing the terminal keeper (v${hello.ready.version}); the ${hello.ready.ptys.length} terminal(s) it held are stopped`);
     hello.sock.end(encode({ op: 'shutdown' }));
@@ -202,12 +218,14 @@ export async function startKeeper(home: string, onHook: (token: string, body: un
   leaving = false;
   hookPort = hello.ready.hookPort;
   hostPid = hello.ready.pid ?? 0;
+  hostInstance=typeof hello.ready.instance==='string'?hello.ready.instance:null;
   found = hello.ready.ptys;
   return found;
 }
 
 /** The keeper's process (0 when there's none, or it didn't say): desk clean-ups must never stop it. */
 export const keeperPid = () => (conn ? hostPid : 0);
+export const keeperInstance = () => (conn ? hostInstance : null);
 
 // ---------- terminals ----------
 
@@ -227,7 +245,11 @@ export function spawnPty(file: string, args: string[], o: PtyOptions, meta: unkn
   // useConptyDll: Windows' own console host lingers after each CLI exits (one conhost.exe per terminal); the one
   // node-pty ships goes with its terminal. Ignored elsewhere.
   const p = nodePty.spawn(file, args, { name: 'xterm-256color', cols: o.cols, rows: o.rows, cwd: o.cwd, env: o.env, useConptyDll: true });
+  let exitCode:number|undefined;
+  const exits:((code:number)=>void)[]=[];
+  p.onExit(event=>{exitCode=event.exitCode;for(const callback of exits.splice(0))callback(exitCode);});
   return {
+    get verifiedExit(){return exitCode!==undefined;},
     get pid() {
       return p.pid;
     },
@@ -236,7 +258,7 @@ export function spawnPty(file: string, args: string[], o: PtyOptions, meta: unkn
     kill: () => killTree(p),
     setMeta: () => undefined,
     onData: (cb) => void p.onData(cb),
-    onExit: (cb) => void p.onExit(({ exitCode }) => cb(exitCode)),
+    onExit: (cb) => {if(exitCode!==undefined)queueMicrotask(()=>cb(exitCode!));else exits.push(cb);},
   };
 }
 

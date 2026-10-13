@@ -83,6 +83,14 @@ it('counts recovered model cleanup before granting new slots and denies unverifi
   swarm.restoreArchitectureCleanup([],'Corrupt model state');expect(swarm.sessionUsage().blockedReason).toBe('Corrupt model state');expect(swarm.sessionUsage().freeSlots).toBeNull();
   expect(()=>swarm.reserveArchitectureSession('synthetic/repo','22222222-2222-4222-8222-222222222222')).toThrow('capacity is unverified');
 });
+it('quarantines cancelled worker roots even with an unlimited session budget',async()=>{
+  const {swarm}=await office(true);swarm.updateSettings({sessionLimit:0});
+  const record={id:'digest',agentId:'stopped-worker',cli:'codex',pid:123,keeperInstance:null,requestedAt:1,state:'unverified' as const};
+  swarm.runtimeCleanup=()=>({records:[record]});expect(swarm.sessionUsage()).toMatchObject({used:1,agentSessions:0,freeSlots:null,cleanup:[record],blockedReason:expect.stringContaining('quarantined')});
+  expect(()=>swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111')).toThrow('capacity is unverified');
+  swarm.runtimeCleanup=()=>({records:[]});const lease=swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111');lease.release();
+  swarm.runtimeCleanup=()=>({records:[],unavailableReason:'Unreadable native cleanup evidence'});expect(()=>swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111')).toThrow('Unreadable native');
+});
 afterEach(async () => {
   vi.useRealTimers(); // allow real terminal-emulator flushes during cleanup
   await Promise.all(offices.splice(0).map(swarm => swarm.shutdown().catch(() => {})));

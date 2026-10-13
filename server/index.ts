@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 import { DEMO, PORT, STATE_FILE, WORKSPACE_ROOT } from './config.ts';
 import { realBackend } from './backend.ts';
-import { setOfficeUrl } from './cliRunner.ts';
+import { setOfficeUrl,runtimeCleanupView,onRuntimeCleanupChanged } from './cliRunner.ts';
 import { createDemoBackend } from './demo.ts';
 import { underLauncher } from './officeUpdate.ts';
 import { HttpError, Swarm } from './swarm.ts';
@@ -33,6 +33,8 @@ const maintenance=new OfficeMaintenance(path.join(HOME_DIR,backend.demo?'demo-ma
 await maintenance.init();
 const canvasOwnership = new CanvasOwnership(RESOURCE_LEASE_ROOT);
 const swarm = new Swarm(backend);
+swarm.runtimeCleanup=runtimeCleanupView;
+onRuntimeCleanupChanged(()=>swarm.runtimeCleanupChanged());
 if(maintenance.draining)swarm.setDraining(true);
 swarm.taskPaused = (title) => !!delivery.view().policy?.copilotPaused && /\bcopilot\b|\bpva\b/i.test(title);
 const features = new FeatureStore(path.join(HOME_DIR, backend.demo ? 'demo-features.json' : 'features.json'), backend.demo, process.env.TEAMS_INCOMING_WEBHOOK_URL);

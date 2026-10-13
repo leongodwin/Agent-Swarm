@@ -151,6 +151,7 @@ export function HUD() {
   const toasts = useStore((s) => s.toasts);
   const dismiss = useStore((s) => s.dismissToast);
   const auxiliaryCount=useStore(s=>s.sessionUsage?.auxiliary.length??0);
+  const sessionUsed=useStore(s=>s.sessionUsage?.used);
   const statusRef=useRef<HTMLDivElement>(null);
   const [workersTop,setWorkersTop]=useState(60);
   useLayoutEffect(()=>{
@@ -160,7 +161,7 @@ export function HUD() {
   },[]);
 
   const repo = floor === 0 ? null : repoOnFloor(repos, floor);
-  const running = useMemo(() => Object.values(agents).filter((a) => a.status === 'working' || a.status === 'preparing').length+auxiliaryCount, [agents,auxiliaryCount]);
+  const running = useMemo(() => sessionUsed??Object.values(agents).filter((a) => a.status === 'working' || a.status === 'preparing').length+auxiliaryCount, [agents,auxiliaryCount,sessionUsed]);
   const floorAgents = repo ? Object.values(agents).filter((a) => a.repoId === repo.id) : [];
   const qa = useStore((s) => s.qa);
   const floorQa = repo ? Object.values(qa).filter((q) => q.repoId === repo.id) : [];

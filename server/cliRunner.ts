@@ -10,7 +10,8 @@ import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { HOME_DIR } from './config.ts';
 import { CODEX_HOOK_EVENTS,codexHookInvocation,codexHookCommand,cliLabel, CODEX_HOOK_SOURCE, codexThread, commandFor, hookReviewKey, interruptions, isCli, launchArgs, NOTIFY_SOURCE, OPENCODE_PLUGIN_SOURCE, STATUSLINE_SOURCE, trustKey } from './clis.ts';
-import { adoptPty, discardPty, hooksReady, keeperHookUrl, keeperPid, leaveKeeper, spawnPty, startKeeper, terminalsAvailable, type Pty } from './ptyClient.ts';
+import { adoptPty, discardPty, hooksReady, keeperHookUrl, keeperPid,keeperInstance, leaveKeeper, spawnPty, startKeeper, terminalsAvailable, type Pty } from './ptyClient.ts';
+import {RuntimeCleanupStore} from './runtimeCleanup.ts';
 import {
   clip,
   describeTool,
@@ -190,19 +191,33 @@ interface LiveCli {
   idleTimer?: NodeJS.Timeout;
 }
 const lives = new Map<AgentTerminal, LiveCli>();
+let cleanupChanged=()=>{};
+const cleanup=new RuntimeCleanupStore(path.join(HOME_DIR,'runtime-cleanup.json'),()=>cleanupChanged());
+const closing=new Map<string,Pty>();
+const closeWaiters=new Map<string,{promise:Promise<void>;resolve:()=>void}>();
+export const runtimeCleanupView=()=>{const view=cleanup.view();return {...view,records:view.records.map(record=>({...record,id:crypto.createHash('sha256').update(record.id).digest('hex')}))};};
+export const onRuntimeCleanupChanged=(callback:()=>void)=>{cleanupChanged=callback;};
+const cleanupBlocker=()=>{const view=cleanup.view();return view.unavailableReason??(view.records.length?'Native runtime cleanup is pending or unverified; new work is quarantined':null);};
+function observeCleanup(id:string,p:Pty){
+  closing.set(id,p);
+  if(!closeWaiters.has(id)){let resolve!:()=>void;const promise=new Promise<void>(yes=>{resolve=yes;});closeWaiters.set(id,{promise,resolve});}
+  const waiter=closeWaiters.get(id)!;
+  p.onExit(()=>{
+    if(p.verifiedExit!==true){cleanup.unverified(id);return;}
+    cleanup.confirmed(id);closing.delete(id);closeWaiters.get(id)?.resolve();closeWaiters.delete(id);
+  });
+  return waiter.promise;
+}
+function registerCleanup(l:LiveCli,p:Pty){
+  cleanup.begin({id:l.token,agentId:l.agentId,cli:l.cli,pid:p.pid,keeperInstance:keeperInstance(),requestedAt:Date.now(),state:'stopping'});
+  return observeCleanup(l.token,p);
+}
 /** How to trust Codex's hooks was said once this run (Codex asks at the start of every session until they are). */
 let hooksHinted = false;
 /** A CLI left at its prompt this long is closed; its session can still be resumed. */
 const IDLE_MS = 30 * 60_000;
 
 const toolInput = (b: Record<string, unknown>) => (b.tool_input && typeof b.tool_input === 'object' ? b.tool_input : {}) as Record<string, unknown>;
-
-/** The CLI has exited, or has had a few seconds to. */
-const exitOf = (p: Pty) =>
-  new Promise<void>((resolve) => {
-    p.onExit(() => resolve());
-    setTimeout(resolve, 5000);
-  });
 
 /** Close a CLI for good. A Codex thread is archived once its CLI is gone (see codexThread). */
 function endLive(live: LiveCli): Promise<void> {
@@ -212,16 +227,17 @@ function endLive(live: LiveCli): Promise<void> {
   routes.delete(live.token);
   live.term.releaseIdle = null;
   live.term.bind(null);
-  const gone = live.proc ? exitOf(live.proc) : undefined;
-  live.proc?.kill();
+  const gone = live.proc ? registerCleanup(live,live.proc) : Promise.resolve();
+  live.proc?.setMeta({...metaOf(live),busy:false,stopping:true});
+  try{live.proc?.kill();}catch{cleanup.unverified(live.token);}
   live.proc = null;
   live.term.note(`── ${cliLabel(live.cli)} session ended ──`);
-  fs.rm(live.dir, { recursive: true, force: true, maxRetries: 5 }, () => undefined);
-  return live.cli === 'codex' && live.resumeId ? codexThread('archive', live.resumeId, gone) : Promise.resolve();
+  return gone.then(async()=>{fs.rm(live.dir,{recursive:true,force:true,maxRetries:5},()=>undefined);if(live.cli==='codex'&&live.resumeId)await codexThread('archive',live.resumeId);});
 }
 
 /** What the keeper holds with a CLI's terminal, so the office can pick it up again after a restart. */
 interface CliMeta {
+  stopping?:boolean;
   governanceSha256?:string;
   governanceReady?:boolean;
   agentId: string;
@@ -255,6 +271,7 @@ function wire(l: LiveCli, office?: OfficeTools) {
     }
   });
   p.onExit((code) => {
+    if(p.verifiedExit!==true&&!closing.has(l.token))registerCleanup(l,p);
     l.proc = null;
     if (lives.get(l.term) !== l) return; // already replaced or closed
     if (l.session) l.session.exited(code);
@@ -289,14 +306,29 @@ export async function reconnectClis(terminalFor: (agentId: string) => AgentTermi
   // reopening hooks so a surviving Codex process cannot discard denials.
   writeHelpers();
   const held = await startKeeper(HOME_DIR, handleHook);
+  const quarantined=new Set<string>();
+  for(const record of cleanup.view().records){
+    if(!record.keeperInstance||record.keeperInstance!==keeperInstance()){cleanup.unverified(record.id);continue;}
+    const matches=held.filter(item=>((item.meta as Partial<CliMeta>|null)?.token??item.id)===record.id);
+    if(!matches.length){cleanup.confirmed(record.id);continue;}
+    if(matches.length!==1){cleanup.unverified(record.id);continue;}
+    const match=matches[0];quarantined.add(match.id);
+    if(match.exit!==null){cleanup.confirmed(record.id);discardPty(match);continue;}
+    const proc=adoptPty(match);observeCleanup(record.id,proc);proc.kill();
+  }
   const back: ReconnectedCli[] = [];
   for (const h of held) {
+    if(quarantined.has(h.id))continue;
     const meta = (h.meta ?? {}) as Partial<CliMeta>;
     const term = meta.agentId ? terminalFor(meta.agentId) : null;
     // Copilot runs one-shot with its result in the terminal output, which a restart loses: resume its session instead.
-    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || meta.cli==='codex'&&(meta.governanceSha256!==codexGovernanceSha||meta.governanceReady!==true) || meta.cli==='opencode'&&meta.governanceSha256!==openCodeGovernanceSha || meta.cli==='gemini'&&(meta.governanceSha256!==geminiGovernanceSha||meta.governanceReady!==true) || !meta.token || !meta.dir || !meta.agentId) {
-      discardPty(h);
-      if (meta.cli === 'codex' && meta.resumeId) void codexThread('archive', meta.resumeId, h.exit === null ? new Promise((r) => setTimeout(r, 5000)) : undefined);
+    if (h.exit !== null || meta.stopping===true || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || meta.cli==='codex'&&(meta.governanceSha256!==codexGovernanceSha||meta.governanceReady!==true) || meta.cli==='opencode'&&meta.governanceSha256!==openCodeGovernanceSha || meta.cli==='gemini'&&(meta.governanceSha256!==geminiGovernanceSha||meta.governanceReady!==true) || !meta.token || !meta.dir || !meta.agentId) {
+      if(h.exit===null){
+        const id=typeof meta.token==='string'&&meta.token?meta.token:h.id,proc=adoptPty(h);
+        cleanup.begin({id,agentId:typeof meta.agentId==='string'?meta.agentId:'',cli:typeof meta.cli==='string'?meta.cli:'unknown',pid:h.pid,keeperInstance:keeperInstance(),requestedAt:Date.now(),state:'stopping'});
+        const gone=observeCleanup(id,proc);proc.kill();
+        if(meta.cli==='codex'&&meta.resumeId)void gone.then(()=>codexThread('archive',meta.resumeId!));
+      }else{discardPty(h);if(meta.cli==='codex'&&meta.resumeId)void codexThread('archive',meta.resumeId);}
       continue;
     }
     const l: LiveCli = { governanceReady:meta.governanceReady,agentId: meta.agentId, cli: meta.cli, term, proc: adoptPty(h), token: meta.token, dir: meta.dir, resumeId: meta.resumeId ?? null, statusLine: '🏢 cubefarm', output: '', shots: new Set(), session: null };
@@ -316,7 +348,7 @@ export { hooksReady };
  * files, which only the CLIs' own command lines carry (Codex's instructions name the worktree, for one).
  */
 export function officeProcesses(): { pids: number[]; markers: string[] } {
-  const pids = [keeperPid(), ...[...lives.values()].map((l) => l.proc?.pid ?? 0)].filter((p) => p > 0);
+  const pids = [keeperPid(), ...[...lives.values()].map((l) => l.proc?.pid ?? 0),...[...closing.values()].map(proc=>proc.pid)].filter((p) => p > 0);
   return { pids, markers: [SESSIONS_DIR, BIN_DIR] };
 }
 
@@ -325,7 +357,13 @@ export function officeProcesses(): { pids: number[]; markers: string[] } {
  * until it's back; when it quits for good they stop with it (once they're gone, their Codex threads are archived).
  */
 export async function releaseClis(restart: boolean): Promise<void> {
-  if (!restart) await Promise.all([...lives.values()].map(endLive)); // their exits come through the keeper
+  if(!restart){
+    const stops=[...lives.values()].map(endLive);
+    const stopped=Promise.all([...stops,...[...closeWaiters.values()].map(waiter=>waiter.promise)]).then(()=>{const blocker=cleanupBlocker();if(blocker)throw new Error(blocker);});
+    let timer:NodeJS.Timeout|undefined;
+    try{await Promise.race([stopped,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Native runtime exit remains unverified; cleanup quarantine is retained')),5000);})]);}
+    finally{clearTimeout(timer);}
+  }
   leaveKeeper();
 }
 
@@ -379,13 +417,14 @@ export function codexRecoveredIdle(screen:string):boolean {
 }
 
 export function startCliSession(opts: SessionOptions, callbacks: SessionCallbacks): SessionHandle {
+  const pendingCleanup=cleanupBlocker();if(pendingCleanup)throw new Error(pendingCleanup);
   const term = opts.terminal!;
   // A follow-up to the session a CLI is still waiting in picks that CLI up again, and so does an office that restarted
   // while it worked (reattach); anything else replaces it.
   const prev = lives.get(term);
   const waiting = !!prev?.proc && !prev.session;
   const adopt = waiting && (!!opts.reattach || (prev!.cli === (opts.cli ?? 'codex') && !!opts.resumeSessionId && prev!.resumeId === opts.resumeSessionId));
-  if (prev && !adopt) endLive(prev);
+  const replaced=prev&&!adopt?endLive(prev):Promise.resolve();
   let live: LiveCli | null = adopt ? prev! : null;
   const cli = live?.cli ?? opts.cli ?? 'codex';
   const policyError=runtimeModelError(cli,opts.model);if(policyError)throw new Error(policyError);
@@ -836,7 +875,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   term.note(`── ${label}${opts.label ? ` · ${opts.label}` : ''} ──`);
   const resumeId = cli === 'claude' || cli === 'copilot' ? sessionId : (opts.resumeSessionId ?? null);
   const l: LiveCli = { governanceReady:cli==='codex'?codexTrustReady:undefined,agentId: opts.agentId ?? '', cli, term, proc: null, token, dir, resumeId, statusLine, output: '', shots: new Set(), session: { hook, exited } };
-  const begin = () => {
+  const beginAfterCleanup = () => {
     if(cli==='codex')l.governanceReady=codexTrustReady;
     if (done) return; // stopped while its thread was being unarchived
     let p: Pty;
@@ -903,6 +942,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       if (!done && !begun && cli === 'claude') log([{ kind: 'error', text: `⚠ ${label} hasn't started on the task yet. Open the terminal to see what it's waiting for.` }]);
     }, BOOT_MS);
   };
+  const begin=()=>{void replaced.then(()=>{if(done)return;const blocker=cleanupBlocker();if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}beginAfterCleanup();});};
   // Codex won't resume a thread the office archived (see codexThread): it's unarchived first.
   if(cli==='codex'){
     void verifyCodex().then(async verified=>{if(done)return;codexTrustReady=true;log([{kind:'system',text:`Verified native trust for ${verified.verified} generated office hooks.`}]);if(opts.resumeSessionId)await codexThread('unarchive',opts.resumeSessionId);if(!done)begin();},()=>{if(!done)finish({ok:false,text:'',errors:['Codex office hook trust could not be verified; no task was sent. Inspect native hook policy and source integrity.']});});

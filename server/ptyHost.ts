@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import { hookFailure } from '../shared/hookDecision.ts';
 import net from 'node:net';
@@ -52,6 +53,7 @@ interface Held {
   killed: boolean;
 }
 const held = new Map<string, Held>();
+const instance=crypto.randomUUID();
 let office: net.Socket | null = null;
 let officeLeft = Date.now();
 let hooksOpen = false; // the connected office has picked up its terminals and takes hooks
@@ -186,7 +188,7 @@ function connected(sock: net.Socket) {
       office = sock;
       hooksOpen = false;
       const ptys: HeldPty[] = [...held].map(([id, h]) => ({ id, pid: h.proc.pid, meta: h.meta, exit: h.exit }));
-      send({ op: 'ready', version: PTY_PROTOCOL, hookPort: (hooks.address() as net.AddressInfo).port, ptys, pid: process.pid });
+      send({ op: 'ready', version: PTY_PROTOCOL, hookPort: (hooks.address() as net.AddressInfo).port, ptys, pid: process.pid,instance });
       return;
     }
     const h = 'id' in m ? held.get(m.id) : undefined;

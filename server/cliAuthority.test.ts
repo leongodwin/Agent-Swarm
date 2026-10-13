@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import type { AgentTerminal } from './terminal.ts';
 import type { SessionOptions } from './agentRunner.ts';
-const native = vi.hoisted(() => ({token: '', kill: vi.fn(),write:vi.fn(),args:[] as string[],data:undefined as undefined|((data:string)=>void),exit:undefined as undefined|((code:number)=>void)}));
+const native = vi.hoisted(() => ({autoExit:true,token: '', kill: vi.fn(),write:vi.fn(),args:[] as string[],data:undefined as undefined|((data:string)=>void),exit:undefined as undefined|((code:number)=>void)}));
 vi.mock('./config.ts', async importOriginal => {
   const real = await importOriginal<typeof import('./config.ts')>();
   const fs = await import('node:fs/promises'); const os = await import('node:os'); const path = await import('node:path');
@@ -12,15 +12,17 @@ vi.mock('./clis.ts', async importOriginal => ({...await importOriginal<typeof im
 vi.mock('./codexHookTrust.ts',()=>({prepareCodexHooks:vi.fn(async()=>({verified:5,hashes:[]}))}));
 vi.mock('./geminiBridge.ts',async original=>({...await original<typeof import('./geminiBridge.ts')>(),verifyGeminiProfile:vi.fn(async()=>null)}));
 vi.mock('./ptyClient.ts', () => ({
-  terminalsAvailable: true, keeperHookUrl: () => 'http://127.0.0.1:1', keeperPid: () => 0,
+  terminalsAvailable: true, keeperHookUrl: () => 'http://127.0.0.1:1', keeperPid: () => 0,keeperInstance:()=> '11111111-1111-4111-8111-111111111111',
   hooksReady: vi.fn(), leaveKeeper: vi.fn(), discardPty: vi.fn(), adoptPty: vi.fn(), startKeeper: vi.fn(),
   spawnPty: (_file: string, _args: string[], _options: unknown, meta: {token: string}) => {
     native.token=meta.token;native.args=_args;
-    return {pid:0,write:native.write,resize:vi.fn(),kill:native.kill,setMeta:vi.fn(),onData:(handler:(data:string)=>void)=>{native.data=handler;},onExit:(handler:(code:number)=>void)=>{native.exit=handler;}};
+    let closed=false;const handlers:((code:number)=>void)[]=[];
+    native.exit=code=>{closed=true;for(const handler of handlers.splice(0))handler(code);};
+    return {pid:0,get verifiedExit(){return closed;},write:native.write,resize:vi.fn(),kill:()=>{native.kill();if(native.autoExit)native.exit?.(0);},setMeta:vi.fn(),onData:(handler:(data:string)=>void)=>{native.data=handler;},onExit:(handler:(code:number)=>void)=>{if(closed)queueMicrotask(()=>handler(0));else handlers.push(handler);}};
   },
 }));
 import { HOME_DIR } from './config.ts';
-import { handleHook, releaseClis, startCliSession as startRealCliSession,reconnectClis } from './cliRunner.ts';
+import { handleHook, releaseClis, startCliSession as startRealCliSession,reconnectClis,runtimeCleanupView } from './cliRunner.ts';
 import {startKeeper,discardPty,adoptPty} from './ptyClient.ts';
 import { setToolGovernanceGate } from './toolGovernance.ts';
 import {OPENCODE_PLUGIN_SOURCE} from './clis.ts';
@@ -28,7 +30,7 @@ import {GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
 import {prepareCodexHooks} from './codexHookTrust.ts';
 import crypto from 'node:crypto';
 
-afterEach(async () => { await releaseClis(false); vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs(); setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'})); });
+afterEach(async () => {native.exit?.(0);native.autoExit=true;await releaseClis(false); vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs(); setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'})); });
 afterAll(async () => fs.rm(HOME_DIR,{recursive:true,force:true,maxRetries:10,retryDelay:100}));
 async function startCliSession(...args:Parameters<typeof startRealCliSession>){const handle=startRealCliSession(...args);for(let i=0;i<25;i++)await Promise.resolve();return handle;}
 async function session(authorize: () => string | null) {
@@ -37,11 +39,19 @@ async function session(authorize: () => string | null) {
   return await startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-worker',cli:'codex',terminal:term,keepAlive:true,authorizeTool:authorize} satisfies SessionOptions,
     {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
 }
-it.each([undefined,'old-plugin-hash'])('discards an OpenCode process retained without the current governance bridge: %s',async governanceSha256=>{
+it.each([undefined,'old-plugin-hash','stopping'])('retires an unsafe retained OpenCode terminal: %s',async state=>{
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
-  const held={id:'synthetic-held',exit:null,meta:{agentId:'synthetic-worker',cli:'opencode',token:'synthetic-token',dir:HOME_DIR,resumeId:'synthetic-checkpoint',busy:false,governanceSha256}};
+  const held={id:'synthetic-held',pid:0,exit:null,meta:{agentId:'synthetic-worker',cli:'opencode',token:'synthetic-token',dir:HOME_DIR,resumeId:'synthetic-checkpoint',busy:false,governanceSha256:state==='stopping'?crypto.createHash('sha256').update(OPENCODE_PLUGIN_SOURCE).digest('hex'):state,stopping:state==='stopping'}};
   vi.mocked(startKeeper).mockResolvedValue([held as any]);vi.mocked(discardPty).mockClear();vi.mocked(adoptPty).mockClear();
-  expect(await reconnectClis(()=>term)).toEqual([]);expect(discardPty).toHaveBeenCalledExactlyOnceWith(held);expect(adoptPty).not.toHaveBeenCalled();
+  let exited=false;const listeners:((code:number)=>void)[]=[];const kill=vi.fn(()=>{exited=true;listeners.forEach(callback=>callback(0));});
+  vi.mocked(adoptPty).mockReturnValueOnce({pid:0,get verifiedExit(){return exited;},write:vi.fn(),resize:vi.fn(),setMeta:vi.fn(),kill,onData:vi.fn(),onExit:callback=>{listeners.push(callback);}});
+  expect(await reconnectClis(()=>term)).toEqual([]);expect(kill).toHaveBeenCalledOnce();expect(adoptPty).toHaveBeenCalledExactlyOnceWith(held);expect(term.bind).not.toHaveBeenCalled();expect(runtimeCleanupView().records).toEqual([]);
+});
+it('quarantines cancelled native work past the former five-second timeout until confirmed exit',async()=>{
+  const handle=await session(()=>null);native.autoExit=false;handle.stop();
+  expect(runtimeCleanupView().records).toHaveLength(1);await vi.advanceTimersByTimeAsync(6000);expect(runtimeCleanupView().records).toHaveLength(1);
+  await expect(session(()=>null)).rejects.toThrow('quarantined');
+  native.exit?.(0);for(let i=0;i<25;i++)await Promise.resolve();expect(runtimeCleanupView().records).toEqual([]);
 });
 it.each([false,true])('reports capacity failure for a %s retained Codex task and keeps developer work resumable',async reattach=>{
   vi.useFakeTimers();

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { adoptPty, hooksReady, keeperHookUrl, keeperPid, leaveKeeper, spawnPty, startKeeper, terminalsAvailable } from './ptyClient.ts';
+import { adoptPty, hooksReady, keeperHookUrl, keeperPid,keeperInstance, leaveKeeper, spawnPty, startKeeper, terminalsAvailable,RemotePty } from './ptyClient.ts';
 
 // The terminal keeper for real: its own process, a real pseudo-terminal, and an office that restarts in between.
 // (A short temp folder: macOS caps a Unix socket path at 104 characters.)
@@ -43,12 +43,19 @@ describe.skipIf(!terminalsAvailable)('the terminal keeper', () => {
     expect(held.map((h) => [h.meta, h.exit])).toEqual([[{ agentId: 'ada' }, null]]);
 
     const again = adoptPty(held[0]);
+    expect(keeperInstance()).toMatch(/^[a-f0-9-]{36}$/);
     let after = '';
     again.onData((d) => (after += plain(d)));
     const code = new Promise<number>((resolve) => again.onExit(resolve));
     hooksReady();
     expect(await code).toBe(3);
+    expect(again.verifiedExit).toBe(true);
+    expect(await new Promise<number>(resolve=>again.onExit(resolve))).toBe(3);
     expect(hooks).toEqual([{ token: 'tok-1', body: { hook_event_name: 'Stop' } }]);
     expect(after).toContain('answer {"answeredBy":"the office after its restart"}');
   });
+});
+it('replays transport loss as unverified, including for late exit subscribers',async()=>{
+  const terminal=new RemotePty('synthetic-loss');terminal.exit(-1,false);
+  expect(terminal.verifiedExit).toBe(false);expect(await new Promise<number>(resolve=>terminal.onExit(resolve))).toBe(-1);
 });

@@ -6,7 +6,7 @@ import type { Socket } from 'node:net';
 // per line. Kept free of the rest of the server so the keeper stays small and starts fast.
 
 /** Bumped when the messages change: an office that finds a keeper on another version replaces it. */
-export const PTY_PROTOCOL = 1;
+export const PTY_PROTOCOL = 2;
 
 /** A terminal the keeper holds, as it reports it to an office that (re)connects. */
 export interface HeldPty {
@@ -31,7 +31,7 @@ export type ToHost =
   | { op: 'shutdown' }; // stop every terminal and exit (a keeper on another version)
 
 export type FromHost =
-  | { op: 'ready'; version: number; hookPort: number; ptys: HeldPty[]; pid?: number }
+  | { op: 'ready'; version: number; hookPort: number; ptys: HeldPty[]; pid?: number; instance?: string }
   | { op: 'spawned'; id: string; pid: number }
   | { op: 'failed'; id: string; error: string }
   | { op: 'data'; id: string; data: string }

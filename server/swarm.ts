@@ -300,6 +300,8 @@ const ICON = { pass: '✅', fail: '❌', skip: '⏭️' } as const;
 export { HttpError };
 
 export class Swarm {
+  runtimeCleanup:()=>import('./runtimeCleanup.ts').CleanupView=()=>({records:[]});
+  runtimeCleanupChanged(){if(this.closed)return;this.emitSessionUsage();this.later(()=>this.schedule(),0);}
   private sessionCapacityBlocker:string|undefined;
   restoreArchitectureCleanup(records:{jobId:string;repoId:string;reservedAt:number}[],unavailableReason?:string){
     for(const record of records)this.auxiliarySessions.set(record.jobId,{...record,kind:'architecture',state:'stopping'});
@@ -311,8 +313,10 @@ export class Swarm {
   private auxiliarySessions=new Map<string,import('../shared/sessionUsage.ts').SessionUsage['auxiliary'][number]>();
   sessionUsage():import('../shared/sessionUsage.ts').SessionUsage {
     const agentSessions=this.state.agents.filter(a=>BUSY.includes(a.status)).length,limit=this.state.settings.sessionLimit;
-    const auxiliary=[...this.auxiliarySessions.values()].map(item=>({...item})),used=agentSessions+auxiliary.length;
-    return {limit,used,agentSessions,freeSlots:this.sessionCapacityBlocker?null:limit>0?Math.max(0,limit-used):null,auxiliary,...(this.sessionCapacityBlocker?{blockedReason:this.sessionCapacityBlocker}:{})};
+    const cleanup=this.runtimeCleanup(),busyIds=new Set(this.state.agents.filter(a=>BUSY.includes(a.status)).map(a=>a.id));
+    const blockedReason=this.sessionCapacityBlocker??cleanup.unavailableReason??(cleanup.records.length?'Native runtime cleanup is pending or unverified; new work is quarantined':undefined);
+    const auxiliary=[...this.auxiliarySessions.values()].map(item=>({...item})),used=agentSessions+auxiliary.length+cleanup.records.filter(record=>!busyIds.has(record.agentId)).length;
+    return {limit,used,agentSessions,freeSlots:blockedReason?null:limit>0?Math.max(0,limit-used):null,auxiliary,...(cleanup.records.length?{cleanup:cleanup.records}:{}),...(blockedReason?{blockedReason}:{})};
   }
   reserveArchitectureSession(repoId:string,jobId:string):import('../shared/sessionUsage.ts').AuxiliarySessionLease {
     this.requireOpen();this.repo(repoId);
@@ -875,7 +879,7 @@ export class Swarm {
   /** True when the manager has set a session limit and every slot is taken. */
   private slotsFull() {
     const limit = this.state.settings.sessionLimit;
-    return this.draining || !!this.sessionCapacityBlocker || limit > 0 && this.running() >= limit;
+    return this.draining || !!this.sessionUsage().blockedReason || limit > 0 && this.running() >= limit;
   }
 
   private agentSlug(a: PersistedAgent) {
@@ -1666,7 +1670,7 @@ export class Swarm {
   }
 
   private ensureSlot() {
-    if(this.sessionCapacityBlocker)throw new HttpError(409,`Session capacity is unverified: ${this.sessionCapacityBlocker}`);
+    const blocker=this.sessionUsage().blockedReason;if(blocker)throw new HttpError(409,`Session capacity is unverified: ${blocker}`);
     if(this.draining)throw new HttpError(409,'Office is draining; new agent work is paused');
     if (this.slotsFull()) {
       throw new HttpError(429, `All ${this.state.settings.sessionLimit} session slots are busy. Raise or clear the session limit in the manager's console, or wait.`);
