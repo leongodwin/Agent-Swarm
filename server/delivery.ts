@@ -340,7 +340,11 @@ export class DeliveryService {
     if(phase==='health') run.health={...(run.health??{status:'pending',nextCheckAt:new Date().toISOString()}),governanceEvidence:`health/${file}`};
     else run.evidence.push(file);
     await this.save();
-    await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,signal:this.active?.signal},directory,index);
+    try {await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,signal:this.active?.signal,evidenceDirectory:directory},directory,index);}
+    finally {
+      const decision=await fs.readFile(path.join(directory,file),'utf8').then(value=>JSON.parse(value)).catch(()=>null);
+      if(phase!=='health'&&decision?.packageInventoryFile&&!run.evidence.includes(decision.packageInventoryFile))run.evidence.push(decision.packageInventoryFile);
+    }
   }
   private async execute(repo: RepoView, run: DeliveryRun, controller: AbortController) {
     const dir = path.join(this.root, 'delivery-runs', run.id);

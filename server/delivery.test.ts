@@ -97,6 +97,19 @@ describe('Real solution delivery', () => {
     const file=run.evidence.find(file=>file.endsWith('-build.json'))!;
     expect(JSON.parse(await fs.readFile(path.join(root,'delivery-runs',run.id,'evidence',file),'utf8'))).toMatchObject({status:'unavailable',sourceCommit:run.head,releaseId:run.releaseId});
   });
+  it('retains a blocked package inventory in the same evidence index as its denying decision',async()=>{
+    const {service,repo,deps,root}=await fixture();const original=deps.governance!;
+    deps.governance=async request=>{
+      const decision=await original(request);if(request.phase!=='import')return decision;
+      const file=`package-inventory-${request.packageSha256}.json`;
+      await fs.writeFile(path.join(request.evidenceDirectory!,file),JSON.stringify({scope:'injected-test-inventory',resourceInventoryComplete:false}));
+      return {...decision,status:'unavailable',packageInventoryFile:file,reasons:['Opaque package components need validation']};
+    };
+    await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
+    expect(run.phase).toBe('blocked');const inventory=run.evidence.find(file=>file.startsWith('package-inventory-'));expect(inventory).toBeDefined();
+    expect(JSON.parse(await fs.readFile(path.join(root,'delivery-runs',run.id,'evidence',inventory!),'utf8')).resourceInventoryComplete).toBe(false);
+    expect(run.operations?.length??0).toBe(0);
+  });
   for(const stage of ['test','import','post-deploy','verify'] as const) it(`rechecks governance at ${stage} and blocks drift without inventing an import outcome`,async()=>{
     const {service,repo,calls,deps,root}=await fixture();const original=deps.governance!;
     const stages:string[]=[];

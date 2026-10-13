@@ -7,11 +7,12 @@ const digest=z.string().regex(/^[a-f0-9]{64}$/);
 export const governancePhase=z.enum(['build','test','import','post-deploy','verify','health']);
 export type GovernancePhase=z.infer<typeof governancePhase>;
 export interface LifecycleRequest {
-  phase:GovernancePhase;sourceCommit:string;environmentUrl:string;releaseId:string;checkout:string;manifest:unknown;packageSha256?:string;signal?:AbortSignal;
+  phase:GovernancePhase;sourceCommit:string;environmentUrl:string;releaseId:string;checkout:string;manifest:unknown;packageSha256?:string;signal?:AbortSignal;evidenceDirectory?:string;
 }
 const resultSchema=z.object({status:z.enum(['clear','blocked','unavailable']),phase:governancePhase,sourceCommit:digest.or(z.string().regex(/^[a-f0-9]{40}$/)),
   environmentUrl:z.url(),releaseId:z.string().min(1),manifestSha256:digest,checkedAt:z.iso.datetime(),
   artifactSha256:digest.optional(),policySha256:digest.optional(),schemaSha256:digest.optional(),
+  packageInventoryFile:z.string().regex(/^package-inventory-[a-f0-9]{64}\.json$/).optional(),
   reasons:z.array(z.string().min(1).max(1000)).min(1).max(30),
 }).strict().superRefine((result,ctx)=>{if(result.status==='clear'&&(!result.artifactSha256||!result.policySha256||!result.schemaSha256))ctx.addIssue({code:'custom',message:'Clear governance requires complete artifact, policy and schema evidence'});});
 export type LifecycleResult=z.infer<typeof resultSchema>;
