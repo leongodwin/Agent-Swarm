@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Office startup and shutdown
+
+Shutdown handlers are installed before retained-session recovery and capability admission. Quit/restart closes the swarm, tenancy, delivery scheduler, policy reader, capability checks and delivery admission barriers immediately. Cleanup runs concurrently and settles every service; a failing or stalled provider cannot prevent the others from starting cleanup. Repeated requests share one completion and preserve the first restart/quit decision.
+
+Corrupted office-state startup and listener errors use the same cleanup path. Failed startup, failed cleanup and the 15-second forced-exit deadline return status 1 instead of reporting successful termination. A clean quit/restart returns 0. This does not guarantee completion after the deadline, handle hard process kills, or preserve policy authentication across reloads.
+
+Regression tests cover stalled/throwing/reentrant cleanup and real isolated demo child processes with corrupted state, an occupied port and launcher-requested quit. They preserve corrupted state and verify exit codes. The non-demo office responded after its development reload at PID 71116, started `2026-10-13T04:37:45.444Z`; its earlier policy observation remained stale with no live reader. Native authenticated recovery remains unverified. Evidence: `.swarm-reliability/office-shutdown-coverage-2026-10-13.txt`, `office-shutdown-coverage-exit-2026-10-13.txt` and `office-shutdown-api-e2e-2026-10-13.txt`.
+
 ## Worker task ownership and cancellation
 
 Worker tasks carry an in-memory generation that changes when a task is reserved or stopped. Capability checks, workspace preparation, QA metadata reads, PR lookups and session callbacks verify that generation before applying their results. Old callbacks cannot change a replacement task's session ID, tool/screen state, usage pacing, cost or QA handoff. Completion is processed once per session.

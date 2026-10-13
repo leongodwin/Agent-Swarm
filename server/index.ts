@@ -28,6 +28,7 @@ import { z } from 'zod';
 import { ToolGovernanceService, setToolGovernanceGate } from './toolGovernance.ts';
 import { TenantDlpService } from './tenantDlp.ts';
 import { createDeliveryGovernance } from './deliveryGovernance.ts';
+import { OfficeShutdown } from './officeShutdown.ts';
 import { parseBody, proposalSchema, hldSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
@@ -98,7 +99,42 @@ swarm.requestDeliveryReview = async (id) => {
   if (release.approvedAt && !delivery.view().runs.some((r) => r.releaseId === id && r.phase === 'reviewing')) return 'Release plan approved; visual review becomes available after verification';
   return swarm.reviewDeliveryRelease(release.plan.qaOwner, release.repoId, id);
 };
-await swarm.init();
+// Install shutdown before retained-session admission, which can await native
+// authentication/readiness. Every service closes its admission barrier at once.
+let deliveryTimer: NodeJS.Timeout | undefined;
+const officeShutdown = new OfficeShutdown([
+  { name: 'swarm', close: restart => swarm.shutdown(restart) },
+  { name: 'tenancy', close: () => backend.tenancy.close() },
+  { name: 'scheduler', close: () => clearInterval(deliveryTimer) },
+  { name: 'policy reader', close: () => tenantDlp.close() },
+  { name: 'capabilities', close: () => capabilities.close() },
+  { name: 'delivery', close: () => delivery.close() },
+]);
+let shutdownWork: Promise<void> | undefined;
+const shutdown = (signal: string): Promise<void> => {
+  if (shutdownWork) return shutdownWork;
+  console.log(`\n  ${signal}: stopping office services…`);
+  const force = setTimeout(() => {
+    console.error('Office cleanup exceeded 15 seconds; forcing exit');
+    process.exit(1);
+  }, 15_000);
+  shutdownWork = officeShutdown.close(signal === 'restart')
+    .then(() => signal === 'startup failure' ? 1 : 0, err => { console.error(err); return 1; })
+    .then(code => { clearTimeout(force); process.exit(code); });
+  return shutdownWork;
+};
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.once('SIGHUP', () => { void shutdown('SIGHUP'); });
+if (underLauncher()) {
+  process.on('message', msg => {
+    const m = msg as { type?: unknown; restart?: unknown } | null;
+    if (m?.type === 'office:shutdown') void shutdown(m.restart === false ? 'stop' : 'restart');
+  });
+}
+try { await swarm.init(); }
+catch (error) { console.error('Office startup failed:', error); await shutdown('startup failure'); }
+if (officeShutdown.closed) await shutdown('stop');
 delivery.onChange = () => { if (swarm.snapshot().repos.length) swarm.requestReview(); };
 capabilities.onChange = delivery.onChange;
 
@@ -195,7 +231,7 @@ app.get('/api/delivery/runs/:run/evidence', route(async (req, res) => {
   const location = await containedFile(path.join(HOME_DIR, 'delivery-runs', run.id, 'evidence'), file);
   res.download(location);
 }));
-const deliveryTimer = setInterval(() => { void delivery.tick(swarm.snapshot().repos).catch((err) => console.warn('delivery scheduler:', err.message)); }, 30_000);
+deliveryTimer = setInterval(() => { void delivery.tick(swarm.snapshot().repos).catch((err) => console.warn('delivery scheduler:', err.message)); }, 30_000);
 deliveryTimer.unref();
 
 
@@ -384,38 +420,10 @@ server.on('upgrade', (req, socket, head) => {
   target.handleUpgrade(req, socket, head, (ws) => target.emit('connection', ws, req));
 });
 
+server.once('error', error => { console.error('Office listener failed:', error); void shutdown('startup failure'); });
 server.listen(PORT, '127.0.0.1', () => {
   setOfficeUrl(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
   console.log(`\n  🏢 cubefarm on http://localhost:${PORT}${DEMO ? '  (DEMO MODE: fake GitHub + fake agents)' : ''}`);
   console.log(`     state: ${STATE_FILE}`);
   console.log(`     workspaces: ${WORKSPACE_ROOT}\n`);
 });
-
-// Floors' apps don't outlive the office. (A hard kill skips this; the next start clears the orphans.) Agents' CLIs
-// carry on through a restart and stop when the office quits.
-let closing = false;
-const shutdown = (signal: string) => {
-  if (closing) return;
-  closing = true;
-  backend.tenancy.close();
-  clearInterval(deliveryTimer);
-  console.log(`\n  ${signal}: stopping floor previews…`);
-  const force = setTimeout(() => process.exit(0), 15_000);
-  void tenantDlp.close().then(() => capabilities.close()).then(() => delivery.close()).then(() => swarm
-    .shutdown(signal === 'restart'))
-    .catch((err) => console.error(err))
-    .finally(() => {
-      clearTimeout(force);
-      process.exit(0);
-    });
-};
-process.once('SIGINT', () => shutdown('SIGINT'));
-process.once('SIGTERM', () => shutdown('SIGTERM'));
-process.once('SIGHUP', () => shutdown('SIGHUP')); // its terminal window closed (macOS, Linux; Windows' console too)
-// The launcher asks the office to stop: to restart it (an update, a code change) unless it says it's quitting.
-if (underLauncher()) {
-  process.on('message', (msg) => {
-    const m = msg as { type?: unknown; restart?: unknown } | null;
-    if (m?.type === 'office:shutdown') shutdown(m.restart === false ? 'stop' : 'restart');
-  });
-}
