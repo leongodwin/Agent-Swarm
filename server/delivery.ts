@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
@@ -20,6 +21,7 @@ import { connectFlowAdapter, verifyCloudFlowContext, verifyCloudFlowBindings, ve
 import { reconcileCloudFlow, reconcileCopilot } from './platformLifecycle.ts';
 import { reconcileAdditionalAction, verifyMigrationCompatibility } from './deploymentAdapters.ts';
 import { canvasResource } from './canvasOwnership.ts';
+import { requireLifecycleGovernance, type LifecycleCheck, type GovernancePhase } from './lifecycleGovernance.ts';
 
 const command = z.object({ executable: z.string().min(1), args: z.array(z.string()).max(100) }).strict();
 export const deliveryManifest = z.object({
@@ -66,6 +68,7 @@ export function importJobId(output: string) {
   return output.match(/\bimport\s+job\s*(?:id)?\s*[:=]\s*\{?([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\}?/i)?.[1].toLowerCase();
 }
 export interface DeliveryDependencies {
+  governance?: LifecycleCheck;
   flow?: typeof connectFlowAdapter;
   verify?: typeof verifyIndependently;
   run(command: DeliveryCommand, cwd: string, env: Record<string, string>, signal: AbortSignal): Promise<string>;
@@ -124,6 +127,7 @@ export class DeliveryService {
   private state: { policy: DeliveryPolicy | null; runs: DeliveryRun[]; releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number } = { policy: null, runs: [], releases: [], blockers: [], revision: 0 };
   onChange: () => void = () => {};
   checkCapabilities: (repoId: string, cwd: string, environment: string, force: boolean) => Promise<{ status: string; configHash?: string; checks: { id: string; category: string; passed: boolean; remedy: string }[] }> = async () => { throw new Error('Configure capability checks before delivery'); };
+  checkGovernance?: LifecycleCheck;
   private lease: string | null = null;
   private writer = new SerialWriter();
   private active: AbortController | null = null;
@@ -304,8 +308,10 @@ export class DeliveryService {
         const inventory = await this.deps.run({ executable: 'pac', args: ['solution', 'list', '--environment', run.environmentUrl, '--json'] }, repo.checkoutPath, {}, controller.signal);
         if (!installedSolution(inventory, run.solution!, run.version!)) throw new Error('Installed solution/version drift detected');
         const capabilityHash = await this.requireCapabilities(repo, release);
+        const manifest=deliveryManifest.parse(JSON.parse(await this.deps.run({executable:'git',args:['show',`${run.head}:cubefarm.delivery.json`]},repo.checkoutPath,{},controller.signal)));
+        await this.governance(run,manifest,'health');
         if (run.health?.capabilityHash && run.health.capabilityHash !== capabilityHash) throw new Error('Capability configuration drift detected; review and issue a new release');
-        run.health = { status: 'healthy', checkedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + release.plan.monitoring.intervalMinutes * 60000).toISOString(), capabilityHash };
+        run.health = { status: 'healthy', checkedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + release.plan.monitoring.intervalMinutes * 60000).toISOString(), capabilityHash, governanceEvidence:run.health?.governanceEvidence };
         if (previous === 'degraded') this.state.blockers = this.state.blockers.filter((b) => b.repoId !== repo.id || b.releaseId !== release.id);
       } catch (err) {
         run.health = { ...run.health, status: 'degraded', checkedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + release.plan.monitoring.intervalMinutes * 60000).toISOString(), error: String((err as Error).message) };
@@ -317,6 +323,25 @@ export class DeliveryService {
   }
   async close() { this.closed = true; this.active?.abort(); await this.preparing; await this.pending; await this.writer.drain(); await this.releaseLease(); }
   async waitForIdle() { await this.pending; }
+  private async governance(run:DeliveryRun,manifest:unknown,phase:GovernancePhase) {
+    const releaseId=run.releaseId;
+    if(!releaseId) throw new Error('Lifecycle governance requires a pinned release identity');
+    const checkout=path.join(this.root,'delivery-runs',run.id,'checkout');
+    let packageSha256:string|undefined;
+    if(['import','post-deploy','verify','health'].includes(phase)) {
+      const packageFile=await containedFile(checkout,deliveryManifest.parse(manifest).solutionZip),hash=crypto.createHash('sha256');
+      for await(const chunk of createReadStream(packageFile,{signal:this.active?.signal}))hash.update(chunk);
+      packageSha256=hash.digest('hex');
+    }
+    const directory=path.join(this.root,'delivery-runs',run.id,phase==='health'?'health':'evidence');
+    const existing=phase==='health'?await fs.readdir(directory).catch((error)=>{if(error.code==='ENOENT')return [] as string[];throw error;}):run.evidence;
+    const index=Math.max(-1,...existing.map(file=>Number(file.match(/^governance-(\d+)-/)?.[1]??-1)))+1;
+    const file=`governance-${index}-${phase}.json`;
+    if(phase==='health') run.health={...(run.health??{status:'pending',nextCheckAt:new Date().toISOString()}),governanceEvidence:`health/${file}`};
+    else run.evidence.push(file);
+    await this.save();
+    await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,signal:this.active?.signal},directory,index);
+  }
   private async execute(repo: RepoView, run: DeliveryRun, controller: AbortController) {
     const dir = path.join(this.root, 'delivery-runs', run.id);
     const checkout = path.join(dir, 'checkout'); const evidence = path.join(dir, 'evidence');
@@ -331,7 +356,7 @@ export class DeliveryService {
     const step = async (phase: DeliveryRun['phase'], fn: () => Promise<unknown>) => {
       run.phase = phase; run.log.push(`${new Date().toISOString()} ${phase}`); await this.save(); await fn();
     };
-    const commands = async (list: DeliveryCommand[]) => { for (const item of list) await command(item.executable, item.args); };
+    const commands = async (list: DeliveryCommand[],manifest:unknown,phase:GovernancePhase) => { for (const item of list) {await this.governance(run,manifest,phase);await command(item.executable, item.args);} };
     let targetLease: Awaited<ReturnType<typeof acquireResourceLease>> | undefined;
     const authoringLeases: Awaited<ReturnType<typeof acquireResourceLease>>[] = [];
     let flow: FlowAdapter | undefined;
@@ -354,6 +379,7 @@ export class DeliveryService {
       for (const appId of [...new Set(manifest.canvasAuthoringApps)].sort()) authoringLeases.push(await acquireResourceLease(this.resourceLeaseRoot, canvasResource(run.environmentUrl, appId), run.id, { reclaimDeadOwner: false }));
       const request: Request = async (method, resource, body, headers) => {
         await targetLease!.assertOwned();
+        if(method!=='GET') await this.governance(run,manifest,'post-deploy');
         const output = await command('dataverse', ['api', 'request', '--target', 'dataverse', '--environment', run.environmentUrl, '--method', method, '--path', `/api/data/v9.2/${resource}`, ...(body ? ['--body', JSON.stringify(body)] : []), ...Object.entries(headers ?? {}).flatMap(([key, value]) => ['--header', `${key}:${value}`])]);
         if (method !== 'GET' && !output.trim()) return null;
         // Fail closed on unexpected CLI output rather than guessing a JSON fragment.
@@ -378,8 +404,8 @@ export class DeliveryService {
       for (const doc of manifest.documentation) await containedFile(checkout, doc);
       if (!run.checkpoint || run.checkpoint === 'prepared') await verifyMigrationCompatibility(manifest.postDeployActions, manifest.targetComponents, request);
       if (!run.checkpoint || run.checkpoint === 'prepared') {
-        await step('building', () => commands(manifest.build));
-        await step('testing', () => commands(manifest.test));
+        await step('building', () => commands(manifest.build,manifest,'build'));
+        await step('testing', () => commands(manifest.test,manifest,'test'));
         run.checkpoint = 'prepared'; await this.save();
       }
       for (const identity of release.plan.verification.identities) {
@@ -412,6 +438,8 @@ export class DeliveryService {
         await targetLease!.assertOwned();
         await checkAuthentication();
         if (manifest.targetBinding) await verifyTarget(request, manifest.targetBinding);
+        await this.governance(run,manifest,kind==='import'?'import':'post-deploy');
+        if(kind==='import') run.checkpoint='import-started';
         run.operations ??= [];
         if (run.operations.some((op) => op.id === id)) throw new Error(`Operation ${id} already has a recorded outcome; reconcile it before retrying`);
         const operation: NonNullable<DeliveryRun['operations']>[number] = { id, kind, status: 'intent',
@@ -433,11 +461,11 @@ export class DeliveryService {
       if (run.checkpoint === 'post-started' && (manifest.postDeploy.length || !manifest.postDeployActions.length)) throw new Error('Post-deployment outcome is ambiguous; inspect activation/sharing/flow state before creating a replacement release');
       await step('deploying', async () => {
         if (run.checkpoint === 'prepared') {
-          run.checkpoint = 'import-started'; await this.save();
           await mutation('solution-import', 'import', 'pac', ['solution', 'import', '--environment', run.environmentUrl, '--path', zip, '--publish-changes', ...(settings ? ['--settings-file', settings] : [])]);
           run.checkpoint = 'imported'; await this.save();
         }
         if (run.checkpoint === 'imported' || run.checkpoint === 'post-started') {
+          await this.governance(run,manifest,'post-deploy');
           run.checkpoint = 'post-started'; await this.save();
           for (const [index, item] of manifest.postDeploy.entries()) await mutation(`post-deploy-${index}`, 'post-deploy', item.executable, item.args);
           if (manifest.targetBinding) {
@@ -449,6 +477,7 @@ export class DeliveryService {
             const priority = (type: string) => type === 'connection-reference-bind' ? 0 : type === 'connection-reference-check' || type === 'schema-check' ? 1 : 2;
             const orderedActions = [...manifest.postDeployActions].sort((a, b) => priority(a.type) - priority(b.type));
             for (const action of orderedActions) {
+              await this.governance(run,manifest,'post-deploy');
               await checkAuthentication();
               const component = mapping.find((c) => c.key === action.component)!;
               const save = () => this.save(), owned = () => targetLease!.assertOwned();
@@ -470,6 +499,7 @@ export class DeliveryService {
         }
       });
       await step('verifying', async () => {
+        await this.governance(run,manifest,'verify');
         let verifiedMapping: Awaited<ReturnType<typeof mapTargetComponents>> = [];
         if (manifest.targetBinding) {
           await verifyTarget(request, manifest.targetBinding);
@@ -486,8 +516,9 @@ export class DeliveryService {
           environmentUrl: run.environmentUrl, packageSha256: run.recovery!.packageSha256, operations: run.operations ?? [],
           note: 'Reported command success alone does not establish post-deployment action correctness. Ambiguous outcomes require platform reconciliation.' }, null, 2));
         await fs.rm(env.SWARM_DELIVERY_REPORT, { force: true });
-        await commands(manifest.verify);
+        await commands(manifest.verify,manifest,'verify');
         for (const action of [...manifest.postDeployActions].sort((a, b) => Number(b.type === 'connection-reference-check') - Number(a.type === 'connection-reference-check'))) {
+          await this.governance(run,manifest,'verify');
           if (!run.operations?.some((op) => op.id === `typed:${action.id}` && op.status === 'verified')) throw new Error(`Post-deployment action ${action.id} lacks a verified journal entry`);
           const component = verifiedMapping.find((item) => item.key === action.component)!;
           const save = () => this.save(), owned = () => targetLease!.assertOwned();

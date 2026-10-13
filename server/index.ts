@@ -27,6 +27,7 @@ import { CanvasOwnership } from './canvasOwnership.ts';
 import { z } from 'zod';
 import { ToolGovernanceService, setToolGovernanceGate } from './toolGovernance.ts';
 import { TenantDlpService } from './tenantDlp.ts';
+import { createDeliveryGovernance } from './deliveryGovernance.ts';
 import { parseBody, proposalSchema, hldSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
@@ -42,6 +43,7 @@ const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.dem
 await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
 await tenantDlp.init();
+delivery.checkGovernance=createDeliveryGovernance(tenantDlp);
 setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, input, checkpoint));
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();

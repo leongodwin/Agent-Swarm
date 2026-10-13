@@ -11,7 +11,7 @@ export interface DeliveryRun {
   previousRunId?: string; evidenceHash?: string;
   visualReview?: { reviewer: string; reviewedAt: string; scores: number[]; notes: string; evidenceHash: string };
   recovery?: { inventoryFile: string; runbook: string; drillReport: string; packageSha256: string };
-  health?: { status: 'pending' | 'healthy' | 'degraded'; checkedAt?: string; nextCheckAt: string; error?: string; capabilityHash?: string };
+  health?: { status: 'pending' | 'healthy' | 'degraded'; checkedAt?: string; nextCheckAt: string; error?: string; capabilityHash?: string; governanceEvidence?:string };
   id: string; repoId: string; head: string; environmentUrl: string; phase: DeliveryPhase;
   startedAt: string; endedAt?: string; error?: string; solution?: string; version?: string;
   appUrls: string[]; evidence: string[]; log: string[];

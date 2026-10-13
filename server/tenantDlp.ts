@@ -72,6 +72,10 @@ export class TenantDlpService {
       ...(this.snapshot ? { tenantId: this.snapshot.tenantId, caller: this.snapshot.caller, observedAt: this.snapshot.observedAt, policyCount: this.snapshot.policies.length, fingerprint: crypto.createHash('sha256').update(JSON.stringify(this.snapshot)).digest('hex') } : {}),
       reason: this.reading ? 'Complete the system-browser sign-in if requested; the reader makes no tenant changes' : this.unavailable ? this.reason : stale ? 'Refresh the expired policy observation before using it' : 'Inventory observed; policy evaluation, advanced governance and schema evidence remain separate' };
   }
+  observation(identity:{tenantId:string;caller:string}) {
+    if(this.closed||this.view().status!=='observed'||!this.snapshot) throw new Error('A fresh authenticated standard-policy inventory is required');
+    return structuredClone(verifyTenantSnapshot(this.snapshot,identity,this.now()));
+  }
   refresh(input: unknown): TenantDlpView {
     if (this.closed) throw new HttpError(409, 'Policy reader is closed');
     if (this.corrupt) throw new HttpError(409, 'Preserve and repair the corrupted policy evidence before refreshing');

@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DeliveryService, deliveryManifest, containedFile, installedSolution, pacReportedError, importJobId, type DeliveryDependencies } from './delivery.ts';
 import type { RepoView } from '../shared/types.ts';
+import { manifestDigest } from './lifecycleGovernance.ts';
 
 const directories: string[] = [];
 it('recognizes PAC import failures printed to stdout even when its exit code is zero', () => {
@@ -48,6 +49,7 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   for (const id of ['employee', 'manager']) await fs.writeFile(path.join(root, 'delivery-identities', `${id}.json`), JSON.stringify({ cookies: [], origins: [] }));
   const calls: string[] = [];
   const deps: DeliveryDependencies = {
+    async governance(request) {return {status:'clear',phase:request.phase,sourceCommit:request.sourceCommit,environmentUrl:request.environmentUrl,releaseId:request.releaseId,manifestSha256:manifestDigest(request.manifest),checkedAt:new Date().toISOString(),artifactSha256:request.packageSha256??'a'.repeat(64),policySha256:'b'.repeat(64),schemaSha256:'c'.repeat(64),reasons:['Isolated injected test governance evidence']};},
     async verify(_plan, _root, evidence) { calls.push('independent'); if (fail === 'independent') throw new Error('Independent authorization check failed'); await fs.writeFile(path.join(evidence, 'independent-verification.json'), 'browser results'); return ['independent-verification.json']; },
     async run(command, cwd, env) {
       calls.push([command.executable, ...command.args].join(' '));
@@ -87,6 +89,32 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
 }
 const validReview = (hash: string) => ({ evidenceHash: hash, scores: [4, 4, 4, 4, 4], notes: 'Inspected desktop/mobile hierarchy, accessibility, task clarity and recovery evidence.', recoveryReviewed: true });
 describe('Real solution delivery', () => {
+  it('blocks an unconfigured governance provider before executing project build commands',async()=>{
+    const {service,repo,calls,deps,root}=await fixture();delete deps.governance;
+    await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
+    expect(run.phase).toBe('blocked');expect(run.error).toContain('governance unavailable at build');
+    expect(calls).not.toContain('build');expect(calls.some(call=>call.includes('solution import'))).toBe(false);
+    const file=run.evidence.find(file=>file.endsWith('-build.json'))!;
+    expect(JSON.parse(await fs.readFile(path.join(root,'delivery-runs',run.id,'evidence',file),'utf8'))).toMatchObject({status:'unavailable',sourceCommit:run.head,releaseId:run.releaseId});
+  });
+  for(const stage of ['test','import','post-deploy','verify'] as const) it(`rechecks governance at ${stage} and blocks drift without inventing an import outcome`,async()=>{
+    const {service,repo,calls,deps,root}=await fixture();const original=deps.governance!;
+    const stages:string[]=[];
+    deps.governance=async request=>{stages.push(request.phase);const result=await original(request);return request.phase===stage?{...result,status:'blocked',reasons:['New policy or schema drift detected']}:result;};
+    await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
+    expect(run.phase).toBe('blocked');expect(run.error).toContain(`governance blocked at ${stage}`);
+    expect(stages).toContain(stage);
+    if(stage==='test'||stage==='import'){expect(calls.some(call=>call.includes('solution import'))).toBe(false);expect(run.checkpoint).not.toBe('import-started');expect(run.operations?.length??0).toBe(0);}
+    if(stage==='post-deploy'||stage==='verify')expect(calls.filter(call=>call.includes('solution import'))).toHaveLength(1);
+    const file=run.evidence.filter(file=>file.endsWith(`-${stage}.json`)).at(-1)!;
+    expect(JSON.parse(await fs.readFile(path.join(root,'delivery-runs',run.id,'evidence',file),'utf8')).status).toBe('blocked');
+  });
+  it('marks health degraded when governance expires without altering signed release evidence',async()=>{
+    const {service,repo,deps,root}=await fixture();await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];await service.approveVisual(run.id,'sherlock',validReview(run.evidenceHash!));
+    const signed=service.view().runs[0];const original=deps.governance!;deps.governance=async request=>({...await original(request),status:'unavailable',reasons:['Policy evidence expired']});
+    await service.monitor(repo,run.id);const current=service.view().runs[0];expect(current.health?.status).toBe('degraded');expect(current.health?.error).toContain('Policy evidence expired');expect(current.evidence).toEqual(signed.evidence);expect(current.evidenceHash).toBe(signed.evidenceHash);
+    expect(JSON.parse(await fs.readFile(path.join(root,'delivery-runs',run.id,current.health!.governanceEvidence!),'utf8')).status).toBe('unavailable');
+  });
   it('runs a backend-only release through runner-owned API verification without launching a browser', async () => {
     const { service, repo, root, deps, calls } = await fixture(); const original = deps.run;
     const id = '11111111-1111-4111-8111-111111111111';
@@ -363,9 +391,12 @@ describe('Quality, recovery and monitoring', () => {
   it('monitors read-only health, detects configuration drift and deduplicates unchanged alerts', async () => {
     const { service, repo, calls } = await fixture(); await service.start(repo); await service.waitForIdle();
     const run = service.view().runs[0]; await service.approveVisual(run.id, 'sherlock', review(run.evidenceHash!));
-    const before = calls.length; await service.monitor(repo, run.id);
+    const before = calls.length; const approvedFiles=[...run.evidence];await service.monitor(repo, run.id);
     expect(service.view().runs[0].health?.status).toBe('healthy');
-    expect(calls.slice(before).every((c) => c.includes('solution list'))).toBe(true);
+    expect(calls.slice(before)).toContain(`git show ${run.head}:cubefarm.delivery.json`);
+    expect(calls.slice(before).every((c) => c.includes('solution list')||c===`git show ${run.head}:cubefarm.delivery.json`)).toBe(true);
+    expect(service.view().runs[0].evidence).toEqual(approvedFiles);
+    expect(service.view().runs[0].health?.governanceEvidence).toMatch(/^health\/governance-\d+-health.json$/);
     service.checkCapabilities = async () => ({ status: 'ready', configHash: 'changed', checks: [{ id: 'critical-flow', category: 'workflow', passed: true, remedy: '' }] });
     await service.monitor(repo, run.id); expect(service.view().runs[0].health?.status).toBe('degraded');
     const changed = vi.fn(); service.onChange = changed; await service.monitor(repo, run.id); expect(changed).not.toHaveBeenCalled();
