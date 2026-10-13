@@ -182,7 +182,9 @@ function Chat() {
   const replying = ceo.status === 'working' && info.job?.kind === 'chat';
   const chatQueued = info.queue.some((j) => j.kind === 'chat');
   const presence =
-    ceo.status === 'working'
+    info.blockedReason
+      ? 'blocked · queued messages will wait'
+      : ceo.status === 'working'
       ? replying
         ? 'typing…'
         : `busy: ${info.job?.label ?? 'working'}`
@@ -203,6 +205,7 @@ function Chat() {
           <div className={`small ${ceo.status === 'working' ? 'presence-busy' : 'muted'}`}>{presence}</div>
         </div>
       </div>
+      {info.blockedReason && <div role="alert" className="term-error small">{info.blockedReason}</div>}
       <div className="chat-log" ref={scroller}>
         {messages.length === 0 && (
           <p className="muted small phone-empty">
