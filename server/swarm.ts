@@ -1485,14 +1485,17 @@ export class Swarm {
       const slug = this.agentSlug(a);
       if (repo) void this.deskOperation(a, () => this.backend.releaseDesk(repo.fullName, slug, this.port(a))).catch(err => console.warn('could not release stopped task workspace', err));
     }
-    if (a.role !== 'ceo') {this.reserveTask(a); const runtime = this.agentRt.get(id); if (runtime) runtime.session = null;}
+    this.reserveTask(a);
+    const runtime = this.agentRt.get(id);
+    if (runtime) {runtime.session = null; runtime.currentTool = null;}
     if (a.role !== 'ceo') for (const record of this.state.qa) {
       if (record.qaAgentId === id && record.status === 'testing') this.setQa(record, {status: 'queued', qaAgentId: null, testedSha: null, passedSha: null});
       if (record.devAgentId === id && record.status === 'fixing') this.setQa(record, {status: 'failed'});
     }
     a.status = 'stopped';
+    a.endedAt = Date.now();
     a.lastError = 'Stopped by manager';
-    if (a.role === 'ceo' && !this.agentRt.get(id)?.session) {
+    if (a.role === 'ceo') {
       Object.assign(this.state.ceo, {job: null, blockedReason: null, retryAt: null});
       this.emitCeo();
     }
@@ -3040,6 +3043,8 @@ export class Swarm {
 
   private async runCeoJob(a: PersistedAgent, job: CeoJob) {
     if (this.closed) return;
+    const generation = this.reserveTask(a);
+    const ownsJob = () => this.ownsTask(a, generation) && this.state.ceo.job === job;
     const rt = this.agentRt.get(a.id)!;
     const floor = this.ceoFloor(job.repoId);
     const label = jobLabel(job, floor);
@@ -3065,7 +3070,7 @@ export class Swarm {
       }
     }
     if (this.closed) return;
-    if (this.state.ceo.job !== job) return;
+    if (!ownsJob()) return;
     if (a.status !== 'preparing') {
       // stopped before the session started
       this.state.ceo.job = null;
@@ -3076,9 +3081,9 @@ export class Swarm {
     if (checkedScope !== scope()) blocker = 'CEO project scope changed during readiness verification; retry with the current projects';
     if (blocker) return this.deferCeoJob(a, job, blocker);
     try { await fs.mkdir(CEO_DIR, {recursive: true}); }
-    catch { return this.deferCeoJob(a, job, 'CEO workspace is unavailable; repair its folder access before retrying'); }
+    catch { if (ownsJob()) this.deferCeoJob(a, job, 'CEO workspace is unavailable; repair its folder access before retrying'); return; }
     if (this.closed) return;
-    if (this.state.ceo.job !== job) return;
+    if (!ownsJob()) return;
     if (a.status !== 'preparing') { this.state.ceo.job = null; this.emitCeo(); this.save(); return; }
     if (checkedScope !== scope()) return this.deferCeoJob(a, job, 'CEO project scope changed while preparing its workspace; retry with the current projects');
     a.status = 'working'; this.emitAgent(a); this.emitCeo();
@@ -3086,9 +3091,11 @@ export class Swarm {
     // A chat carries on from the CEO's last session, so "why did you propose that?" has an answer.
     try {
     const how = this.sessionRuntime(a, job.kind === 'chat' ? (a.sessionId ?? undefined) : undefined);
-    const authorizeTool: SessionAuthorization = () => !this.closed && this.state.ceo.job === job && a.status === 'working'
+    let completed = false;
+    const live = () => !completed && ownsJob() && a.status === 'working';
+    const authorizeTool: SessionAuthorization = () => live()
       ? null : 'This CEO job no longer owns the session; execution denied';
-    rt.session = this.backend.startSession(
+    const handle = this.backend.startSession(
       {
         cwd: CEO_DIR,
         prompt: ceoJobPrompt(job, floor),
@@ -3111,33 +3118,36 @@ export class Swarm {
         ...how,
       },
       {
-        log: (entries) => this.appendLog(a, entries),
+        log: (entries) => {if (live()) this.appendLog(a, entries);},
         tool: (name) => {
-          if (this.closed) return;
+          if (!live()) return;
           if (rt.currentTool === name) return;
           rt.currentTool = name;
           this.emitAgent(a);
         },
         sessionId: (id) => {
-          if (this.closed) return;
+          if (!live()) return;
           a.sessionId = id;
           a.sessionCli = id ? (how.cli ?? 'copilot') : null;
         },
         browserUrl: () => undefined,
         screenshot: () => undefined,
-        turn: (text) => { if (!this.closed) this.postMessage('ceo', text); },
-        limited: (at) => this.pauseForLimit(at),
-        usageWarning: (info) => this.paceForWarning(info),
-        finished: (result) => this.onCeoFinished(a, result),
+        turn: (text) => { if (live()) this.postMessage('ceo', text); },
+        limited: (at) => {if (live()) this.pauseForLimit(at);},
+        usageWarning: (info) => {if (live()) this.paceForWarning(info);},
+        finished: (result) => {if (!live()) return; completed = true; this.onCeoFinished(a, result, job, generation);},
       },
     );
+    if (ownsJob()) rt.session = completed ? null : handle;
+    else if (!completed) handle.stop();
+    if (!this.ownsTask(a, generation) || (!ownsJob() && !completed)) return;
     Object.assign(this.state.ceo, {blockedReason: null, retryAt: null});
     if (job.kind === 'review') {
       this.state.ceo.lastReviewAt = Date.now();
       this.state.ceo.lastFingerprint = this.fingerprint();
     }
     this.emitCeo(); this.save();
-    } catch { this.deferCeoJob(a, job, 'CEO session could not start; check CLI authentication and runtime configuration'); }
+    } catch { if (ownsJob()) this.deferCeoJob(a, job, 'CEO session could not start; check CLI authentication and runtime configuration'); }
   }
 
   private deferCeoJob(a: PersistedAgent, job: CeoJob, reason: string) {
@@ -3171,15 +3181,14 @@ export class Swarm {
     });
   }
 
-  private onCeoFinished(a: PersistedAgent, result: SessionResult) {
+  private onCeoFinished(a: PersistedAgent, result: SessionResult, job: CeoJob, generation: number) {
     const rt = this.agentRt.get(a.id);
-    if (this.closed || !rt || this.officeUpdate.handedOver) return;
+    if (!this.ownsTask(a, generation) || this.state.ceo.job !== job || !rt || this.officeUpdate.handedOver) return;
     rt.session = null;
     rt.currentTool = null;
     a.endedAt = Date.now();
     a.costUsd += result.costUsd;
     a.turns += result.turns;
-    const job = this.state.ceo.job;
     this.state.ceo.job = null;
     if (result.interrupted) this.interrupted(a);
     if (a.status === 'stopped') {

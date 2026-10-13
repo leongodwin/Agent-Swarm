@@ -583,6 +583,63 @@ it('cannot start an older cancelled CEO preflight while its replacement is prepa
   expect((fake.startSession.mock.calls[0][0] as {prompt: string}).prompt).not.toContain('Old synthetic request');
 });
 
+it('ignores every cancelled CEO callback while a replacement job owns the terminal', async () => {
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  swarm.messageCeo('Old synthetic CEO request');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  const old=fake.startSession.mock.calls[0][1];const oldHandle=fake.startSession.mock.results[0].value;
+  swarm.stopAgent(CEO_ID);expect(oldHandle.stop).toHaveBeenCalledOnce();
+  expect(swarm.snapshot().ceo.job).toBeNull();
+  swarm.messageCeo('Replacement synthetic CEO request');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+  const before=swarm.snapshot();
+  old.log([{kind:'error',text:'Obsolete CEO log'}]);old.tool('obsolete-tool');old.sessionId('obsolete-checkpoint');
+  old.turn?.('Obsolete phone reply');old.limited?.(Date.now()+60000);old.usageWarning?.({rateLimitType:'five_hour',resetsAt:Date.now()+60000,utilization:.99});
+  old.finished({ok:false,text:'obsolete',costUsd:90,turns:90,errors:['Obsolete error']});
+  expect(swarm.snapshot()).toEqual(before);
+  const current=fake.startSession.mock.calls[1][1];current.sessionId('replacement-checkpoint');current.tool('replacement-tool');
+  current.turn?.('Replacement phone reply');current.finished({ok:true,text:'replacement',costUsd:2,turns:3,errors:[]});
+  const after=swarm.snapshot();expect(after.ceo.job).toBeNull();
+  expect(after.agents.find(a=>a.id===CEO_ID)).toMatchObject({status:'done',costUsd:2,turns:3});
+  expect(after.messages.some(message=>message.text==='Replacement phone reply')).toBe(true);
+  vi.useRealTimers();await swarm.shutdown(true);
+  const saved=JSON.parse(await fs.readFile(STATE_FILE,'utf8'));
+  expect(saved.agents.find((a:{id:string})=>a.id===CEO_ID).sessionId).toBe('replacement-checkpoint');
+});
+
+it('ignores callbacks from a failed CEO launch when the same retained job object is retried',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  let failed!:SessionCallbacks;
+  fake.startSession.mockImplementationOnce((_options,callbacks)=>{failed=callbacks;throw new Error('Synthetic launch failure');});
+  swarm.messageCeo('Retry this synthetic CEO job');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(swarm.snapshot().ceo.blockedReason).toContain('could not start'));
+  const state=(swarm as unknown as {state:{ceo:{queue:unknown[];job:unknown}}}).state;
+  const retained=state.ceo.queue[0];
+  await vi.advanceTimersByTimeAsync(65000);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+  expect(state.ceo.job).toBe(retained);
+  const before=swarm.snapshot();failed.turn?.('Obsolete failed reply');failed.sessionId('obsolete-failed-checkpoint');
+  failed.finished({ok:true,text:'obsolete',costUsd:10,turns:10,errors:[]});
+  expect(swarm.snapshot()).toEqual(before);
+});
+
+it('handles synchronous CEO completion once without leaving a stale session handle',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  const staleHandle={stop:vi.fn(),send:vi.fn()};
+  fake.startSession.mockImplementationOnce((_options,callbacks)=>{
+    const result={ok:true,text:'synchronous synthetic reply',costUsd:1,turns:2,errors:[]};
+    callbacks.finished(result);callbacks.finished(result);callbacks.turn?.('Obsolete post-completion reply');
+    return staleHandle;
+  });
+  swarm.messageCeo('First synthetic request');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  expect(swarm.snapshot().agents.find(a=>a.id===CEO_ID)).toMatchObject({status:'done',costUsd:1,turns:2});
+  expect(swarm.snapshot().ceo.job).toBeNull();
+  swarm.messageCeo('Second synthetic request');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+  expect(staleHandle.send).not.toHaveBeenCalled();expect(staleHandle.stop).not.toHaveBeenCalled();
+});
+
 it('blocks CEO dispatch if project requirements change during readiness verification', async () => {
   const {swarm, fake} = await office(true, fake => {fake.terminals = true;}); let checked!: (value: string | null) => void;
   swarm.ceoPreflight = () => new Promise(resolve => {checked = resolve;});

@@ -1,5 +1,11 @@
 # Reliability priorities 5–8
 
+## CEO callback ownership
+
+Every CEO dispatch receives a task generation in addition to its job identity. Stopping the CEO invalidates that generation, clears the active session/tool pointers and cancels the active job immediately. Late logs, tool/checkpoint updates, phone replies, usage limits and completion from that generation cannot change a replacement job. Completion is processed once, including when a backend completes synchronously before returning its handle. Failed-launch callbacks also remain invalid if the same queued job object is retried.
+
+Completion checks the captured job/generation before clearing state or adding costs/turns. Startup failures defer only the owning job. Worker and CEO stops now stamp their end time when cancellation occurs. Tests inspect real coordinator state and persisted checkpoints with synthetic session backends; physical stop acknowledgement, native restart recovery and costs of already-issued cancelled work remain separate verification requirements. Evidence: `.swarm-reliability/ceo-generation-coverage-2026-10-13.txt`, `ceo-generation-coverage-exit-2026-10-13.txt`, `ceo-generation-api-e2e-2026-10-13.txt`, and `ceo-generation-live-runtime-2026-10-13.json`.
+
 ## Session tool authority
 
 Supported SDK pre-tool/permission callbacks and native CLI pre-tool hooks now require session authorization before request-local governance and recheck it after asynchronous policy/audit work. Missing, malformed or throwing authorization denies execution. Worker authority is bound to the active task generation, its launch configuration and completion state; legitimate runtime checkpoint updates preserve that binding. CEO authority is bound to its active job and working state. Cancellation, replacement, completion and shutdown revoke subsequent grants.
