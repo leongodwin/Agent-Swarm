@@ -54,7 +54,7 @@ describe('Review regressions', () => {
   it('requires QA again after updating the PR branch, including concurrent new commits', async () => {
     vi.useFakeTimers();
     const mergePull = vi.fn(); const setQa = vi.fn(); const prDetails = vi.fn(async () => ({ headSha: 'concurrent-new-commit' }));
-    const fake = { backend: { prFiles: async () => [], updateBranch: vi.fn(async () => {}), mergePull, prDetails }, setQa, mergeNote: vi.fn(), schedule: vi.fn() };
+    const fake = { backend: { prFiles: async () => [], updateBranch: vi.fn(async () => {}), mergePull, prDetails }, setQa, mergeNote: vi.fn(), schedule: vi.fn(), later: (callback: () => void, delay: number) => setTimeout(callback, delay) };
     const advance = (Swarm.prototype as unknown as { advanceMerge(...args: unknown[]): Promise<boolean> }).advanceMerge;
     try {
       await advance.call(fake, { fullName: 'test/repo', defaultBranch: 'main' }, { passedSha: 'abc', round: 1, retests: 0, mergeFixes: 0 },

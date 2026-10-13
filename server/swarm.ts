@@ -50,6 +50,7 @@ import type {
 import { activeEnvironment } from './tenancy.ts';
 import { fixDeskBranch } from './workspace.ts';
 import { atomicWrite, SerialWriter } from './atomicFile.ts';
+import { readOfficeState } from './officeState.ts';
 
 // ---------- persisted shape ----------
 
@@ -425,6 +426,10 @@ export class Swarm {
   private user: string | null = null;
   private ghError: string | undefined;
   private saveTimer: NodeJS.Timeout | null = null;
+  private stateLoaded = false;
+  private closed = false;
+  private shutdownWork: Promise<void> | null = null;
+  private lifecycleTimers = new Set<NodeJS.Timeout>();
   private stateWriter = new SerialWriter();
   private flushTimer: NodeJS.Timeout | null = null;
   private logSeq = 1;
@@ -457,9 +462,10 @@ export class Swarm {
   // ---------- lifecycle ----------
 
   async init() {
-    try {
-      const raw = await fs.readFile(STATE_FILE, 'utf8');
-      const loaded = JSON.parse(raw) as Partial<Persisted>;
+    if (this.closed || this.stateLoaded) throw new Error('Office lifecycle has already started or stopped');
+    const loaded = await readOfficeState(STATE_FILE) as Partial<Persisted> | null;
+    if (this.closed) return;
+    if (loaded) {
       this.state = {
         version: loaded.version ?? 0,
         settings: { ...this.state.settings, ...loaded.settings },
@@ -528,9 +534,8 @@ export class Swarm {
       if (loaded.settings && loaded.settings.setupDone === undefined && this.state.repos.length > 0) {
         Object.assign(this.state.settings, { setupDone: true, tutorialStep: -1 });
       }
-    } catch {
-      // first run
     }
+    this.stateLoaded = true;
     for (const r of this.state.repos) if (r.localPath) this.backend.setLocalPath(r.fullName, r.localPath);
     const interrupted: PersistedAgent[] = [];
     for (const a of this.state.agents) {
@@ -550,6 +555,7 @@ export class Swarm {
         return [];
       });
     const carryOn: PersistedAgent[] = [];
+    if (this.closed) return;
     for (const a of this.state.agents) {
       if (!BUSY.includes(a.status)) continue;
       if (back.some((c) => c.agentId === a.id && c.busy)) {
@@ -582,10 +588,12 @@ export class Swarm {
       }
     }
     for (const r of this.state.repos) this.ensureQaTester(r);
+    if (this.closed) return;
     this.ensureCeo(interrupted);
 
     for (const r of this.state.repos) void this.cloneRepo(r.id);
     await Promise.all(this.state.repos.map((r) => this.syncRepo(r.id)));
+    if (this.closed) return;
     // Anything still alive in a desk (or a preview) is left over from before the restart, except around the CLIs that
     // kept running through it: their dev servers and commands are theirs.
     await Promise.all([
@@ -601,9 +609,9 @@ export class Swarm {
     this.officeHead = await this.backend.office.head();
     const updated = await this.backend.office.takeLastUpdate().catch(() => null);
     if (updated) await this.reportUpdate(updated);
-    setInterval(() => this.state.repos.forEach((r, i) => setTimeout(() => void this.syncRepo(r.id), i * 1500)), SYNC_INTERVAL_MS);
-    setInterval(() => this.schedule(), SCHEDULER_INTERVAL_MS);
-    setInterval(() => void this.saveTerminals(), TERMINAL_SAVE_MS);
+    this.every(() => this.state.repos.forEach((r, i) => this.later(() => void this.syncRepo(r.id), i * 1500)), SYNC_INTERVAL_MS);
+    this.every(() => this.schedule(), SCHEDULER_INTERVAL_MS);
+    this.every(() => void this.saveTerminals(), TERMINAL_SAVE_MS);
     void this.backend
       .detectClis()
       .then((clis) => {
@@ -612,7 +620,7 @@ export class Swarm {
       })
       .catch((err) => console.warn('could not look for agent CLIs', err));
     this.save();
-    setTimeout(() => this.schedule(), 1000);
+    this.later(() => this.schedule(), 1000);
   }
 
   /** Agents cut off by a server restart pick their coding-agent session back up (QA and demo agents start over). */
@@ -789,6 +797,7 @@ export class Swarm {
   }
 
   private appendLog(a: PersistedAgent, entries: LogEntry[]) {
+    if (this.closed) return;
     const rt = this.agentRt.get(a.id);
     if (!rt) return;
     const t = Date.now();
@@ -813,13 +822,25 @@ export class Swarm {
 
   // ---------- persistence ----------
 
+  private later(callback: () => void, delay: number) {
+    if (this.closed) return;
+    const timer = setTimeout(() => { this.lifecycleTimers.delete(timer); if (!this.closed) callback(); }, delay);
+    this.lifecycleTimers.add(timer);
+  }
+
+  private every(callback: () => void, delay: number) {
+    if (this.closed) return;
+    this.lifecycleTimers.add(setInterval(() => { if (!this.closed) callback(); }, delay));
+  }
+
   private save() {
-    if (this.saveTimer) return;
+    if (this.closed || !this.stateLoaded || this.saveTimer) return;
     this.saveTimer = setTimeout(() => void this.writeState().catch((err) => console.warn('could not save the state', err)), 1500);
   }
 
   /** Write the state file now, e.g. before the office stops or hands itself to the launcher. */
   private async writeState() {
+    if (!this.stateLoaded) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
     await this.stateWriter.write(async () => {
@@ -1008,7 +1029,7 @@ export class Swarm {
     if (typeof patch.qaBrief === 'string') repo.qaBrief = patch.qaBrief.trim().slice(0, 2500);
     this.save();
     this.emitRepo(repo);
-    setTimeout(() => this.schedule(), 200);
+    this.later(() => this.schedule(), 200);
     return this.repoView(repo);
   }
 
@@ -1042,7 +1063,7 @@ export class Swarm {
     }
     if (merged) {
       await this.syncRepo(repo.id);
-      setTimeout(() => this.schedule(), 200);
+      this.later(() => this.schedule(), 200);
     }
   }
 
@@ -1067,7 +1088,7 @@ export class Swarm {
     if (step.do === 'requeue') {
       // Commits arrived after QA's sign-off: they get tested too.
       this.setQa(rec, { status: 'queued', round: rec.round + 1, retests: rec.retests + 1, mergeNote: null, pendingSince: null });
-      setTimeout(() => this.schedule(), 200);
+      this.later(() => this.schedule(), 200);
       return false;
     }
     if (step.do === 'send-back') return this.sendBack(repo, rec, step.reason, step.instructions, step.needsHuman);
@@ -1083,7 +1104,7 @@ export class Swarm {
       await this.backend.updateBranch(repo.fullName, pr.number);
       this.setQa(rec, { status: 'queued', passedSha: null, testedSha: null, round: rec.round + 1, retests: rec.retests + 1,
         mergeNote: 'Branch updated; QA must test the new head', pendingSince: null });
-      setTimeout(() => this.schedule(), 200);
+      this.later(() => this.schedule(), 200);
       return false;
     }
     if (step.do !== 'merge') return false;
@@ -1130,7 +1151,7 @@ export class Swarm {
       return false;
     }
     this.setQa(rec, { status: 'failed', fixReason: reason, fixInstructions, mergeFixes: rec.mergeFixes + 1, mergeNote: null, pendingSince: null });
-    setTimeout(() => this.schedule(), 200);
+    this.later(() => this.schedule(), 200);
     return false;
   }
 
@@ -1175,14 +1196,35 @@ export class Swarm {
    * Server shutdown: stop every floor's app so nothing is left holding a preview port. Agents' CLIs keep working
    * through a restart (the terminal keeper holds them for the next start) and stop when the office quits.
    */
-  async shutdown(restart = false): Promise<void> {
-    await this.writeState().catch((err) => console.warn('could not save the state', err));
-    await this.backend.releaseClis(restart); // before the terminals are saved: whatever they print next waits in the keeper
-    await this.saveTerminals(true);
-    await this.previews.stopAll(this.state.repos);
+  shutdown(restart = false): Promise<void> {
+    if (this.shutdownWork) return this.shutdownWork;
+    this.closed = true;
+    for (const timer of this.lifecycleTimers) clearTimeout(timer);
+    this.lifecycleTimers.clear();
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.saveTimer = this.flushTimer = null;
+    const errors: unknown[] = [];
+    // Close the preview admission gate synchronously, before any save/release awaits.
+    const previewStop = this.stateLoaded ? this.previews.close(this.state.repos).catch(error => { errors.push(error); }) : Promise.resolve();
+    this.shutdownWork = (async () => {
+      if (!this.stateLoaded) return;
+      // SDK work cannot survive this process. Keep its recovery checkpoint and
+      // ignore completion callbacks; retained terminal CLIs belong to the keeper.
+      for (const rt of this.agentRt.values()) if (!restart || !rt.terminal) {
+        try { rt.session?.stop(); } catch (error) { errors.push(error); }
+      }
+      try { await this.writeState(); } catch (error) { errors.push(error); }
+      try { await this.backend.releaseClis(restart); } catch (error) { errors.push(error); }
+      try { await this.saveTerminals(true); } catch (error) { errors.push(error); }
+      await previewStop;
+      if (errors.length) throw new AggregateError(errors, 'Office shutdown did not complete cleanly');
+    })();
+    return this.shutdownWork;
   }
 
   private async cloneRepo(id: string) {
+    if (this.closed) return;
     const repo = this.state.repos.find((r) => r.id === id);
     const rt = this.repoRt.get(id);
     if (!repo || !rt || rt.cloneStatus === 'cloning') return;
@@ -1191,6 +1233,7 @@ export class Swarm {
     this.emitRepo(repo);
     try {
       await this.backend.ensureClone(repo.fullName);
+      if (this.closed) return;
       rt.cloneStatus = 'ready';
       void this.previews.refreshDefault(repo);
     } catch (err) {
@@ -1202,6 +1245,7 @@ export class Swarm {
   }
 
   async syncRepo(id: string) {
+    if (this.closed) return;
     const repo = this.state.repos.find((r) => r.id === id);
     const rt = this.repoRt.get(id);
     if (!repo || !rt || rt.syncing) return;
@@ -1209,6 +1253,7 @@ export class Swarm {
     try {
       const started = Date.now();
       const [issues, pulls] = await Promise.all([this.backend.listIssues(repo.fullName), this.backend.listPulls(repo.fullName)]);
+      if (this.closed) return;
       rt.issues = issues;
       rt.pulls = pulls;
       rt.lastSync = Date.now();
@@ -1271,7 +1316,7 @@ export class Swarm {
     await this.syncRepo(repo.id);
     this.toast('success', `Issue #${number} filed on ${repo.fullName}`);
     if (assignTo) await this.assign(assignTo, number);
-    else setTimeout(() => this.schedule(), 200);
+    else this.later(() => this.schedule(), 200);
     return number;
   }
 
@@ -1280,7 +1325,7 @@ export class Swarm {
     await this.backend.mergePull(repo.fullName, number, method);
     this.toast('success', `Merged PR #${number} into ${repo.defaultBranch}`);
     await this.syncRepo(repo.id);
-    setTimeout(() => this.schedule(), 200);
+    this.later(() => this.schedule(), 200);
   }
 
   async closePull(repoId: string, number: number) {
@@ -1357,7 +1402,7 @@ export class Swarm {
     ]);
     this.save();
     this.broadcast({ type: 'agent', agent: this.agentView(agent, false) });
-    setTimeout(() => this.schedule(), 200);
+    this.later(() => this.schedule(), 200);
     return this.agentView(agent, true);
   }
 
@@ -1490,6 +1535,7 @@ export class Swarm {
   }
 
   async assign(agentId: string, issueNumber: number, note?: string) {
+    if (this.closed) throw new HttpError(409, 'Office is shutting down');
     const a = this.agent(agentId);
     const repo = this.repo(a.repoId);
     if (a.role === 'qa') throw new HttpError(400, `${a.name} is a QA tester; they test pull requests rather than issues.`);
@@ -1650,12 +1696,15 @@ export class Swarm {
 
   private async prepare(a: PersistedAgent, repo: PersistedRepo, base: { pr?: number }, branch: string): Promise<string | null> {
     try {
+      if (this.closed) return null;
       if (this.repoRt.get(repo.id)?.cloneStatus !== 'ready') await this.cloneRepo(repo.id);
+      if (this.closed) return null;
       await this.backend.releaseDesk(repo.fullName, this.agentSlug(a), this.port(a));
+      if (this.closed) return null;
       const cwd = await this.backend.prepareDesk(repo.fullName, { defaultBranch: repo.defaultBranch, pr: base.pr }, this.agentSlug(a), branch);
-      return a.status === 'preparing' ? cwd : null; // null: stopped or fired while preparing
+      return !this.closed && a.status === 'preparing' ? cwd : null;
     } catch (err) {
-      if (a.status !== 'preparing') return null;
+      if (this.closed || a.status !== 'preparing') return null;
       a.status = 'error';
       a.endedAt = Date.now();
       a.lastError = (err as Error).message;
@@ -1667,6 +1716,7 @@ export class Swarm {
   }
 
   private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo) {
+    if (this.closed) return false;
     if (this.taskPaused?.(a.issueTitle ?? '')) {
       a.status = 'stopped'; a.lastError = 'This platform is paused by the manager';
       this.emitAgent(a); this.save(); return false;
@@ -1674,9 +1724,10 @@ export class Swarm {
     if (this.backend.demo) return true;
     try {
       const blocker = await this.capabilityPreflight(repo.id, this.state.settings.runtime === 'terminal' ? a.cli || this.state.settings.defaultCli : 'node');
+      if (this.closed) return false;
       if (!blocker) return true;
       a.lastError = blocker;
-    } catch { a.lastError = 'Capability check unavailable; refresh project readiness before assigning work'; }
+    } catch { if (this.closed) return false; a.lastError = 'Capability check unavailable; refresh project readiness before assigning work'; }
     a.status = 'error'; a.endedAt = Date.now();
     this.appendLog(a, [{ kind: 'error', text: a.lastError! }]); this.emitAgent(a); this.save(); return false;
   }
@@ -1718,6 +1769,7 @@ export class Swarm {
     /** typed: the manager typed the prompt at the CLI; reattach: follow the CLI that kept working through a restart. */
     mode: 'typed' | 'reattach' | null = null,
   ) {
+    if (this.closed) return;
     const rt = this.agentRt.get(a.id)!;
     a.status = 'working';
     const how = this.sessionRuntime(a, resumeSessionId);
@@ -1744,19 +1796,23 @@ export class Swarm {
       {
         log: (entries) => this.appendLog(a, entries),
         tool: (name) => {
+          if (this.closed) return;
           if (rt.currentTool === name) return;
           rt.currentTool = name;
           this.emitAgent(a);
         },
         sessionId: (id) => {
+          if (this.closed) return;
           a.sessionId = id;
           a.sessionCli = id ? (how.cli ?? 'claude') : null;
         },
         browserUrl: (url) => {
+          if (this.closed) return;
           rt.browserUrl = url;
           this.emitAgent(a);
         },
         screenshot: (data, mime) => {
+          if (this.closed) return;
           const at = Date.now();
           rt.screenshot = { data, mime, at };
           rt.shots.push({ data, mime, url: rt.browserUrl, at });
@@ -1776,7 +1832,7 @@ export class Swarm {
 
   private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult) {
     const rt = this.agentRt.get(a.id);
-    if (!rt || !this.state.agents.includes(a)) return; // fired
+    if (this.closed || !rt || !this.state.agents.includes(a)) return; // fired or closing
     if (this.officeUpdate.handedOver) return; // stopped for the office's update: recovered like after a restart
     rt.session = null;
     rt.currentTool = null;
@@ -1793,7 +1849,7 @@ export class Swarm {
         this.emitAgent(a);
         this.save();
         void this.syncRepo(repo.id);
-        setTimeout(() => this.schedule(), 500);
+        this.later(() => this.schedule(), 500);
         return;
       }
     }
@@ -1808,7 +1864,7 @@ export class Swarm {
     this.emitAgent(a);
     this.save();
     void this.syncRepo(repo.id);
-    setTimeout(() => this.schedule(), 500);
+    this.later(() => this.schedule(), 500);
   }
 
   private minutes(a: PersistedAgent) {
@@ -1968,7 +2024,7 @@ export class Swarm {
       this.state.qa.push(rec);
       this.setQa(rec, {});
     }
-    setTimeout(() => this.schedule(), 200);
+    this.later(() => this.schedule(), 200);
   }
 
   /** Manager's "send to QA" for any open PR (including ones opened by people). */
@@ -2347,7 +2403,7 @@ export class Swarm {
     this.save();
     this.broadcast({ type: 'settings', settings: s });
     this.emitCeo();
-    setTimeout(() => this.schedule(), 200);
+    this.later(() => this.schedule(), 200);
     return s;
   }
 
@@ -2538,6 +2594,7 @@ export class Swarm {
    * so no repo can hog the slots.
    */
   private schedule() {
+    if (this.closed) return;
     this.tickUsage();
     if (this.officeUpdateTick()) return; // draining for the office's own update
     if (this.limited()) return;
@@ -2687,7 +2744,7 @@ export class Swarm {
     if (own) await this.syncFolder(own);
     this.emitCeo();
     this.save();
-    setTimeout(() => this.schedule(), 300);
+    this.later(() => this.schedule(), 300);
   }
 
   /** One phone message about the last update (the launcher's last-update.json, or the demo's fake). */
@@ -2707,7 +2764,7 @@ export class Swarm {
     if (action === 'now') Object.assign(u, { requested: true, postponedUntil: null });
     else Object.assign(u, { requested: false, postponedUntil: Date.now() + POSTPONE_MS, postponedBehind: u.behind });
     this.officeUpdateTick();
-    setTimeout(() => this.schedule(), 200);
+    this.later(() => this.schedule(), 200);
     return this.officeUpdateView();
   }
 
@@ -2810,11 +2867,12 @@ export class Swarm {
     else q.push(job);
     this.emitCeo();
     this.save();
-    setTimeout(() => this.schedule(), 150);
+    this.later(() => this.schedule(), 150);
   }
 
   /** Start the CEO's next job when they're free and a session slot is open. Replies to the manager go first. */
   private startCeoWork(): void {
+    if (this.closed) return;
     const a = this.state.agents.find((x) => x.id === CEO_ID);
     const c = this.state.ceo;
     if (!a || BUSY.includes(a.status) || c.job || c.queue.length === 0) return;
@@ -2840,6 +2898,7 @@ export class Swarm {
   }
 
   private async runCeoJob(a: PersistedAgent, job: CeoJob) {
+    if (this.closed) return;
     const rt = this.agentRt.get(a.id)!;
     const floor = this.ceoFloor(job.repoId);
     const label = jobLabel(job, floor);
@@ -2859,6 +2918,7 @@ export class Swarm {
     this.emitCeo();
     this.save();
     await fs.mkdir(CEO_DIR, { recursive: true }).catch(() => undefined);
+    if (this.closed) return;
     if (a.status !== 'working') {
       // stopped before the session started
       this.state.ceo.job = null;
@@ -2892,11 +2952,13 @@ export class Swarm {
       {
         log: (entries) => this.appendLog(a, entries),
         tool: (name) => {
+          if (this.closed) return;
           if (rt.currentTool === name) return;
           rt.currentTool = name;
           this.emitAgent(a);
         },
         sessionId: (id) => {
+          if (this.closed) return;
           a.sessionId = id;
           a.sessionCli = id ? (how.cli ?? 'copilot') : null;
         },
@@ -2912,7 +2974,7 @@ export class Swarm {
 
   private onCeoFinished(a: PersistedAgent, result: SessionResult) {
     const rt = this.agentRt.get(a.id);
-    if (!rt || this.officeUpdate.handedOver) return;
+    if (this.closed || !rt || this.officeUpdate.handedOver) return;
     rt.session = null;
     rt.currentTool = null;
     a.endedAt = Date.now();
@@ -2938,7 +3000,7 @@ export class Swarm {
     this.emitAgent(a);
     this.emitCeo();
     this.save();
-    setTimeout(() => this.schedule(), 300);
+    this.later(() => this.schedule(), 300);
   }
 
   /** The manager's phone → the CEO. Injected into a running session, otherwise the CEO picks it up next. */

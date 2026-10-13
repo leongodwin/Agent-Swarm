@@ -70,6 +70,7 @@ export class Previews {
   private runs = new Map<string, Run>();
   private hasDefault = new Map<string, boolean>(); // floor id -> package.json in its checkout
   private emitTimers = new Map<string, NodeJS.Timeout>();
+  private closed = false;
 
   constructor(
     private backend: Backend,
@@ -115,7 +116,9 @@ export class Previews {
 
   /** Re-check whether a floor without a command has a package.json to fall back on. */
   async refreshDefault(f: PreviewFloor) {
+    if (this.closed) return;
     const has = await this.backend.previews.hasDefault(f.fullName).catch(() => true);
+    if (this.closed) return;
     if (this.hasDefault.get(f.id) === has) return;
     this.hasDefault.set(f.id, has);
     this.hooks.emit(f.id);
@@ -123,12 +126,14 @@ export class Previews {
 
   /** Start the floor's preview on the default branch or an open PR, replacing whatever it is running now. */
   async start(f: PreviewFloor, title: string, pr?: number | null): Promise<PreviewView> {
+    if (this.closed) throw new HttpError(409, 'Office previews are closed');
     if (pr !== undefined && pr !== null && (!Number.isInteger(pr) || pr <= 0)) throw new HttpError(400, `Invalid pull request number: ${pr}`);
     if (pr) await this.checkOpen(f, pr);
+    if (this.closed) throw new HttpError(409, 'Office previews are closed');
     const r = this.run(f.id);
     const gen = ++r.gen;
     await this.halt(f, r);
-    if (gen !== r.gen) return this.view(f); // another start or a stop came in meanwhile
+    if (this.closed || gen !== r.gen) return this.view(f); // another start or a stop came in meanwhile
 
     const port = this.portFor(f);
     const ref = pr ? `PR #${pr}` : f.defaultBranch;
@@ -143,7 +148,7 @@ export class Previews {
     r.status = 'preparing';
     this.hooks.emit(f.id);
 
-    const live = () => gen === r.gen;
+    const live = () => !this.closed && gen === r.gen;
     r.handle = this.backend.previews.start(
       { fullName: f.fullName, defaultBranch: f.defaultBranch, pr: pr ?? null, port, command: f.preview.command, env: { ...f.preview.env }, title: `${title} · ${ref}` },
       {
@@ -201,6 +206,13 @@ export class Previews {
   }
 
   /** Server shutdown: stop every running preview. */
+  async close(floors: PreviewFloor[]) {
+    this.closed = true;
+    for (const timer of this.emitTimers.values()) clearTimeout(timer);
+    this.emitTimers.clear();
+    await this.stopAll(floors);
+  }
+
   async stopAll(floors: PreviewFloor[]) {
     await Promise.all(
       floors.map((f) => {
@@ -237,7 +249,7 @@ export class Previews {
 
   /** Log lines arrive in bursts (npm install); send them at most once a second. */
   private emitSoon(id: string) {
-    if (this.emitTimers.has(id)) return;
+    if (this.closed || this.emitTimers.has(id)) return;
     this.emitTimers.set(
       id,
       setTimeout(() => {

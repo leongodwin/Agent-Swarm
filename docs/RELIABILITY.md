@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Office restart and shutdown integrity
+
+Office startup treats only a missing state file as a first run. Unreadable files, invalid JSON or critical persisted shapes, duplicate repository/agent IDs, oversized files and newer state versions stop startup with the state path and a preserve-and-repair instruction. The reader does not reset or rename the original evidence. Legacy settings migrations remain supported. A failed load cannot save defaults during cleanup.
+
+Shutdown closes scheduler and preview admission immediately, cancels recurring and delayed scheduler timers and clears log/save timers. Preparation and readiness completions after closing cannot start new agent sessions. SDK session handles stop while their task/session checkpoints remain available for restart recovery; terminal CLI sessions remain with the keeper when restarting. Closing callbacks cannot change those checkpoints or schedule new saves. Preview PR checks completing after closure cannot start a process. Shutdown is idempotent; persistence errors remain reported while process cleanup still runs.
+
+These are local lifecycle guarantees verified with actual Swarm instances, isolated persisted offices and a synthetic backend. They do not establish native terminal survival, process-crash recovery, all in-flight external-operation cancellation or tenant deployment recovery. Existing live tenant recovery evidence is separate. Tests and built-office API evidence are under `.swarm-reliability/swarm-lifecycle-*2026-10-13.txt`.
+
 ## Implementation update: skills, scoped acceptance and verification
 
 Both Codex and office agents can discover installed Power Platform skills through `installed_skills` (optional task description), the authenticated `/api/installed-skills` endpoint, or the delivery panel. Discovery covers shared skill folders, nested mobile instructions and enabled Codex plugins. Configure additional shared roots with `SWARM_SKILL_ROOTS` and plugin cache roots with `SWARM_PLUGIN_ROOTS` (OS path delimiter). Plugin enablement comes from `CODEX_HOME/config.toml`, or the default `.codex` location.
