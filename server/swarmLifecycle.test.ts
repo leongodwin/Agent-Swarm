@@ -23,6 +23,15 @@ const issue = {number: 1, title: 'Build synthetic feature', body: 'Test only', u
 function backend() {
   const external = {
     demo: false, terminals: false,
+    listMyRepos:vi.fn<Backend['listMyRepos']>(async()=>[]),
+    repoMeta:vi.fn<Backend['repoMeta']>(async()=>({nameWithOwner:'synthetic/new',description:'Synthetic',url:'https://example.test/repo',defaultBranch:'main'})),
+    scanProjects:vi.fn<Backend['scanProjects']>(async()=>[]),
+    inspectFolder:vi.fn<Backend['inspectFolder']>(async()=>{throw new Error('Unexpected folder inspection');}),
+    publishFolder:vi.fn<Backend['publishFolder']>(async()=>{throw new Error('Unexpected folder publication');}),
+    createProject:vi.fn<Backend['createProject']>(async()=>{throw new Error('Unexpected repository creation');}),
+    createIssue:vi.fn<Backend['createIssue']>(async()=>{throw new Error('Unexpected issue creation');}),
+    closePull:vi.fn<Backend['closePull']>(async()=>{}),
+    tenancy:{info:vi.fn<Backend['tenancy']['info']>(async()=>({tenantName:'',tenantDomain:'',tenantId:'',user:'',environments:[],isReal:false,status:'disconnected'}))},
     user: vi.fn(async () => 'synthetic-user'), reconnectClis: vi.fn<Backend['reconnectClis']>(async () => []), hooksReady: vi.fn(),
     detectClis: vi.fn(async () => []), releaseClis: vi.fn(async () => {}),
     setLocalPath: vi.fn(), ensureClone: vi.fn(async () => {}), releaseDesk: vi.fn(async () => {}), removeDesk: vi.fn(async () => {}),
@@ -457,12 +466,17 @@ it('does not send a checked follow-up after shutdown changes its session', async
 
 it('reserves a release reviewer while checking and requires readiness before starting', async () => {
   const {swarm, fake} = await office(true); const qa = swarm.snapshot().agents.find(a => a.role === 'qa')!;
+  const developer=swarm.hireAgent('synthetic/repo',{name:'Synthetic release owner'});
+  await expect(swarm.reviewDeliveryRelease(developer.id,'synthetic/repo','synthetic-release')).rejects.toThrow('Assigned QA reviewer');
+  await expect(swarm.reviewDeliveryRelease(qa.id,'different/repo','synthetic-release')).rejects.toThrow('Assigned QA reviewer');
   let checked!: (value: string | null) => void;
   swarm.capabilityPreflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;}));
   const pending = swarm.reviewDeliveryRelease(qa.id, 'synthetic/repo', 'synthetic-release');
   await expect(swarm.reviewDeliveryRelease(qa.id, 'synthetic/repo', 'another-release')).rejects.toThrow('busy');
   expect(fake.startSession).not.toHaveBeenCalled(); checked(null);
   await expect(pending).resolves.toContain('started'); expect(fake.startSession).toHaveBeenCalledOnce();
+  expect((fake.startSession.mock.calls[0][0] as SessionOptions).prompt).toContain('exact pinned commit');
+  expect(fake.commentPull).not.toHaveBeenCalled();expect(fake.prForBranch).not.toHaveBeenCalled();
 });
 
 it('does not start release QA on blocked readiness or after the reviewer is stopped', async () => {
@@ -802,6 +816,120 @@ it.each(['qa', 'fix'])('removes stale %s pipeline activity when retained work is
 });
 
 const secondIssue = {...issue, number: 2, title: 'Build replacement feature'};
+const closedCommands: [string,(swarm:Swarm)=>unknown][] = [
+  ['repository lookup',swarm=>swarm.listGithubRepos()],
+  ['connect repository',swarm=>swarm.connectRepo('synthetic/new')],
+  ['create repository',swarm=>swarm.createRepo('synthetic-new',{visibility:'private'})],
+  ['list folders',swarm=>swarm.listProjectFolders()],
+  ['connect folder',swarm=>swarm.connectFolder(HOME_DIR)],
+  ['publish folder',swarm=>swarm.publishFolder(HOME_DIR,{visibility:'private',description:'Synthetic'})],
+  ['disconnect repository',swarm=>swarm.disconnectRepo('synthetic/repo')],
+  ['update repository',swarm=>swarm.updateRepo('synthetic/repo',{mission:'Late mission'})],
+  ['sync folder',swarm=>swarm.syncFolderNow('synthetic/repo')],
+  ['start preview',swarm=>swarm.startPreview('synthetic/repo')],
+  ['stop preview',swarm=>swarm.stopPreview('synthetic/repo')],
+  ['create issue',swarm=>swarm.createIssue('synthetic/repo','Late issue','Synthetic')],
+  ['merge pull',swarm=>swarm.mergePull('synthetic/repo',1)],
+  ['close pull',swarm=>swarm.closePull('synthetic/repo',1)],
+  ['hire agent',swarm=>swarm.hireAgent('synthetic/repo',{name:'Late worker'})],
+  ['update agent',swarm=>swarm.updateAgent(CEO_ID,{name:'Late CEO'})],
+  ['fire agent',swarm=>swarm.fireAgent('missing')],
+  ['stop agent',swarm=>swarm.stopAgent(CEO_ID)],
+  ['reset agent',swarm=>swarm.resetAgent(CEO_ID)],
+  ['assign issue',swarm=>swarm.assign('missing',1)],
+  ['send to QA',swarm=>swarm.sendToQa('synthetic/repo',1)],
+  ['message agent',swarm=>swarm.message(CEO_ID,'Late synthetic message')],
+  ['update settings',swarm=>swarm.updateSettings({companyName:'Late company'})],
+  ['setup',swarm=>swarm.setup({companyName:'Late setup'})],
+  ['update office',swarm=>swarm.updateOffice('now')],
+  ['message CEO',swarm=>swarm.messageCeo('Late synthetic message')],
+  ['review release',swarm=>swarm.reviewDeliveryRelease('missing','synthetic/repo','synthetic-release')],
+  ['request review',swarm=>swarm.requestReview()],
+  ['onboard floor',swarm=>swarm.onboardFloor('synthetic/repo')],
+  ['plan floor',swarm=>swarm.planFloor('synthetic/repo','Late mission')],
+  ['mark phone read',swarm=>swarm.markPhoneRead(Date.now())],
+  ['approve request',swarm=>swarm.approveRequest('missing')],
+  ['reject request',swarm=>swarm.rejectRequest('missing')],
+];
+it.each(closedCommands)('rejects direct %s after shutdown without changing persisted office state',async(_name,command)=>{
+  const {swarm,fake}=await office(true);await swarm.shutdown();
+  const before=await fs.readFile(STATE_FILE,'utf8');const snapshot=swarm.snapshot();
+  fake.startSession.mockClear();fake.listIssues.mockClear();fake.listPulls.mockClear();fake.setLocalPath.mockClear();
+  await expect(Promise.resolve().then(()=>command(swarm))).rejects.toThrow('Office is shutting down');
+  expect(swarm.snapshot().repos).toEqual(snapshot.repos);expect(swarm.snapshot().agents).toEqual(snapshot.agents);
+  expect(swarm.snapshot().settings).toEqual(snapshot.settings);expect(await fs.readFile(STATE_FILE,'utf8')).toBe(before);
+  expect(fake.startSession).not.toHaveBeenCalled();expect(fake.listIssues).not.toHaveBeenCalled();expect(fake.listPulls).not.toHaveBeenCalled();expect(fake.setLocalPath).not.toHaveBeenCalled();
+});
+it.each(['metadata','folder','identity'] as const)('rejects a repository connection completed after shutdown during %s discovery',async stage=>{
+  const {swarm,fake}=await office(true);let finish!:(value:any)=>void;
+  const pause=()=>new Promise<any>(resolve=>{finish=resolve;});
+  const meta={nameWithOwner:'synthetic/new',description:'Synthetic',url:'https://example.test/repo',defaultBranch:'main'};
+  const identity={tenantName:'',tenantDomain:'',tenantId:'',user:'',environments:[],isReal:false,status:'disconnected' as const};
+  if(stage==='metadata')fake.repoMeta.mockImplementationOnce(pause);
+  if(stage==='folder')fake.scanProjects.mockImplementationOnce(pause);
+  if(stage==='identity')fake.tenancy.info.mockImplementationOnce(pause);
+  fake.setLocalPath.mockClear();fake.ensureClone.mockClear();
+  const pending=swarm.connectRepo('synthetic/new');await vi.waitFor(()=>expect(finish).toBeTypeOf('function'));
+  await swarm.shutdown();const before=await fs.readFile(STATE_FILE,'utf8');
+  finish(stage==='metadata'?meta:stage==='folder'?[]:identity);
+  await expect(pending).rejects.toThrow('Office is shutting down');
+  expect(swarm.snapshot().repos.map(repo=>repo.id)).toEqual(['synthetic/repo']);
+  expect(fake.setLocalPath).not.toHaveBeenCalled();expect(fake.ensureClone).not.toHaveBeenCalled();
+  expect(await fs.readFile(STATE_FILE,'utf8')).toBe(before);
+});
+it.each(['issue','pull'] as const)('does not follow a late %s mutation with synchronization or assignments',async action=>{
+  const {swarm,fake}=await office(true);let finish!:(value:any)=>void;
+  fake.listIssues.mockClear();fake.listPulls.mockClear();
+  if(action==='issue')fake.createIssue.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  else fake.closePull.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  const pending=action==='issue'?swarm.createIssue('synthetic/repo','Synthetic issue','Test only','missing'):swarm.closePull('synthetic/repo',1);
+  expect(finish).toBeTypeOf('function');await swarm.shutdown();const before=await fs.readFile(STATE_FILE,'utf8');finish(action==='issue'?2:undefined);
+  await expect(pending).rejects.toThrow('Office is shutting down');
+  expect(fake.listIssues).not.toHaveBeenCalled();expect(fake.listPulls).not.toHaveBeenCalled();expect(fake.startSession).not.toHaveBeenCalled();
+  expect(await fs.readFile(STATE_FILE,'utf8')).toBe(before);
+});
+it('does not publish a folder after its inspection completes during shutdown',async()=>{
+  const {swarm,fake}=await office(true);let finish!:(value:any)=>void;
+  fake.inspectFolder.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  const pending=swarm.publishFolder(HOME_DIR,{visibility:'private',description:'Synthetic'});await swarm.shutdown();
+  finish({name:'synthetic',path:HOME_DIR,git:true,github:null});
+  await expect(pending).rejects.toThrow('Office is shutting down');expect(fake.publishFolder).not.toHaveBeenCalled();expect(fake.repoMeta).not.toHaveBeenCalled();
+});
+it('refuses new state and terminal subscribers after shutdown without sending a snapshot',async()=>{
+  const {swarm}=await office(true);await swarm.shutdown();
+  const client={close:vi.fn(),on:vi.fn(),send:vi.fn(),readyState:1,OPEN:1};
+  swarm.addClient(client as any);swarm.attachTerminal(CEO_ID,client as any);
+  expect(client.close).toHaveBeenCalledTimes(2);expect(client.close).toHaveBeenCalledWith(1001,'Office is shutting down');
+  expect(client.on).not.toHaveBeenCalled();expect(client.send).not.toHaveBeenCalled();
+});
+it.each(['create','publish'] as const)('does not attach a repository after late %s completion',async action=>{
+  const {swarm,fake}=await office(true);let finish!:(value:any)=>void;
+  fake.inspectFolder.mockResolvedValue({name:'synthetic-new',path:HOME_DIR,git:true,github:null} as any);
+  if(action==='create')fake.createProject.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  else fake.publishFolder.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  const pending=action==='create'?swarm.createRepo('synthetic-new',{visibility:'private'}):swarm.publishFolder(HOME_DIR,{visibility:'private',description:'Synthetic'});
+  await vi.waitFor(()=>expect(finish).toBeTypeOf('function'));await swarm.shutdown();
+  finish(action==='create'?{fullName:'synthetic/new',path:HOME_DIR}:'synthetic/new');
+  await expect(pending).rejects.toThrow('Office is shutting down');
+  expect(fake.repoMeta).not.toHaveBeenCalled();expect(swarm.snapshot().repos.map(repo=>repo.id)).toEqual(['synthetic/repo']);
+  expect(action==='create'?fake.createProject:fake.publishFolder).toHaveBeenCalledOnce();
+});
+it('rejects a late external repository listing after admission closes',async()=>{
+  const {swarm,fake}=await office();let finish!:(value:[])=>void;
+  fake.listMyRepos.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  const pending=swarm.listGithubRepos();await swarm.shutdown();finish([]);
+  await expect(pending).rejects.toThrow('Office is shutting down');
+});
+it('discards folder-sync feedback completed after shutdown without updating its last observation',async()=>{
+  const {swarm,fake}=await office(true);let finish!:(value:any)=>void;
+  await vi.waitFor(()=>expect(swarm.snapshot().repos[0].cloneStatus).toBe('ready'));
+  const observed=swarm.snapshot().repos[0].folderSync;
+  fake.syncMain.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  const pending=swarm.syncFolderNow('synthetic/repo');expect(finish).toBeTypeOf('function');
+  await swarm.shutdown();const before=await fs.readFile(STATE_FILE,'utf8');finish({status:'updated synthetic',behind:0,updatable:false});
+  await expect(pending).rejects.toThrow('Office is shutting down');
+  expect(swarm.snapshot().repos[0].folderSync).toBe(observed);expect(await fs.readFile(STATE_FILE,'utf8')).toBe(before);
+});
 async function twoIssueOffice() {return office(true, fake => fake.listIssues.mockResolvedValue([issue, secondIssue]));}
 
 it('cannot apply an old failed readiness decision to a replacement assignment', async () => {

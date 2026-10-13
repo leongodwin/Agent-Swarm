@@ -308,3 +308,11 @@ Unexpected provider failures are not returned verbatim to browser clients. Contr
 The office closes HTTP admission first during shutdown. New API work, including hooks and session creation, is refused before body parsing; asynchronous route/HLD/hook results are rechecked before JSON acceptance. New WebSocket upgrades are refused while shutdown is active. Already-issued external mutations and started download streams cannot be physically revoked by this barrier. Service-local cancellation, persisted uncertain outcomes and independent reconciliation remain necessary.
 
 Deployment configuration/run and capability refresh requests reject undeclared controls. A bodyless API request is represented as an empty object; arrays and malformed or oversized JSON are rejected. This is not a claim of comprehensive semantic/schema/DLP enforcement on every native tool or legacy route.
+
+### Direct Swarm admission during shutdown
+
+HTTP admission is supplemented by a service-local guard on public Swarm commands and external read dispatch. Closure rejects new repository/folder operations, issue/PR changes, agent/settings mutations, assignments, messages, QA/review and request decisions before they inspect or mutate office state. New WebSocket state/terminal attachments are closed. Passive snapshot and screenshot reads can still inspect the retained state.
+
+Repository connection rechecks closure after metadata, folder and connected-identity reads, before changing local paths, adding a floor or starting its follow-on work. Issue creation and pull closure cannot begin synchronization or assignment after a late provider result. Folder synchronization discards late status feedback. Tests use actual initialized Swarm instances, isolated files and controlled provider promises to verify these transitions and unchanged persisted state after shutdown.
+
+A backend mutation already dispatched before closure can still complete externally. Its caller is denied further office work, but that does not roll back the mutation or establish its remote outcome. Complete operation journaling, idempotency and independent reconciliation for every remote authoring action remain necessary; this guard is not full provider-level fencing or end-to-end recovery certification.

@@ -386,6 +386,9 @@ export class Swarm {
   private saveTimer: NodeJS.Timeout | null = null;
   private stateLoaded = false;
   private closed = false;
+  private requireOpen() {
+    if (this.closed) throw new HttpError(409, 'Office is shutting down');
+  }
   private lifecycleStop = new AbortController();
   private shutdownWork: Promise<void> | null = null;
   private lifecycleTimers = new Set<NodeJS.Timeout>();
@@ -724,6 +727,7 @@ export class Swarm {
   // ---------- clients ----------
 
   addClient(ws: WebSocket) {
+    if (this.closed) { ws.close(1001, 'Office is shutting down'); return; }
     this.clients.add(ws);
     ws.on('close', () => this.clients.delete(ws));
     this.send(ws, { type: 'snapshot', data: this.snapshot() });
@@ -847,8 +851,11 @@ export class Swarm {
 
   // ---------- GitHub / repos ----------
 
-  listGithubRepos(owner?: string) {
-    return this.backend.listMyRepos(owner);
+  async listGithubRepos(owner?: string) {
+    this.requireOpen();
+    const repos = await this.backend.listMyRepos(owner);
+    this.requireOpen();
+    return repos;
   }
 
   /**
@@ -856,10 +863,13 @@ export class Swarm {
    * your projects folder that already has it as origin, else a fresh clone into your projects folder.
    */
   async connectRepo(fullName: string, opts: FloorOptions & { localPath?: string } = {}): Promise<RepoView> {
+    this.requireOpen();
     const existing = this.state.repos.find((r) => r.id.toLowerCase() === fullName.toLowerCase());
     if (existing) throw new HttpError(409, `${fullName} is already floor ${existing.floor}`);
     const meta = await this.backend.repoMeta(fullName);
+    this.requireOpen();
     const folder = opts.localPath ?? (await this.projectFolderFor(meta.nameWithOwner));
+    this.requireOpen();
     const floor = this.state.repos.reduce((m, r) => Math.max(m, r.floor), 0) + 1;
     const repo: PersistedRepo = {
       id: meta.nameWithOwner,
@@ -881,6 +891,7 @@ export class Swarm {
       targetTenancy: activeEnvironment(await this.backend.tenancy.info()),
       addedAt: Date.now(),
     };
+    this.requireOpen();
     this.backend.setLocalPath(repo.fullName, folder);
     this.state.repos.push(repo);
     this.repoRt.set(repo.id, { issues: [], pulls: [], lastSync: null, syncing: false, cloneStatus: 'pending', lastMergedAt: null, folderSync: null, merging: false });
@@ -899,6 +910,7 @@ export class Swarm {
   private async projectFolderFor(fullName: string): Promise<string> {
     const root = this.state.settings.projectsDir;
     const folders = await this.backend.scanProjects(root).catch(() => []);
+    this.requireOpen();
     const match = folders.find((f) => f.github?.toLowerCase() === fullName.toLowerCase());
     if (match) return match.path;
     const name = fullName.split('/')[1];
@@ -909,6 +921,7 @@ export class Swarm {
 
   /** A brand-new project: a folder in your projects folder, pushed to a new GitHub repo. */
   async createRepo(name: string, opts: FloorOptions & { description?: string; visibility: 'private' | 'public'; owner?: string }) {
+    this.requireOpen();
     if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new HttpError(400, 'Project names may only contain letters, numbers, ".", "-" and "_"');
     const created = await this.backend.createProject(this.state.settings.projectsDir, name, opts).catch((err: Error) => {
       throw new HttpError(400, err.message);
@@ -918,10 +931,12 @@ export class Swarm {
 
   /** The folders in your projects folder (or another folder you point at), and which are floors already. */
   async listProjectFolders(dir?: string): Promise<{ root: string; folders: ProjectFolderView[] }> {
+    this.requireOpen();
     const root = dir?.trim() ? path.resolve(dir.trim()) : this.state.settings.projectsDir;
     const folders = await this.backend.scanProjects(root).catch((err: Error) => {
       throw new HttpError(400, err.message);
     });
+    this.requireOpen();
     const same = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
     const floorOf = (f: { path: string; github: string | null }) =>
       this.state.repos.find((r) => (r.localPath && same(r.localPath, f.path)) || (f.github && r.id.toLowerCase() === f.github.toLowerCase()))?.floor ?? null;
@@ -930,18 +945,22 @@ export class Swarm {
 
   /** Give one of your folders a floor. It must already be on GitHub; otherwise publish it first. */
   async connectFolder(dir: string, opts: FloorOptions = {}) {
+    this.requireOpen();
     const f = await this.backend.inspectFolder(dir).catch((err: Error) => {
       throw new HttpError(400, err.message);
     });
+    this.requireOpen();
     if (!f.github) throw new HttpError(400, `${f.name} ${f.git ? "isn't on GitHub yet" : "isn't a git repository yet"}. Publish it to GitHub first.`);
     return this.connectRepo(f.github, { ...opts, localPath: f.path });
   }
 
   /** Put one of your folders on GitHub (only what's committed goes up), then give it a floor. */
   async publishFolder(dir: string, opts: FloorOptions & { name?: string; visibility: 'private' | 'public'; description?: string }) {
+    this.requireOpen();
     const f = await this.backend.inspectFolder(dir).catch((err: Error) => {
       throw new HttpError(400, err.message);
     });
+    this.requireOpen();
     const name = (opts.name?.trim() || f.name).replace(/[^A-Za-z0-9._-]+/g, '-');
     const fullName = await this.backend.publishFolder(f.path, { name, visibility: opts.visibility, description: opts.description }).catch((err: Error) => {
       throw new HttpError(400, err.message);
@@ -950,6 +969,7 @@ export class Swarm {
   }
 
   disconnectRepo(id: string) {
+    this.requireOpen();
     const repo = this.repo(id);
     this.state.ceo.queue = this.state.ceo.queue.filter((j) => j.repoId !== id);
     for (const r of this.state.requests.filter((x) => x.repoId === id && x.status === 'pending')) {
@@ -975,6 +995,7 @@ export class Swarm {
     id: string,
     patch: Partial<Pick<PersistedRepo, 'autoAssign' | 'autoMerge' | 'browserTesting' | 'color' | 'links' | 'mission' | 'summary' | 'qaBrief'>> & { previewCommand?: unknown; previewEnv?: unknown },
   ) {
+    this.requireOpen();
     const repo = this.repo(id);
     const preview = parsePreviewPatch(patch.previewCommand, patch.previewEnv);
     repo.preview = { ...repo.preview, ...preview };
@@ -1142,10 +1163,12 @@ export class Swarm {
 
   /** Fast-forward the floor's main checkout (usually your own project folder) and report how it stands. */
   private async syncFolder(repo: PersistedRepo) {
+    if (this.closed) return null;
     const rt = this.repoRt.get(repo.id);
     if (!rt || rt.cloneStatus !== 'ready') return rt?.folderSync ?? null;
     const own = this.backend.office.isOwnFolder(this.backend.mainDir(repo.fullName)); // updating the running office restarts it mid-work
     const sync = await this.backend.syncMain(repo.fullName, repo.defaultBranch, { touch: !own }).catch((err) => ({ status: `sync failed: ${oneLine(err)}`, behind: 0, updatable: false }));
+    if (this.closed) return null;
     const status = sync?.status ?? null;
     if (own && sync) this.setOfficeBehind(sync.updatable ? sync.behind : 0);
     if (!this.repoRt.has(repo.id)) return null;
@@ -1162,18 +1185,23 @@ export class Swarm {
 
   /** The manager's "Sync now". */
   async syncFolderNow(repoId: string) {
-    return { folderSync: await this.syncFolder(this.repo(repoId)) };
+    this.requireOpen();
+    const folderSync = await this.syncFolder(this.repo(repoId));
+    this.requireOpen();
+    return { folderSync };
   }
 
   // ---------- the floor's app (preview monitor) ----------
 
   /** Run the floor's app from its preview worktree: the default branch, or an open PR. Replaces what it is running now. */
   async startPreview(id: string, pr?: number | null): Promise<PreviewView> {
+    this.requireOpen();
     const repo = this.repo(id);
     return this.previews.start(repo, `${repo.fullName.split('/')[1]} app`, pr);
   }
 
   stopPreview(id: string): Promise<PreviewView> {
+    this.requireOpen();
     return this.previews.stop(this.repo(id));
   }
 
@@ -1295,11 +1323,14 @@ export class Swarm {
   }
 
   async createIssue(repoId: string, title: string, body: string, assignTo?: string, specialty?: string) {
+    this.requireOpen();
     const repo = this.repo(repoId);
     if (!title.trim()) throw new HttpError(400, 'An issue needs a title');
     const slug = specialtySlug(specialty);
     const number = await this.backend.createIssue(repo.fullName, title.trim(), body, slug ? [specialtyLabel(slug)] : []);
+    this.requireOpen();
     await this.syncRepo(repo.id);
+    this.requireOpen();
     this.toast('success', `Issue #${number} filed on ${repo.fullName}`);
     if (assignTo) await this.assign(assignTo, number);
     else this.later(() => this.schedule(), 200);
@@ -1307,7 +1338,7 @@ export class Swarm {
   }
 
   async mergePull(repoId: string, number: number, method: 'squash' | 'merge' | 'rebase' = 'squash') {
-    if (this.closed) throw new HttpError(409, 'Office is shutting down');
+    this.requireOpen();
     if (!['squash', 'merge', 'rebase'].includes(method)) throw new HttpError(400, 'Invalid merge method');
     const repo = this.repo(repoId);
     const rt = this.repoRt.get(repo.id)!;
@@ -1327,9 +1358,12 @@ export class Swarm {
   }
 
   async closePull(repoId: string, number: number) {
+    this.requireOpen();
     const repo = this.repo(repoId);
     await this.backend.closePull(repo.fullName, number);
+    this.requireOpen();
     await this.syncRepo(repo.id);
+    this.requireOpen();
   }
 
   // ---------- agents ----------
@@ -1350,6 +1384,7 @@ export class Swarm {
       appearance?: { color: string; hair: string; skin: string };
     },
   ) {
+    this.requireOpen();
     const repo = this.repo(repoId);
     const role: AgentRole = opts.role === 'qa' ? 'qa' : 'dev';
     const used = new Set(this.state.agents.filter((a) => a.repoId === repo.id && a.role === role).map((a) => a.desk));
@@ -1421,6 +1456,7 @@ export class Swarm {
     id: string,
     patch: { name?: string; model?: string; effort?: string; cli?: string; look?: string; title?: string; specialty?: string; brief?: string; color?: string; hair?: string },
   ) {
+    this.requireOpen();
     const a = this.agent(id);
     if (patch.cli !== undefined) a.cli = isCli(patch.cli) ? patch.cli : '';
     if (a.role === 'ceo' && a.status === 'error') {
@@ -1446,6 +1482,7 @@ export class Swarm {
   }
 
   fireAgent(id: string, force = false) {
+    this.requireOpen();
     const a = this.agent(id);
     if (a.role === 'ceo') throw new HttpError(409, `${a.name} runs the company and can't be let go.`);
     if (!force && a.role === 'qa' && this.state.agents.filter((x) => x.repoId === a.repoId && x.role === 'qa').length <= 1) {
@@ -1481,6 +1518,7 @@ export class Swarm {
   }
 
   stopAgent(id: string) {
+    this.requireOpen();
     const a = this.agent(id);
     if (!BUSY.includes(a.status)) return;
     const stoppedSession = this.agentRt.get(id)?.session;
@@ -1550,6 +1588,7 @@ export class Swarm {
   }
 
   resetAgent(id: string) {
+    this.requireOpen();
     const a = this.agent(id);
     if (BUSY.includes(a.status)) throw new HttpError(409, `${a.name} is busy; stop them first`);
     for (const q of this.state.qa) {
@@ -1575,7 +1614,7 @@ export class Swarm {
   }
 
   async assign(agentId: string, issueNumber: number, note?: string) {
-    if (this.closed) throw new HttpError(409, 'Office is shutting down');
+    this.requireOpen();
     const a = this.agent(agentId);
     const repo = this.repo(a.repoId);
     if (a.role === 'qa') throw new HttpError(400, `${a.name} is a QA tester; they test pull requests rather than issues.`);
@@ -1656,6 +1695,7 @@ export class Swarm {
 
   /** A browser opened an agent's terminal (/ws/term?agent=<id>). */
   attachTerminal(agentId: string, ws: WebSocket) {
+    if (this.closed) { ws.close(1001, 'Office is shutting down'); return; }
     const t = this.agentRt.get(agentId)?.terminal;
     if (!t) return ws.close(4404, 'That agent has no terminal');
     t.attach(ws);
@@ -2153,6 +2193,7 @@ export class Swarm {
 
   /** Manager's "send to QA" for any open PR (including ones opened by people). */
   async sendToQa(repoId: string, prNumber: number) {
+    this.requireOpen();
     const repo = this.repo(repoId);
     const pr = this.repoRt.get(repo.id)?.pulls.find((p) => p.number === prNumber && p.state === 'OPEN');
     if (!pr) throw new HttpError(404, `PR #${prNumber} is not open on ${repo.fullName}`);
@@ -2496,7 +2537,7 @@ export class Swarm {
 
   /** A message for an agent: sent into their running session, or a follow-up that resumes it. typed: the manager typed it at their CLI's prompt, where it's already running. */
   async message(id: string, text: string, typed = false) {
-    if (this.closed) throw new HttpError(409, 'Office is shutting down');
+    this.requireOpen();
     const a = this.agent(id);
     if (a.role === 'ceo') return this.messageCeo(text);
     const repo = this.repo(a.repoId);
@@ -2537,6 +2578,7 @@ export class Swarm {
   }
 
   updateSettings(patch: Partial<SwarmSettings>) {
+    this.requireOpen();
     const s = this.state.settings;
     if (patch.sessionLimit !== undefined) s.sessionLimit = Math.max(0, Math.round(Number(patch.sessionLimit)) || 0);
     // The default model belongs to the default coding agent: a new agent starts on its own default.
@@ -2566,6 +2608,7 @@ export class Swarm {
 
   /** The setup wizard: who you are, the company, and your CEO. */
   setup(x: { managerName?: string; companyName?: string; hiring?: string; ceoName?: string; ceoLook?: string; ceoColor?: string }) {
+    this.requireOpen();
     this.updateSettings({
       managerName: x.managerName,
       companyName: x.companyName,
@@ -2913,6 +2956,7 @@ export class Swarm {
 
   /** The manager's Update now (drain now, even with automatic updates off) or Later (not for 2 hours, or until a newer commit). */
   updateOffice(action: unknown): OfficeUpdateView {
+    this.requireOpen();
     if (action !== 'now' && action !== 'later') throw new HttpError(400, 'action must be "now" or "later"');
     const u = this.officeUpdate;
     if (!this.officeHead || !this.backend.office.launcher) throw new HttpError(409, 'The office can only update itself when its launcher started it (npm run dev or npm start).');
@@ -3238,6 +3282,7 @@ export class Swarm {
 
   /** The manager's phone → the CEO. Injected into a running session, otherwise the CEO picks it up next. */
   async messageCeo(text: string) {
+    this.requireOpen();
     const t = text.trim().slice(0, 4000);
     if (!t) throw new HttpError(400, 'Empty message');
     const a = this.ceo();
@@ -3257,7 +3302,7 @@ export class Swarm {
   }
 
   async reviewDeliveryRelease(agentId: string, repoId: string, releaseId: string) {
-    if (this.closed) throw new HttpError(409, 'Office is shutting down');
+    this.requireOpen();
     const a = this.state.agents.find((a) => a.id === agentId && a.repoId === repoId && a.role === 'qa');
     if (!a || BUSY.includes(a.status) || this.agentRt.get(a.id)?.session || this.slotsFull()) throw new HttpError(409, 'Assigned QA reviewer or session slot is busy; request the release review when available');
     const repo = this.repo(repoId);
@@ -3277,17 +3322,20 @@ export class Swarm {
   }
 
   requestReview() {
+    this.requireOpen();
     if (this.state.repos.length === 0) throw new HttpError(400, 'Connect a repo first: the CEO needs a floor to review.');
     this.enqueueCeo({ kind: 'review', at: Date.now() });
   }
 
   onboardFloor(repoId: string) {
+    this.requireOpen();
     const repo = this.repo(repoId);
     this.enqueueCeo({ kind: 'onboard', repoId: repo.id, at: Date.now() });
   }
 
   /** The manager hands the CEO a brief for a floor; the CEO turns it into issues and a team. */
   planFloor(repoId: string, mission?: string) {
+    this.requireOpen();
     const repo = this.repo(repoId);
     if (typeof mission === 'string') {
       repo.mission = mission.trim().slice(0, 4000);
@@ -3339,6 +3387,7 @@ export class Swarm {
   }
 
   markPhoneRead(at: number) {
+    this.requireOpen();
     const t = Math.min(Number(at) || Date.now(), Date.now());
     if (t <= this.state.phoneReadAt) return;
     this.state.phoneReadAt = t;
@@ -3366,6 +3415,7 @@ export class Swarm {
   }
 
   approveRequest(id: string, overrides: { name?: string; model?: string; effort?: string } = {}, by: 'manager' | 'auto' = 'manager') {
+    this.requireOpen();
     const req = this.state.requests.find((r) => r.id === id);
     if (!req) throw new HttpError(404, 'That proposal no longer exists');
     if (req.status !== 'pending') throw new HttpError(409, `That proposal was already ${req.status}`);
@@ -3409,6 +3459,7 @@ export class Swarm {
   }
 
   rejectRequest(id: string, note = '') {
+    this.requireOpen();
     const req = this.state.requests.find((r) => r.id === id);
     if (!req) throw new HttpError(404, 'That proposal no longer exists');
     if (req.status !== 'pending') throw new HttpError(409, `That proposal was already ${req.status}`);
