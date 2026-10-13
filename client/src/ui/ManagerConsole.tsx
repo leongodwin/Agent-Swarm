@@ -12,6 +12,7 @@ import { Panel } from './Overlays';
 import { Resume } from './Phone';
 import { ProjectPicker } from './ProjectPicker';
 import { StatusPill } from './TerminalView';
+import { ToolGovernancePanel } from './ToolGovernancePanel';
 
 const MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5', 'claude-haiku-4-5'];
 const EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -759,8 +760,7 @@ function SettingsTab() {
           </span>
         </label>
         <p className="muted small">
-          Agents work like your own coding agents in a terminal, with your skills, MCP servers and settings, and don't stop to ask. The office's workflow (branches, pull requests, QA reporting
-          back) is in their instructions.
+          Agents use your coding tools, installed skills and settings. Supported pre-tool hooks apply request safeguards; native permission checks and platform access still apply. See Operations & audit for observed decisions.
         </p>
         <h3>🏢 Company</h3>
         <label className="field">
@@ -800,109 +800,7 @@ function SettingsTab() {
 }
 
 function PowerBiDashboardTab() {
-  const stats = {
-    makerHoursSaved: 542,
-    costSavingsUsd: 48800,
-    copilotResolutionRate: 94.6,
-    activeFlows: 24,
-    solutionsShipped: 16,
-    avgLatencyMs: 380,
-    tokensConsumedM: 14.8,
-    guardrailViolationsBlocked: 142,
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Top Banner */}
-      <div style={{ background: 'linear-gradient(135deg, #1f2937, #111827)', padding: '16px 20px', borderRadius: 12, border: '1px solid #eab308', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#facc15', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span>📊</span> Power BI Executive ROI & Swarm Intelligence Dashboard
-          </div>
-          <div style={{ color: '#9ca3af', fontSize: 13, marginTop: 4 }}>
-            Continuous Enterprise Value Telemetry · Autonomous Power Platform & Copilot Studio Engineering
-          </div>
-        </div>
-        <div style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#fde047', border: '1px solid #ca8a04', padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
-          ● LIVE STREAMING DATASET
-        </div>
-      </div>
-
-      {/* KPI Cards Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-        {[
-          { label: 'Maker Hours Saved', val: `${stats.makerHoursSaved} hrs`, sub: 'vs manual pro-code dev', icon: '⏱️', color: '#60a5fa' },
-          { label: 'Estimated ROI Generated', val: `$${stats.costSavingsUsd.toLocaleString()}`, sub: 'Direct enterprise labor value', icon: '💰', color: '#4ade80' },
-          { label: 'Copilot Resolution Rate', val: `${stats.copilotResolutionRate}%`, sub: 'Zero-touch automated answers', icon: '🤖', color: '#c084fc' },
-          { label: 'Guardrail Defense Rate', val: '100%', sub: `${stats.guardrailViolationsBlocked} injection attempts caught`, icon: '🛡️', color: '#38bdf8' },
-        ].map((kpi) => (
-          <div key={kpi.label} style={{ background: '#1e293b', padding: '16px 18px', borderRadius: 10, border: '1px solid #334155' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', fontSize: 12, fontWeight: 600 }}>
-              <span>{kpi.label}</span>
-              <span style={{ fontSize: 16 }}>{kpi.icon}</span>
-            </div>
-            <div style={{ fontSize: 28, fontWeight: 800, color: kpi.color, margin: '8px 0 4px' }}>{kpi.val}</div>
-            <div style={{ fontSize: 11, color: '#64748b' }}>{kpi.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Deep-dive analytics two-column */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        <div style={{ background: '#1e293b', padding: 18, borderRadius: 10, border: '1px solid #334155' }}>
-          <h4 style={{ color: '#f8fafc', fontSize: 15, marginBottom: 12 }}>🚀 Solution Velocity & Deployment Pipelines</h4>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {[
-              { name: 'contoso_copilot_service.zip', env: 'Production', time: '12m ago', status: 'Deployed (ALM)' },
-              { name: 'contoso_claims_pcf.zip', env: 'QA Stage', time: '28m ago', status: 'Passed Checker' },
-              { name: 'contoso_powerautomate_core.zip', env: 'Production', time: '1h ago', status: 'Deployed (ALM)' },
-            ].map((sol) => (
-              <div key={sol.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f172a', padding: '10px 14px', borderRadius: 8, fontSize: 13 }}>
-                <div>
-                  <div style={{ color: '#e2e8f0', fontWeight: 600 }}>{sol.name}</div>
-                  <div style={{ color: '#64748b', fontSize: 11 }}>{sol.env} · {sol.time}</div>
-                </div>
-                <span style={{ color: '#4ade80', fontWeight: 700, fontSize: 12 }}>✓ {sol.status}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ background: '#1e293b', padding: 18, borderRadius: 10, border: '1px solid #334155' }}>
-          <h4 style={{ color: '#f8fafc', fontSize: 15, marginBottom: 12 }}>⚡ Azure OpenAI & Copilot Studio Telemetry</h4>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 13 }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ color: '#94a3b8' }}>Topic Intent Recognition Accuracy</span>
-                <span style={{ color: '#60a5fa', fontWeight: 700 }}>98.2%</span>
-              </div>
-              <div style={{ background: '#334155', height: 8, borderRadius: 4, overflow: 'hidden' }}>
-                <div style={{ background: '#38bdf8', width: '98.2%', height: '100%' }} />
-              </div>
-            </div>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ color: '#94a3b8' }}>Prompt Shield & Safety Boundary Defense</span>
-                <span style={{ color: '#4ade80', fontWeight: 700 }}>100%</span>
-              </div>
-              <div style={{ background: '#334155', height: 8, borderRadius: 4, overflow: 'hidden' }}>
-                <div style={{ background: '#4ade80', width: '100%', height: '100%' }} />
-              </div>
-            </div>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ color: '#94a3b8' }}>Power Automate Flow Success Rate</span>
-                <span style={{ color: '#c084fc', fontWeight: 700 }}>99.4%</span>
-              </div>
-              <div style={{ background: '#334155', height: 8, borderRadius: 4, overflow: 'hidden' }}>
-                <div style={{ background: '#a855f7', width: '99.4%', height: '100%' }} />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  return <ToolGovernancePanel />;
 }
 
 export function ManagerConsole({ initialTab, initialRepo }: { initialTab?: ManagerTab; initialRepo?: string }) {
@@ -913,7 +811,7 @@ export function ManagerConsole({ initialTab, initialRepo }: { initialTab?: Manag
     ['ceo', `🧠 CEO & hiring${pending ? ` (${pending})` : ''}`],
     ['team', '👩‍💻 Team'],
     ['issues', '📝 Issues'],
-    ['powerbi', '📊 Power BI ROI'],
+    ['powerbi', '📊 Operations & audit'],
     ['settings', '⚙️ Settings'],
   ];
   return (

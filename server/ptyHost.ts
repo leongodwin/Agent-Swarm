@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import http from 'node:http';
+import { hookFailure } from '../shared/hookDecision.ts';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -168,7 +169,7 @@ const hooks = http.createServer((req, res) => {
       // not JSON: an empty hook
     }
     const rid = nextRid++;
-    waiting.set(rid, { token, body, res, timer: setTimeout(() => answer(rid, {}), HOOK_WAIT_MS), sent: false });
+    waiting.set(rid, { token, body, res, timer: setTimeout(() => answer(rid, hookFailure(body)), HOOK_WAIT_MS), sent: false });
     passHooks();
   });
 });

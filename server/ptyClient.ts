@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { hookFailure } from '../shared/hookDecision.ts';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -104,7 +105,7 @@ function onMessage(m: FromHost) {
     case 'hook':
       void Promise.resolve()
         .then(() => hookHandler(m.token, m.body))
-        .catch(() => ({}))
+        .catch(() => hookFailure(m.body))
         .then((answer) => send({ op: 'hookReply', rid: m.rid, answer }));
       return;
   }

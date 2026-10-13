@@ -194,9 +194,9 @@ export function HUD() {
         >
           🎥 Tour <kbd style={{ marginLeft: 4, fontSize: '0.7em' }}>T</kbd>
         </button>
-        <span className="pill">
+        <button className="pill" onClick={() => useStore.getState().openOverlay({ kind: 'manager', tab: 'powerbi' })} title="Open operations and tool audit" aria-label="Open operations and tool audit" style={{cursor:'pointer'}}>
           ⚙️ {settings.sessionLimit ? `${running}/${settings.sessionLimit}` : running} sessions
-        </span>
+        </button>
         {user && <span className="pill">🐙 {user}</span>}
       </div>
 

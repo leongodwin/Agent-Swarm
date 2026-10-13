@@ -25,6 +25,7 @@ import { HOME_DIR, RESOURCE_LEASE_ROOT } from './config.ts';
 import { createBrowserAuth } from './browserAuth.ts';
 import { CanvasOwnership } from './canvasOwnership.ts';
 import { z } from 'zod';
+import { ToolGovernanceService, setToolGovernanceGate } from './toolGovernance.ts';
 import { parseBody, proposalSchema, hldSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
@@ -36,6 +37,9 @@ const features = new FeatureStore(path.join(HOME_DIR, backend.demo ? 'demo-featu
 await features.init();
 const delivery = new DeliveryService(HOME_DIR, backend.demo, undefined, RESOURCE_LEASE_ROOT);
 await delivery.init();
+const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'), () => !!delivery.view().policy?.copilotPaused);
+await toolGovernance.init();
+setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, input, checkpoint));
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();
 swarm.capabilityStatus = () => JSON.stringify(capabilities.view());
@@ -87,7 +91,7 @@ capabilities.onChange = delivery.onChange;
 const app = express();
 // Agent CLIs calling back: hooks (a tool result can be a large screenshot, hence the limit) and the CEO's office tools.
 // The token in the path is the session's; unknown tokens get an empty answer.
-app.post('/api/hooks/:token', express.json({ limit: '64mb' }), (req, res) => void res.json(handleHook(String(req.params.token), req.body)));
+app.post('/api/hooks/:token', express.json({ limit: '64mb' }), (req, res, next) => void handleHook(String(req.params.token), req.body).then((answer) => res.json(answer)).catch(next));
 app.post('/api/mcp/:token', express.json({ limit: '4mb' }), (req, res, next) => void handleMcp(String(req.params.token), req, res).catch(next));
 app.all('/api/mcp/:token', (_req, res) => void res.status(405).set('Allow', 'POST').end());
 const browserAuth = createBrowserAuth();
@@ -127,6 +131,7 @@ app.get('/api/state', route(() => swarm.snapshot()));
 app.get('/api/capabilities', route(() => capabilities.view()));
 app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
 app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, demo: backend.demo, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+app.get('/api/governance/tools', route(() => toolGovernance.view()));
 app.post('/api/authoring/canvas/:app/lease', route(async (req) => {
   if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
   const { app: appId } = parseBody(z.object({ app: z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i) }), req.params);

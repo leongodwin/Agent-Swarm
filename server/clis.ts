@@ -369,16 +369,34 @@ if (event.type === 'agent-turn-complete') {
 }
 `;
 
-/** Codex's hook program: passes what Codex tells a hook on to the office and answers nothing, so Codex carries on as usual. */
-export const CODEX_HOOK_SOURCE = String.raw`// cubefarm: Codex's hooks. Tells the office what Codex is doing; never changes what it does.
-const url = process.env.CUBEFARM_HOOK_URL;
+/** Trusted pre-tool hooks relay the office decision. Transport failures deny
+ * pre-tool execution, while observational hooks remain nonblocking. */
+export const CODEX_HOOK_SOURCE = String.raw`// cubefarm: relays governance decisions for trusted pre-tool hooks.
+const url = process.argv[2] || process.env.CUBEFARM_HOOK_URL;
 const chunks = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', async () => {
+  let body = {};
   try {
-    if (url) await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: Buffer.concat(chunks), signal: AbortSignal.timeout(5000) });
-  } catch {}
-  process.stdout.write('{}');
+    body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    if (!url) throw new Error('Office hook URL unavailable');
+    const endpoint = new URL(url);
+    if (endpoint.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) throw new Error('Office hook must use loopback');
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error('Office hook unavailable');
+    const answer = await response.json();
+    if (body.hook_event_name === 'PreToolUse' && !['allow', 'deny'].includes(answer?.hookSpecificOutput?.permissionDecision)) throw new Error('No verified pre-tool decision');
+    // Codex retains its native permission rules. Claude's existing unattended
+    // mode explicitly opts into approval after the office safeguard succeeds.
+    const preservePermissions = !process.argv.includes('--approve-governed');
+    process.stdout.write(JSON.stringify(preservePermissions && body.hook_event_name === 'PreToolUse' && answer?.hookSpecificOutput?.permissionDecision === 'allow' ? {} : answer));
+  } catch {
+    if (body.hook_event_name === 'PreToolUse') {
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Office governance unavailable; execution denied' } }));
+      process.stderr.write('Office governance unavailable; execution denied.');
+      process.exitCode = 2;
+    } else process.stdout.write('{}');
+  }
 });
 `;
 

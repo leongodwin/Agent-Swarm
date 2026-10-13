@@ -26,12 +26,13 @@ import {
 import type { OfficeTools } from './ceo.ts';
 import type { AgentTerminal } from './terminal.ts';
 import type { AgentCli } from '../shared/types.ts';
+import { governTool, hookDecision, hookFailure } from './toolGovernance.ts';
 
 // One agent session as the real CLI in a pseudo-terminal: the same contract as the Agent SDK runner (log lines, the
 // current tool, the final text, finished), so the rest of the office doesn't care which runtime an agent uses.
 //
-// Claude Code reports through HTTP hooks passed with --settings: every tool call (PreToolUse also approves it, so the
-// CLI never stops to ask), each finished turn (Stop, with the final text), failures (StopFailure) and, through its
+// Claude Code reports through hooks passed with --settings: pre-tool requests receive a persisted safeguard decision,
+// finished turns report Stop, failures report StopFailure, and its
 // status line, cost and usage limits. Codex says when a turn ends (notify) and, once the manager trusts the office's
 // hooks in its /hooks, reports its steps through them too. OpenCode's plugin only says when a turn ends. GitHub
 // Copilot CLI runs one-shot (-p): its terminal output is the result, and the process exiting ends the session.
@@ -69,20 +70,20 @@ export function setOfficeUrl(url: string) {
 }
 
 interface Route {
-  hook(body: Record<string, unknown>): Record<string, unknown>;
+  hook(body: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>;
   office?: OfficeTools;
 }
 const routes = new Map<string, Route>();
 
 /** A hook, status line or notify call from a CLI (POST /api/hooks/:token). The answer is the hook's output. */
-export function handleHook(token: string, body: unknown): Record<string, unknown> {
+export async function handleHook(token: string, body: unknown): Promise<Record<string, unknown>> {
   const route = routes.get(token);
-  if (!route || !body || typeof body !== 'object' || Array.isArray(body)) return {};
+  if (!route || !body || typeof body !== 'object' || Array.isArray(body)) return hookFailure(body);
   try {
-    return route.hook(body as Record<string, unknown>);
+    return await route.hook(body as Record<string, unknown>);
   } catch (err) {
     console.warn('hook failed', err);
-    return {};
+    return hookFailure(body);
   }
 }
 
@@ -179,7 +180,7 @@ interface LiveCli {
   /** Browser screenshots already passed on (Codex and OpenCode: collected from the browser's output folder). */
   shots: Set<string>;
   /** The office session driving it; null while it waits at its prompt. */
-  session: { hook(b: Record<string, unknown>): Record<string, unknown>; exited(code: number): void } | null;
+  session: { hook(b: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>; exited(code: number): void } | null;
   idleTimer?: NodeJS.Timeout;
 }
 const lives = new Map<AgentTerminal, LiveCli>();
@@ -187,9 +188,6 @@ const lives = new Map<AgentTerminal, LiveCli>();
 let hooksHinted = false;
 /** A CLI left at its prompt this long is closed; its session can still be resumed. */
 const IDLE_MS = 30 * 60_000;
-
-/** PreToolUse's answer: nobody may be watching to answer a permission question, so every tool call is approved. */
-const ALLOW = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Approved by cubefarm' } };
 
 const toolInput = (b: Record<string, unknown>) => (b.tool_input && typeof b.tool_input === 'object' ? b.tool_input : {}) as Record<string, unknown>;
 
@@ -276,6 +274,9 @@ export interface ReconnectedCli {
  * resumes those sessions itself. Call hooksReady() once the busy ones are followed again.
  */
 export async function reconnectClis(terminalFor: (agentId: string) => AgentTerminal | null): Promise<ReconnectedCli[]> {
+  // Retained terminals invoke the shared helper path too; upgrade it before
+  // reopening hooks so a surviving Codex process cannot discard denials.
+  writeHelpers();
   const held = await startKeeper(HOME_DIR, handleHook);
   const back: ReconnectedCli[] = [];
   for (const h of held) {
@@ -318,10 +319,10 @@ export async function releaseClis(restart: boolean): Promise<void> {
 }
 
 /** A CLI waiting at its prompt: what the manager types there becomes a follow-up. */
-function idleHook(live: LiveCli, b: Record<string, unknown>): Record<string, unknown> {
+async function idleHook(live: LiveCli, b: Record<string, unknown>): Promise<Record<string, unknown>> {
   switch (String(b.hook_event_name ?? '')) {
     case 'PreToolUse':
-      return ALLOW;
+      return hookDecision(await governTool(String(b.tool_name ?? ''), toolInput(b), { actor: live.agentId, runtime: live.cli, source: 'cli-hook' }));
     case 'UserPromptSubmit': {
       const text = String(b.prompt ?? '').trim();
       if (!text || live.term.onIdlePrompt?.(text)) return {};
@@ -476,7 +477,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     return { statusLine };
   };
 
-  const hook = (b: Record<string, unknown>): Record<string, unknown> => {
+  const hook = async (b: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const event = String(b.hook_event_name ?? '');
     const sub = typeof b.agent_id === 'string' && b.agent_id !== ''; // a subagent's call: kept off the log
     if (cli === 'claude' && !sub && b.session_id !== kept) {
@@ -498,7 +499,9 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
           cb.tool(name);
           if (name === 'mcp__playwright__browser_navigate' && typeof input.url === 'string') cb.browserUrl(input.url);
         }
-        return ALLOW;
+        const decision = await governTool(name, input, { actor: opts.agentId ?? opts.role, runtime: cli, source: 'cli-hook' });
+        if (decision.status !== 'allowed') log([{ kind: 'error', text: decision.reason }]);
+        return hookDecision(decision);
       }
       case 'PostToolUse':
       case 'PostToolUseFailure': {
@@ -690,7 +693,9 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     writeHelpers();
     fs.mkdirSync(dir, { recursive: true });
     const settings = {
-      hooks: Object.fromEntries(HOOK_EVENTS.map((e) => [e, [{ hooks: [{ type: 'http', url: hookUrl, timeout: keeper ? 120 : 30 }] }]])),
+      hooks: Object.fromEntries(HOOK_EVENTS.map((e) => [e, [{ hooks: [e === 'PreToolUse'
+        ? { type: 'command', command: `${shellArg(process.execPath)} ${shellArg(path.join(BIN_DIR, 'codex-hook.cjs'))} ${shellArg(hookUrl)} --approve-governed`, timeout: 10 }
+        : { type: 'http', url: hookUrl, timeout: keeper ? 120 : 30 }] }]])),
       statusLine: { type: 'command', command: `${shellArg(process.execPath)} ${shellArg(path.join(BIN_DIR, 'statusline.cjs'))} ${shellArg(hookUrl)}`, padding: 0 },
     };
     const servers: Record<string, unknown> = {};

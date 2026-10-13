@@ -38,6 +38,7 @@ export interface FloorOptions {
 }
 
 export const api = {
+  toolGovernance: () => call<import('../../shared/toolGovernance').ToolGovernanceView>('GET', '/api/governance/tools'),
   capabilities: () => call<{ results: import('../../server/capabilityChecks').CapabilityResult[]; configuredProjects: string[] }>('GET', '/api/capabilities'),
   installedSkills: () => call<import('../../server/skillRegistry').SkillCatalogue>('GET', '/api/installed-skills'),
   configureCapabilities: (repoId: string, config: unknown) => call('POST', `${r(repoId)}/capabilities/configure`, config),

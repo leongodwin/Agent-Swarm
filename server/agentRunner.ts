@@ -1,12 +1,13 @@
 import { playwrightMcp } from './browserTools.ts';
 import fs from 'node:fs';
 import path from 'node:path';
-import { query, type CanUseTool, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentCli, AgentRole, EffortLevel, LogKind } from '../shared/types.ts';
 import type { OfficeTools } from './ceo.ts';
 import type { UsageWarning } from './pacing.ts';
 import type { AgentTerminal } from './terminal.ts';
 import { VERSION } from './config.ts';
+import { governTool, hookDecision } from './toolGovernance.ts';
 
 // One Claude Code instance (via the Claude Agent SDK) working one issue in its own git worktree.
 // The CEO runs through here too, with the office tools instead of a shell.
@@ -112,10 +113,6 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
 }
 
 // ---------- permissions and screenshots ----------
-
-// Agents work like the manager's own CLI, but nobody may be watching to answer a permission question: every tool call
-// is approved. The office's rules (branches, pull requests, QA leaving GitHub alone) are in their instructions only.
-const allowAll: CanUseTool = async (_toolName, input) => ({ behavior: 'allow', updatedInput: input });
 
 /**
  * A Playwright screenshot saved to a file (browser_take_screenshot with a filename) comes back as a link, not an
@@ -342,7 +339,16 @@ export function startSession(opts: SessionOptions, callbacks: SessionCallbacks):
       if (line && /error|fail/i.test(line)) cb.log([{ kind: 'error', text: clip(line, 200) }]);
     },
     permissionMode: 'acceptEdits',
-    canUseTool: allowAll,
+    canUseTool: async (name, input) => {
+      const decision = await governTool(name, input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-permission' });
+      return decision.status === 'allowed' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
+    },
+    hooks: { PreToolUse: [{ hooks: [async (input) => {
+      if (input.hook_event_name !== 'PreToolUse') return {};
+      const decision = await governTool(input.tool_name, input.tool_input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-hook' });
+      if (decision.status !== 'allowed') cb.log([{ kind: 'error', text: decision.reason }]);
+      return decision.status === 'allowed' ? {} : hookDecision(decision);
+    }] }] },
     ...(opts.outputSchema ? { outputFormat: { type: 'json_schema' as const, schema: opts.outputSchema } } : {}),
   };
 

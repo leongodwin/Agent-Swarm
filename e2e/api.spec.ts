@@ -3,7 +3,12 @@ import { WebSocket } from 'ws';
 
 test('browser API enforces sessions, schemas and connected repository IDs', async ({ request, baseURL }) => {
   expect((await request.get('/api/state')).status()).toBe(401);
+  expect((await request.get('/api/governance/tools')).status()).toBe(401);
   await request.get('/api/session');
+  const governance = await (await request.get('/api/governance/tools')).json();
+  expect(governance).toMatchObject({ evaluated: 0, blocked: 0, unavailable: 0, tenantPolicyVerified: false, scope: 'request-local-safeguards', recent: [] });
+  const missingHook = await (await request.post('/api/hooks/test-missing-session', { data: { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'pac copilot publish' } } })).json();
+  expect(missingHook.hookSpecificOutput.permissionDecision).toBe('deny');
   expect((await request.get('/api/state', { headers: { Origin: 'https://evil.example' } })).status()).toBe(403);
   for (const url of ['/api/proposals/generate', '/api/hld/generate', '/api/tenancy/login', '/api/tenancy/select']) {
     const data = url.endsWith('/login') ? { interactive: false, clientSecret: 'invalid' } : { unknown: true };
