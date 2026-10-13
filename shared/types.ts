@@ -143,7 +143,7 @@ export type AgentTask = 'issue' | 'qa' | 'fix';
 export type AgentRuntime = 'terminal' | 'sdk';
 
 /** The coding-agent CLI an agent runs in its terminal. */
-export type AgentCli = 'claude' | 'codex' | 'opencode' | 'copilot';
+export type AgentCli = 'claude' | 'codex' | 'gemini' | 'opencode' | 'copilot';
 
 /** A coding-agent CLI the office knows how to run, and whether it's installed on this machine. */
 export interface CliView {
@@ -319,6 +319,7 @@ export interface CeoInfo {
 }
 
 export interface WorldSnapshot {
+  sessionUsage?:import('./sessionUsage').SessionUsage;
   draining?:boolean;
   user: string | null; // gh login
   ghReady: boolean;
@@ -340,6 +341,7 @@ export interface WorldSnapshot {
 }
 
 export type ServerEvent =
+  | {type:'session_usage';usage:import('./sessionUsage').SessionUsage}
   | {type:'draining';draining:boolean}
   | { type: 'snapshot'; data: WorldSnapshot }
   | { type: 'repo'; repo: RepoView }

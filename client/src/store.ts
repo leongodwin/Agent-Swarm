@@ -161,6 +161,7 @@ export const TOUR_WAYPOINTS: TourWaypoint[] = [
 ];
 
 interface State {
+  sessionUsage?:import('../../shared/sessionUsage').SessionUsage;
   draining:boolean;
   connected: boolean;
   loaded: boolean;
@@ -327,6 +328,7 @@ export const useStore = create<State>((set, get) => ({
           ghError: d.ghError,
           demo: d.demo,
           draining:d.draining??false,
+          sessionUsage:d.sessionUsage,
           workspaceRoot: d.workspaceRoot,
           settings: d.settings,
           repos: d.repos.sort((a, b) => a.floor - b.floor),
@@ -445,6 +447,7 @@ export const useStore = create<State>((set, get) => ({
       case 'usage':
         set({ usage: ev.usage });
         break;
+      case 'session_usage':set({sessionUsage:ev.usage});break;
     }
   },
 

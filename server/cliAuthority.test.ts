@@ -26,7 +26,7 @@ afterAll(async () => fs.rm(HOME_DIR,{recursive:true,force:true,maxRetries:10,ret
 function session(authorize: () => string | null) {
   vi.useFakeTimers();
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
-  return startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-worker',cli:'claude',terminal:term,keepAlive:true,authorizeTool:authorize} satisfies SessionOptions,
+  return startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-worker',cli:'codex',terminal:term,keepAlive:true,authorizeTool:authorize} satisfies SessionOptions,
     {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
 }
 it.each([false,true])('reports capacity failure for a %s retained Codex task and keeps developer work resumable',async reattach=>{
@@ -60,14 +60,9 @@ it('denies an actual CLI hook when task authority is revoked during asynchronous
   handle.stop();
 });
 
-it.each([0,1])('distinguishes actual Copilot CLI rejection from a successful response (exit %s)',async exit=>{
-  vi.useFakeTimers();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
-  const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn(),turn:vi.fn()};
-  startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'synthetic-invalid',effort:'low',browserTesting:false,additionalDirectories:[],role:'ceo',agentId:'synthetic-ceo',cli:'copilot',terminal:term,authorizeTool:()=>null},callbacks);
-  native.data!('Error: Model "synthetic-invalid" from --model flag is not available.');native.exit!(exit);
-  expect(callbacks.finished).toHaveBeenCalledOnce();
-  if(exit===1){expect(callbacks.finished.mock.calls[0][0]).toMatchObject({ok:false,configurationError:{kind:'unsupported-model',cli:'copilot',model:'synthetic-invalid'}});expect(callbacks.turn).not.toHaveBeenCalled();}
-  else{expect(callbacks.finished.mock.calls[0][0]).toMatchObject({ok:true});expect(callbacks.finished.mock.calls[0][0].configurationError).toBeUndefined();expect(callbacks.turn).toHaveBeenCalledOnce();}
+it('rejects a disallowed CLI before spawning a terminal process',()=>{
+ const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+ expect(()=>startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'ceo',cli:'copilot',terminal:term},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()})).toThrow('Only Codex');
 });
 
 it.each(['idle','changing','active','follow-up','completion'] as const)('reconciles retained idle Codex conservatively: %s',async mode=>{

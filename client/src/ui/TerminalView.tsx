@@ -78,7 +78,7 @@ export function TerminalView({ agentId }: { agentId: string }) {
     }
   };
   const working = isBusy(agent);
-  const cli = agent.role === 'ceo' ? 'copilot' : agent.cli || settings.defaultCli;
+  const cli = agent.cli || settings.defaultCli;
   const cliName = clis.find((c) => c.id === cli)?.label ?? cli;
   const issueUrl = agent.issueNumber ? `https://github.com/${repo.fullName}/issues/${agent.issueNumber}` : null;
   const canMessage = working || (!isQa && !!agent.branch && agent.status !== 'idle');
@@ -139,7 +139,7 @@ export function TerminalView({ agentId }: { agentId: string }) {
         {agent.branch && <code>{agent.branch}</code>}
         {settings.runtime === 'terminal' && <span className="chip" title="The coding agent in their terminal">⌨️ {cliName}</span>}
         <span className="muted">
-          {(agent.role === 'ceo' ? agent.model : effectiveModel(agent.model, settings.runtime === 'terminal' ? cli : 'claude', settings, 'claude-opus-5-5')) || 'default model'} ·{' '}
+          {(agent.role === 'ceo' ? agent.model : effectiveModel(agent.model, settings.runtime === 'terminal' ? cli : 'codex', settings, '')) || 'default model'} ·{' '}
           {agent.effort || settings.defaultEffort} effort
         </span>
         {agent.startedAt && <span className="muted">⏱ {elapsed(agent.startedAt, working ? null : agent.endedAt)}</span>}

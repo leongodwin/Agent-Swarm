@@ -57,6 +57,32 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it('shares a reserved architecture slot with manual workers, release QA and the queued CEO',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.updateSettings({sessionLimit:1});swarm.ceoPreflight=async()=>null;
+  const developer=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'}),qa=swarm.snapshot().agents.find(a=>a.role==='qa')!;
+  const lease=swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111');
+  expect(swarm.sessionUsage()).toMatchObject({used:1,freeSlots:0,agentSessions:0});
+  await expect(swarm.assign(developer.id,1)).rejects.toThrow('slots are busy');await expect(swarm.reviewDeliveryRelease(qa.id,'synthetic/repo','release')).rejects.toThrow('busy');
+  swarm.messageCeo('Synthetic queued CEO question');await vi.advanceTimersByTimeAsync(250);expect(fake.startSession).not.toHaveBeenCalled();
+  lease.running();lease.stopping();expect(swarm.sessionUsage().auxiliary[0].state).toBe('stopping');lease.release();lease.release();
+  await vi.advanceTimersByTimeAsync(250);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());expect(swarm.sessionUsage()).toMatchObject({used:1,agentSessions:1,auxiliary:[]});
+});
+it('denies architecture admission while a worker is preparing and preserves stale lease ownership',async()=>{
+  const {swarm}=await office(true);swarm.updateSettings({sessionLimit:1});const developer=swarm.hireAgent('synthetic/repo',{name:'Synthetic developer'});
+  let checked!:(value:string|null)=>void;swarm.capabilityPreflight=()=>new Promise(resolve=>{checked=resolve;});const pending=swarm.assign(developer.id,1);
+  expect(()=>swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111')).toThrow('slots are busy');await vi.waitFor(()=>expect(checked).toBeTypeOf('function'));checked('Synthetic readiness blocker');await pending;await vi.waitFor(()=>expect(swarm.sessionUsage().agentSessions).toBe(0));
+  const id='11111111-1111-4111-8111-111111111111',old=swarm.reserveArchitectureSession('synthetic/repo',id);old.release();const current=swarm.reserveArchitectureSession('synthetic/repo',id);
+  old.release();expect(swarm.sessionUsage().used).toBe(1);expect(()=>old.running()).toThrow('no longer owns');current.release();
+  swarm.setDraining(true);expect(()=>swarm.reserveArchitectureSession('synthetic/repo',id)).toThrow('draining');
+});
+it('counts recovered model cleanup before granting new slots and denies unverifiable capacity',async()=>{
+  const {swarm}=await office(true);swarm.updateSettings({sessionLimit:1});
+  swarm.restoreArchitectureCleanup([{jobId:'11111111-1111-4111-8111-111111111111',repoId:'synthetic/repo',reservedAt:1}],'Prior model acknowledgement is absent');
+  expect(swarm.sessionUsage()).toMatchObject({used:1,freeSlots:0,auxiliary:[{state:'stopping'}]});
+  expect(()=>swarm.reserveArchitectureSession('synthetic/repo','22222222-2222-4222-8222-222222222222')).toThrow('slots are busy');
+  swarm.restoreArchitectureCleanup([],'Corrupt model state');expect(swarm.sessionUsage().blockedReason).toBe('Corrupt model state');expect(swarm.sessionUsage().freeSlots).toBeNull();
+  expect(()=>swarm.reserveArchitectureSession('synthetic/repo','22222222-2222-4222-8222-222222222222')).toThrow('capacity is unverified');
+});
 afterEach(async () => {
   vi.useRealTimers(); // allow real terminal-emulator flushes during cleanup
   await Promise.all(offices.splice(0).map(swarm => swarm.shutdown().catch(() => {})));
@@ -82,7 +108,7 @@ it('initializes a missing file and round trips a legacy office without discardin
   expect(JSON.parse(await fs.readFile(STATE_FILE, 'utf8')).version).toBe(2);
   await fs.writeFile(STATE_FILE, JSON.stringify({settings: {companyName: 'Retained company', maxConcurrent: 7}, repos: [], agents: []}));
   const restored = new Swarm(backend() as unknown as Backend); offices.push(restored); await restored.init(); await restored.shutdown();
-  expect(JSON.parse(await fs.readFile(STATE_FILE, 'utf8')).settings).toMatchObject({companyName: 'Retained company', sessionLimit: 7});
+  expect(JSON.parse(await fs.readFile(STATE_FILE, 'utf8')).settings).toMatchObject({companyName: 'Retained company', sessionLimit: 7,defaultCli:'codex',runtime:'terminal'});
 });
 
 it('cancels startup and recurring work and performs shutdown only once', async () => {
@@ -294,10 +320,10 @@ it.each(['unconfigured', 'empty'])('denies execution when readiness is %s', asyn
 
 it('checks the effective SDK runtime when terminal execution is unavailable', async () => {
   const {swarm, fake} = await office(true); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
-  swarm.updateSettings({runtime: 'terminal', defaultCli: 'copilot'});
+  swarm.updateSettings({runtime: 'terminal', defaultCli: 'codex'});
   const preflight = vi.fn(async () => 'Synthetic node runtime unavailable'); swarm.capabilityPreflight = preflight;
   await swarm.assign(agent.id, 1); for (let i = 0; i < 20; i++) await Promise.resolve();
-  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'node'); expect(fake.startSession).not.toHaveBeenCalled();
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'codex'); expect(fake.startSession).not.toHaveBeenCalled();
 });
 
 it.each(['runtime', 'model', 'agent', 'project', 'pause', 'policy'])('rejects changed %s context while capability admission is pending', async change => {
@@ -305,7 +331,7 @@ it.each(['runtime', 'model', 'agent', 'project', 'pause', 'policy'])('rejects ch
   let checked!: (value: string | null) => void;
   swarm.capabilityPreflight = () => new Promise(resolve => {checked = resolve;});
   await swarm.assign(agent.id, 1);
-  if (change === 'runtime') swarm.updateSettings({runtime: 'terminal', defaultCli: 'codex'});
+  if (change === 'runtime') swarm.updateSettings({runtime: 'terminal', defaultCli: 'gemini'});
   if (change === 'model') swarm.updateSettings({defaultModel: 'changed-synthetic-model'});
   if (change === 'agent') swarm.updateAgent(agent.id, {cli: 'codex'});
   if (change === 'project') swarm.updateRepo('synthetic/repo', {mission: 'New synthetic scope'});
@@ -332,13 +358,13 @@ it('does not launch unchecked settings changed during worktree preparation and c
   fake.prepareDesk.mockImplementationOnce(() => new Promise(resolve => {prepared = resolve;}));
   const preflight = vi.fn(async () => null); swarm.capabilityPreflight = preflight;
   await swarm.assign(agent.id, 1); for (let i = 0; i < 60 && !prepared; i++) await Promise.resolve();
-  expect(prepared).toBeTypeOf('function'); swarm.updateAgent(agent.id, {model: 'claude-synthetic-model'}); prepared(HOME_DIR);
+  expect(prepared).toBeTypeOf('function'); swarm.updateAgent(agent.id, {model: 'synthetic-model'}); prepared(HOME_DIR);
   for (let i = 0; i < 50; i++) await Promise.resolve();
   expect(fake.startSession).not.toHaveBeenCalled();
   expect(swarm.snapshot().agents.find(a => a.id === agent.id)).toMatchObject({status: 'error', lastError: expect.stringContaining('Execution context changed')});
   await swarm.assign(agent.id, 1); for (let i = 0; i < 60 && !fake.startSession.mock.calls.length; i++) await Promise.resolve();
   expect(preflight).toHaveBeenCalledTimes(2); expect(fake.startSession).toHaveBeenCalledOnce();
-  expect(fake.startSession.mock.calls[0][0]).toMatchObject({model: 'claude-synthetic-model'});
+  expect(fake.startSession.mock.calls[0][0]).toMatchObject({model: 'synthetic-model'});
 });
 
 it('checks linked repositories and denies a blocked reference before preparing the workspace', async () => {
@@ -351,7 +377,7 @@ it('checks linked repositories and denies a blocked reference before preparing t
   const preflight = vi.fn(async (id: string) => id === linked.id ? 'Reference authentication expired' : null); swarm.capabilityPreflight = preflight;
   const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
   await swarm.assign(agent.id, 1); for (let i = 0; i < 60; i++) await Promise.resolve();
-  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'node'); expect(preflight).toHaveBeenCalledWith(linked.id, 'node');
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'codex'); expect(preflight).toHaveBeenCalledWith(linked.id, 'codex');
   expect(fake.prepareDesk).not.toHaveBeenCalled(); expect(fake.startSession).not.toHaveBeenCalled();
   expect(swarm.snapshot().agents.find(a => a.id === agent.id)?.lastError).toContain(`${linked.id}: Reference authentication expired`);
 });
@@ -397,7 +423,7 @@ it('keeps tool authority through a legitimate checkpoint update and revokes it o
   const callbacks=fake.startSession.mock.calls[0][1];
   expect(await opts.authorizeTool?.()).toBeNull();callbacks.sessionId('synthetic-runtime-checkpoint');
   expect(await opts.authorizeTool?.()).toBeNull();
-  swarm.updateAgent(agent.id,{model:'claude-changed'});expect(await opts.authorizeTool?.()).toContain('configuration changed');
+  swarm.updateAgent(agent.id,{model:'changed-model'});expect(await opts.authorizeTool?.()).toContain('configuration changed');
   swarm.stopAgent(agent.id);expect(await opts.authorizeTool?.()).toContain('no longer owns');
 });
 
@@ -417,7 +443,7 @@ it('rechecks running worker prerequisites, shares concurrent refreshes and recov
   const preflight=vi.fn(()=>new Promise<string|null>(resolve=>{checked=resolve;}));swarm.capabilityPreflight=preflight;
   const first=authorize();const second=authorize();
   for(let i=0;i<20&&!checked;i++)await Promise.resolve();
-  expect(preflight).toHaveBeenCalledExactlyOnceWith('synthetic/repo','node');checked('Synthetic authentication expired');
+  expect(preflight).toHaveBeenCalledExactlyOnceWith('synthetic/repo','codex');checked('Synthetic authentication expired');
   expect(await first).toContain('authentication expired');expect(await second).toContain('authentication expired');
   swarm.capabilityPreflight=vi.fn(async()=>null);expect(await authorize()).toBeNull();
   expect(fake.startSession).toHaveBeenCalledOnce();
@@ -440,7 +466,7 @@ it('denies changed worker configuration while a tool refresh is pending',async()
   const authorize=(fake.startSession.mock.calls[0][0] as SessionOptions).authorizeTool!;
   let checked!:(value:string|null)=>void;swarm.capabilityPreflight=()=>new Promise(resolve=>{checked=resolve;});
   const pending=authorize();for(let i=0;i<20&&!checked;i++)await Promise.resolve();
-  swarm.updateAgent(agent.id,{model:'claude-changed'});checked(null);
+  swarm.updateAgent(agent.id,{model:'changed-model'});checked(null);
   expect(await pending).toContain('configuration changed');
 });
 
@@ -495,7 +521,7 @@ it('checks the owning CLI before restart recovery resumes a saved session', asyn
   await swarm.assign(agent.id, 1); for (let i = 0; i < 30 && !fake.startSession.mock.calls.length; i++) await Promise.resolve();
   fake.startSession.mock.calls[0][1].sessionId('synthetic-session'); await swarm.shutdown(true);
   const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
-  saved.settings.runtime = 'terminal'; saved.settings.defaultCli = 'copilot';
+  saved.settings.runtime = 'terminal'; saved.settings.defaultCli = 'codex';
   saved.agents.find((a: {id: string}) => a.id === agent.id).sessionCli = 'codex';
   await fs.writeFile(STATE_FILE, JSON.stringify(saved));
   const restoredBackend = backend(); restoredBackend.terminals = true;
@@ -517,14 +543,14 @@ it('persists session ID and CLI together when a developer hands its PR to QA', a
   callbacks.finished({ok: true, text: 'https://github.com/synthetic/repo/pull/7', costUsd: 0, turns: 1, errors: []});
   for (let i = 0; i < 30; i++) await Promise.resolve(); await swarm.shutdown(true);
   const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
-  expect(saved.qa[0]).toMatchObject({devAgentId: agent.id, devSessionId: 'original-sdk-session', devSessionCli: 'claude'});
+  expect(saved.qa[0]).toMatchObject({devAgentId: agent.id, devSessionId: 'original-sdk-session', devSessionCli: 'codex'});
 });
 
 async function repairOffice(checkpointCli: string | null, terminal: boolean, blocked: boolean) {
   const {swarm} = await office(true); const developer = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'}); await swarm.shutdown(true);
   const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
-  saved.settings.runtime = terminal ? 'terminal' : 'sdk'; saved.settings.defaultCli = 'copilot';
-  Object.assign(saved.agents.find((a: {id: string}) => a.id === developer.id), {status: 'done', task: 'issue', prNumber: 7, sessionId: 'newer-unrelated-session', sessionCli: 'copilot'});
+  saved.settings.runtime = terminal ? 'terminal' : 'sdk'; saved.settings.defaultCli = 'codex';
+  Object.assign(saved.agents.find((a: {id: string}) => a.id === developer.id), {status: 'done', task: 'issue', prNumber: 7, sessionId: 'newer-unrelated-session', sessionCli: 'codex'});
   saved.qa = [{repoId: 'synthetic/repo', prNumber: 7, status: 'failed', round: 1, devAgentId: developer.id, qaAgentId: null, summary: 'Synthetic failure', checks: [{name: 'Acceptance', result: 'fail', details: 'Synthetic incorrect response'}], issueNumber: 1, devSessionId: 'original-repair-session', devSessionCli: checkpointCli, fixInstructions: 'Fix the synthetic response', sessionFailures: 0, fixReason: 'qa', mergeFixes: 0, retests: 0}];
   await fs.writeFile(STATE_FILE, JSON.stringify(saved));
   const fake = backend(); fake.terminals = terminal; fake.listPulls.mockResolvedValue([pull]);
@@ -544,16 +570,16 @@ it('uses the repair checkpoint CLI even when the developer has a newer unrelated
 
 it.each([null, 'unknown-runtime'])('never guesses a CLI for legacy repair checkpoint %s', async cli => {
   const {swarm, fake, preflight} = await repairOffice(cli, true, true);
-  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'copilot'); expect(fake.startSession).not.toHaveBeenCalled();
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'codex'); expect(fake.startSession).not.toHaveBeenCalled();
   await swarm.shutdown(true); const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
   expect(saved.qa[0]).toMatchObject({devSessionId: null, devSessionCli: null});
 });
 
-it.each(['claude', 'codex'])('dispatches the compatible %s repair and stores the new checkpoint pair on completion', async cli => {
+it.each(['codex'])('dispatches the compatible %s repair and stores the new checkpoint pair on completion', async cli => {
   const terminal = cli === 'codex'; const {swarm, fake} = await repairOffice(cli, terminal, false);
   expect(fake.startSession).toHaveBeenCalledOnce();
   const options = fake.startSession.mock.calls[0][0] as {cli?: string; resumeSessionId?: string};
-  expect(options.resumeSessionId).toBe('original-repair-session'); expect(options.cli ?? 'claude').toBe(cli);
+  expect(options.resumeSessionId).toBe('original-repair-session'); expect(options.cli ?? 'codex').toBe(cli);
   const callbacks = fake.startSession.mock.calls[0][1]; callbacks.sessionId('completed-repair-session');
   callbacks.finished({ok: true, text: 'Synthetic repair completed', costUsd: 0, turns: 1, errors: []});
   for (let i = 0; i < 30; i++) await Promise.resolve();
@@ -565,7 +591,7 @@ it.each(['claude', 'codex'])('dispatches the compatible %s repair and stores the
 
 it('starts fresh rather than giving a Codex checkpoint to the SDK', async () => {
   const {swarm, fake, preflight} = await repairOffice('codex', false, false);
-  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'node'); expect(fake.startSession).toHaveBeenCalledOnce();
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'codex'); expect(fake.startSession).toHaveBeenCalledOnce();
   expect((fake.startSession.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBeUndefined();
   await swarm.shutdown(true); const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
   expect(saved.qa[0]).toMatchObject({devSessionId: null, devSessionCli: null});
@@ -579,30 +605,30 @@ it('blocks CEO work without native terminal readiness and retains the queued job
   expect(swarm.snapshot().ceo.retryAt).toBeGreaterThan(Date.now());
 });
 
-it.each(['claude','codex','opencode','copilot'] as const)('uses selected CEO %s for readiness, dispatch and tool refresh without changing the model',async cli=>{
+it.each(['codex','gemini','opencode'] as const)('uses selected CEO %s for readiness, dispatch and tool refresh without changing the model',async cli=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const preflight=vi.fn(async()=>null);swarm.ceoPreflight=preflight;
-  swarm.updateAgent(CEO_ID,{cli,model:'explicit-model'});await swarm.messageCeo('Synthetic architecture request');await vi.advanceTimersByTimeAsync(150);
+  const model=cli==='opencode'?'openai/gpt-synthetic':'explicit-model';swarm.updateAgent(CEO_ID,{cli,model});await swarm.messageCeo('Synthetic architecture request');await vi.advanceTimersByTimeAsync(150);
   await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());expect(preflight).toHaveBeenCalledWith(['synthetic/repo'],cli);
-  const options=fake.startSession.mock.calls[0][0] as SessionOptions;expect(options).toMatchObject({role:'ceo',cli,model:'explicit-model'});expect(options.office).toBeDefined();expect(await options.authorizeTool!()).toBeNull();expect(preflight).toHaveBeenLastCalledWith(['synthetic/repo'],cli);
+  const options=fake.startSession.mock.calls[0][0] as SessionOptions;expect(options).toMatchObject({role:'ceo',cli,model});expect(options.office).toBeDefined();expect(await options.authorizeTool!()).toBeNull();expect(preflight).toHaveBeenLastCalledWith(['synthetic/repo'],cli);
   expect(swarm.snapshot().agents.find(a=>a.id===CEO_ID)?.cli).toBe(cli);
 });
 it.each([false,true])('never transfers a CEO checkpoint to a different coding agent (change %s)',async change=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
   swarm.updateAgent(CEO_ID,{cli:'codex'});await swarm.messageCeo('Synthetic first request');await vi.advanceTimersByTimeAsync(150);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
   const callbacks=fake.startSession.mock.calls[0][1];callbacks.sessionId('codex-owned-session');callbacks.finished({ok:true,text:'synthetic',costUsd:0,turns:1,errors:[]});
-  if(change)swarm.updateAgent(CEO_ID,{cli:'claude'});await swarm.messageCeo('Synthetic next request');await vi.advanceTimersByTimeAsync(300);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
-  const options=fake.startSession.mock.calls[1][0] as SessionOptions;expect(options.cli).toBe(change?'claude':'codex');expect(options.resumeSessionId).toBe(change?undefined:'codex-owned-session');
+  if(change)swarm.updateAgent(CEO_ID,{cli:'gemini'});await swarm.messageCeo('Synthetic next request');await vi.advanceTimersByTimeAsync(300);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+  const options=fake.startSession.mock.calls[1][0] as SessionOptions;expect(options.cli).toBe(change?'gemini':'codex');expect(options.resumeSessionId).toBe(change?undefined:'codex-owned-session');
 });
 it('defers a CEO runtime change during preflight instead of dispatching with the old readiness result',async()=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});let ready!:(value:string|null)=>void;
   const preflight=vi.fn(()=>new Promise<string|null>(resolve=>{ready=resolve;}));swarm.ceoPreflight=preflight;
-  await swarm.messageCeo('Synthetic runtime change');await vi.advanceTimersByTimeAsync(150);swarm.updateAgent(CEO_ID,{cli:'codex'});ready(null);
+  await swarm.messageCeo('Synthetic runtime change');await vi.advanceTimersByTimeAsync(150);swarm.updateAgent(CEO_ID,{cli:'gemini'});ready(null);
   for(let i=0;i<20;i++)await Promise.resolve();expect(fake.startSession).not.toHaveBeenCalled();expect(swarm.snapshot().ceo.blockedReason).toContain('runtime configuration changed');expect(swarm.snapshot().ceo.queue).toHaveLength(1);
 });
 it('releases only the rejected provider hold when the operator selects another CEO CLI',async()=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
-  swarm.updateAgent(CEO_ID,{cli:'copilot',model:'same-model'});await swarm.messageCeo('Synthetic held request');await vi.advanceTimersByTimeAsync(150);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
-  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',costUsd:0,turns:0,errors:['Native rejection'],configurationError:{kind:'unsupported-model',cli:'copilot',model:'same-model'}});
+  swarm.updateAgent(CEO_ID,{cli:'gemini',model:'same-model'});await swarm.messageCeo('Synthetic held request');await vi.advanceTimersByTimeAsync(150);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',costUsd:0,turns:0,errors:['Native rejection'],configurationError:{kind:'unsupported-model',cli:'gemini',model:'same-model'}});
   swarm.updateAgent(CEO_ID,{cli:'codex'});await vi.advanceTimersByTimeAsync(300);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));expect((fake.startSession.mock.calls[1][0] as SessionOptions)).toMatchObject({cli:'codex',model:'same-model'});expect(swarm.snapshot().ceo.blockedReason).toBeNull();
 });
 
@@ -610,7 +636,7 @@ it('holds unsupported CEO model work through messages, cosmetic edits and restar
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
   swarm.updateAgent(CEO_ID,{model:'synthetic-invalid'});await swarm.messageCeo('Original synthetic request');await vi.advanceTimersByTimeAsync(150);
   await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
-  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['Error: Model "synthetic-invalid" from --model flag is not available.'],costUsd:0,turns:0,configurationError:{kind:'unsupported-model',cli:'copilot',model:'synthetic-invalid'}});
+  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['Error: Model "synthetic-invalid" from --model flag is not available.'],costUsd:0,turns:0,configurationError:{kind:'unsupported-model',cli:'codex',model:'synthetic-invalid'}});
   expect(swarm.snapshot().ceo).toMatchObject({job:null,retryAt:null,blockedReason:expect.stringContaining('model changes'),queue:[{kind:'chat'}]});
   await swarm.messageCeo('Additional synthetic context');swarm.updateAgent(CEO_ID,{name:'Renamed CEO',effort:'high'});await vi.advanceTimersByTimeAsync(180000);
   expect(fake.startSession).toHaveBeenCalledOnce();expect(swarm.snapshot().agents.find(a=>a.id===CEO_ID)?.status).toBe('error');
@@ -628,12 +654,12 @@ it('does not hold a replacement model when the old active CLI reports its reject
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
   swarm.updateAgent(CEO_ID,{model:'old-invalid'});await swarm.messageCeo('Synthetic model change request');await vi.advanceTimersByTimeAsync(150);
   await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());swarm.updateAgent(CEO_ID,{model:'replacement-model'});
-  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['native model unavailable'],costUsd:0,turns:0,configurationError:{kind:'unsupported-model',cli:'copilot',model:'old-invalid'}});
+  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['native model unavailable'],costUsd:0,turns:0,configurationError:{kind:'unsupported-model',cli:'codex',model:'old-invalid'}});
   await vi.advanceTimersByTimeAsync(300);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
   expect((fake.startSession.mock.calls[1][0] as SessionOptions).model).toBe('replacement-model');expect(swarm.snapshot().ceo.blockedReason).toBeNull();
 });
 
-it('migrates an observed legacy native model rejection into a durable CEO hold',async()=>{
+it('does not transfer a retired provider rejection into the Codex default',async()=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
   swarm.updateAgent(CEO_ID,{model:'legacy-invalid'});await swarm.messageCeo('Synthetic legacy request');await vi.advanceTimersByTimeAsync(150);
   await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
@@ -641,7 +667,7 @@ it('migrates an observed legacy native model rejection into a durable CEO hold',
   vi.useRealTimers();await swarm.shutdown(true);vi.useFakeTimers();
   const restoredBackend=backend();restoredBackend.terminals=true;const restored=new Swarm(restoredBackend as unknown as Backend);offices.push(restored);restored.ceoPreflight=async()=>null;
   await restored.init();await restored.messageCeo('Synthetic retry context');await vi.advanceTimersByTimeAsync(180000);
-  expect(restoredBackend.startSession).not.toHaveBeenCalled();expect(restored.snapshot().ceo.blockedReason).toContain('configured CEO model');
+  expect(restoredBackend.startSession).toHaveBeenCalledOnce();expect((restoredBackend.startSession.mock.calls[0][0] as SessionOptions).cli).toBe('codex');
 });
 
 it('binds CEO tool authority to its active job and revokes it when stopped', async () => {
@@ -686,10 +712,10 @@ it('reserves the CEO during checks and starts a ready job using the fixed Copilo
   const preflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;})); swarm.ceoPreflight = preflight;
   swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(150);
   expect(swarm.snapshot().agents.find(a => a.id === CEO_ID)?.status).toBe('preparing');
-  expect(preflight).toHaveBeenCalledExactlyOnceWith(['synthetic/repo'],'copilot'); expect(fake.startSession).not.toHaveBeenCalled();
+  expect(preflight).toHaveBeenCalledExactlyOnceWith(['synthetic/repo'],'codex'); expect(fake.startSession).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1000); expect(preflight).toHaveBeenCalledOnce(); checked(null);
   await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
-  expect(fake.startSession.mock.calls[0][0]).toMatchObject({role: 'ceo', cli: 'copilot', additionalDirectories: [HOME_DIR]});
+  expect(fake.startSession.mock.calls[0][0]).toMatchObject({role: 'ceo', cli: 'codex', additionalDirectories: [HOME_DIR]});
   expect(swarm.snapshot().ceo.blockedReason).toBeNull();
   const callbacks = fake.startSession.mock.calls[0][1]; callbacks.turn?.('Synthetic answer');
   callbacks.finished({ok: true, text: 'Synthetic answer', costUsd: 0, turns: 1, errors: []});

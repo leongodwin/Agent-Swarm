@@ -17,7 +17,7 @@ const HELP = `
 
   Usage
     npx cubefarm            start the office and open it in your browser
-    npx cubefarm login      sign in to GitHub Copilot CLI
+    npx cubefarm login      sign in to Codex CLI
     npx cubefarm doctor     check that this machine is ready
 
   Options
@@ -69,17 +69,17 @@ if (values.version) {
   process.exit(0);
 }
 
-// ---------- GitHub Copilot CLI ----------
+// ---------- Codex CLI ----------
 
-function copilotBinary() {
+function codexBinary() {
   const finder = process.platform === 'win32' ? 'where.exe' : 'which';
-  const found = spawnSync(finder, ['copilot'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+  const found = spawnSync(finder, ['codex'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
   return found.status === 0 ? found.stdout.trim().split(/\r?\n/)[0] || null : null;
 }
 
-function runCopilot(args, options = {}) {
-  const binary = copilotBinary();
-  if (!binary) return { status: 1, stdout: '', stderr: 'GitHub Copilot CLI is not installed.' };
+function runCodex(args, options = {}) {
+  const binary = codexBinary();
+  if (!binary) return { status: 1, stdout: '', stderr: 'Codex CLI is not installed.' };
   return spawnSync(binary, args, {
     encoding: 'utf8',
     windowsHide: true,
@@ -107,13 +107,13 @@ function checks() {
     out.push({ name: 'GitHub CLI', ok, detail: ok ? 'signed in' : 'not signed in', fix: 'run: gh auth login' });
   }
 
-  const copilot = copilotBinary();
-  const version = copilot ? runCopilot(['--version']) : null;
+  const copilot = codexBinary();
+  const version = copilot ? runCodex(['--version']) : null;
   out.push({
-    name: 'Copilot CLI',
+    name: 'Codex CLI',
     ok: !!copilot,
     detail: version?.status === 0 ? version.stdout.trim().split(/\r?\n/)[0] : copilot ? 'installed' : 'not found',
-    fix: 'install GitHub Copilot CLI: https://github.com/github/copilot-cli, then run: npx cubefarm login',
+    fix: 'install Codex CLI: https://developers.openai.com/codex/cli, then run: npx cubefarm login',
     required: true,
   });
 
@@ -220,9 +220,9 @@ if (command === 'doctor') {
 }
 
 if (command === 'login') {
-  if (!copilotBinary()) fail('GitHub Copilot CLI is not installed. Install it from https://github.com/github/copilot-cli.');
-  console.log('\n  Signing in to GitHub Copilot.\n');
-  const res = runCopilot(['login'], { stdio: 'inherit' });
+  if (!codexBinary()) fail('Codex CLI is not installed. Install it from https://developers.openai.com/codex/cli.');
+  console.log('\n  Signing in to Codex.\n');
+  const res = runCodex(['login'], { stdio: 'inherit' });
   process.exit(res.status ?? 1);
 }
 

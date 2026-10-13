@@ -1,18 +1,17 @@
-import { playwrightMcp } from './browserTools.ts';
 import fs from 'node:fs';
 import path from 'node:path';
-import { query, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentCli, AgentRole, EffortLevel, LogKind } from '../shared/types.ts';
 import type { OfficeTools } from './ceo.ts';
 import type { UsageWarning } from './pacing.ts';
 import type { AgentTerminal } from './terminal.ts';
-import { VERSION } from './config.ts';
-import { governSessionTool, hookDecision, type SessionAuthorization } from './toolGovernance.ts';
+import { type SessionAuthorization } from './toolGovernance.ts';
 
 // One Claude Code instance (via the Claude Agent SDK) working one issue in its own git worktree.
 // The CEO runs through here too, with the office tools instead of a shell.
 
 export interface SessionOptions {
+  /** Explicit identity for a new SDK session; used to correlate planning runtime recovery. */
+  sessionId?:string;
   /** Structured planning jobs: no built-in tools, inherited MCP servers or project hooks. */
   noTools?: boolean;
   cwd: string;
@@ -63,7 +62,7 @@ export interface SessionResult {
   /** OpenCode hit its free usage limit and needs fallback to Copilot. */
   opencodeLimit?: boolean;
   /** Explicit native model rejection; changing task text does not repair it. */
-  configurationError?:{kind:'unsupported-model';cli:'copilot';model:string};
+  configurationError?:{kind:'unsupported-model';cli:AgentCli;model:string};
 }
 
 export interface SessionCallbacks {
@@ -85,37 +84,6 @@ export interface SessionCallbacks {
 export interface SessionHandle {
   send(text: string): void;
   stop(): void;
-}
-
-/** Async queue used as the streaming-input prompt so the manager can message a running agent. */
-class InputQueue implements AsyncIterable<SDKUserMessage> {
-  private items: SDKUserMessage[] = [];
-  private waiters: ((r: IteratorResult<SDKUserMessage>) => void)[] = [];
-  private closed = false;
-
-  push(text: string) {
-    if (this.closed) return;
-    const msg: SDKUserMessage = { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null };
-    const waiter = this.waiters.shift();
-    if (waiter) waiter({ value: msg, done: false });
-    else this.items.push(msg);
-  }
-
-  close() {
-    this.closed = true;
-    for (const w of this.waiters.splice(0)) w({ value: undefined, done: true });
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
-    return {
-      next: () => {
-        const item = this.items.shift();
-        if (item) return Promise.resolve({ value: item, done: false });
-        if (this.closed) return Promise.resolve({ value: undefined, done: true });
-        return new Promise((resolve) => this.waiters.push(resolve));
-      },
-    };
-  }
 }
 
 // ---------- permissions and screenshots ----------
@@ -287,227 +255,6 @@ export function summariseResult(cwd: string, tool: string, text: string): LogEnt
 
 // ---------- the session ----------
 
-export function startSession(opts: SessionOptions, callbacks: SessionCallbacks): SessionHandle {
-  let done = false;
-  const cb: SessionCallbacks = {
-    ...callbacks,
-    finished: (r) => {
-      if (done) return;
-      done = true;
-      callbacks.finished(r);
-    },
-  };
-  const input = new InputQueue();
-  const abort = new AbortController();
-  let pendingTurns = 1;
-  let stopped = false;
-  let lastCost = 0;
-  let lastTurns = 0;
-  const toolNames = new Map<string, string>();
-
-  input.push(opts.prompt);
-
-  // Each agent must be a clean Claude Code instance on the subscription Claude Code is logged into.
-  // Drop API keys (they would switch billing to the API) and any CLAUDE_* / ANTHROPIC_* variables
-  // inherited from a parent Claude Code session (base URL proxies, session sockets, effort overrides…).
-  const env: Record<string, string | undefined> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (/^(ANTHROPIC_|CLAUDE)/i.test(k) && k !== 'CLAUDE_CONFIG_DIR') continue;
-    env[k] = v;
-  }
-  env.CLAUDE_AGENT_SDK_CLIENT_APP = `cubefarm/${VERSION}`;
-
-  const mcpServers: Options['mcpServers'] = {};
-  if (opts.browserTesting) {
-    // browser-init.js keeps pages from taking the real mouse with pointer lock (headless Chrome does on Windows).
-    mcpServers.playwright = playwrightMcp();
-  }
-  if (opts.office) mcpServers.office = opts.office.server;
-  // The CEO reads repositories and acts through the office tools; it never runs commands.
-  const disallowedTools = ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'];
-  if (opts.role === 'ceo') disallowedTools.push('Bash', 'PowerShell', 'NotebookEdit');
-
-  const options: Options = {
-    cwd: opts.cwd,
-    additionalDirectories: opts.additionalDirectories,
-    abortController: abort,
-    env,
-    model: opts.model || undefined,
-    effort: opts.effort,
-    // The manager's own setup (settings, skills, plugins, MCP servers, connectors), plus the office's servers below.
-    settingSources: opts.noTools ? [] : ['user', 'project', 'local'],
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: opts.systemAppend },
-    mcpServers: opts.noTools ? {} : mcpServers,
-    ...(opts.noTools ? {tools: [], strictMcpConfig: true, maxTurns: 4} : {}),
-    disallowedTools,
-    resume: opts.resumeSessionId,
-    stderr: (data) => {
-      const line = data.trim();
-      if (line && /error|fail/i.test(line)) cb.log([{ kind: 'error', text: clip(line, 200) }]);
-    },
-    permissionMode: opts.noTools ? 'default' : 'acceptEdits',
-    canUseTool: async (name, input) => {
-      const decision = await governSessionTool(name, input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-permission' }, opts.noTools ? ()=> 'Structured planning has no tool authority' : opts.authorizeTool);
-      return decision.status === 'allowed' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
-    },
-    hooks: { PreToolUse: [{ hooks: [async (input) => {
-      if (input.hook_event_name !== 'PreToolUse') return {};
-      const decision = await governSessionTool(input.tool_name, input.tool_input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-hook' }, opts.noTools ? ()=> 'Structured planning has no tool authority' : opts.authorizeTool);
-      if (decision.status !== 'allowed') cb.log([{ kind: 'error', text: decision.reason }]);
-      return decision.status === 'allowed' ? {} : hookDecision(decision);
-    }] }] },
-    ...(opts.outputSchema ? { outputFormat: { type: 'json_schema' as const, schema: opts.outputSchema } } : {}),
-  };
-
-  // The office's prompts are answered one result each. See the 'result' case for results that answer none of them.
-  let emptyTurn: NodeJS.Timeout | undefined;
-  const answered = (msg: Extract<SDKMessage, { type: 'result' }>) => {
-    pendingTurns -= 1;
-    if (pendingTurns > 0) return;
-    input.close();
-    const ok = msg.subtype === 'success' && !msg.is_error;
-    cb.finished({
-      ok,
-      text: msg.subtype === 'success' ? msg.result : '',
-      costUsd: lastCost,
-      turns: lastTurns,
-      errors: msg.subtype === 'success' ? msg.is_error ? [msg.result || 'Model returned an error response'] : [] : msg.errors,
-      structured: msg.subtype === 'success' ? msg.structured_output : undefined,
-    });
-  };
-
-  const handle = (msg: SDKMessage) => {
-    clearTimeout(emptyTurn);
-    if (done && msg.type === 'assistant' && !stopped) {
-      // The office already treated this session as finished and no longer follows it.
-      stopped = true;
-      cb.log([{ kind: 'system', text: '■ This session kept working after it had finished, so it was stopped.' }]);
-      abort.abort();
-      return;
-    }
-    switch (msg.type) {
-      case 'system': {
-        if (msg.subtype === 'init') {
-          cb.sessionId(msg.session_id);
-          const mcp = msg.mcp_servers.map((s) => `${s.name}:${s.status}`).join(', ');
-          cb.log([
-            { kind: 'system', text: `✻ Claude Code ${msg.claude_code_version} · ${msg.model} · ${msg.effort ?? opts.effort} effort` },
-            { kind: 'system', text: `  cwd ${msg.cwd}${mcp ? ` · mcp ${mcp}` : ''}` },
-          ]);
-        } else if (msg.subtype === 'api_retry') {
-          cb.log([{ kind: 'system', text: `… API retry ${msg.attempt}/${msg.max_retries} in ${Math.round(msg.retry_delay_ms / 1000)}s` }]);
-        } else if (msg.subtype === 'compact_boundary') {
-          cb.log([{ kind: 'system', text: '✻ Conversation compacted' }]);
-        }
-        break;
-      }
-      case 'rate_limit_event': {
-        const info = msg.rate_limit_info;
-        if (info.status !== 'allowed') {
-          const when = info.resetsAt ? new Date(info.resetsAt * 1000).toLocaleTimeString() : 'later';
-          cb.log([{ kind: 'error', text: `⚠ Subscription usage ${info.status === 'rejected' ? 'limit reached' : 'warning'} (${info.rateLimitType ?? 'limit'}) · resets ${when}` }]);
-          const overage = info.isUsingOverage || info.overageStatus === 'allowed' || info.overageStatus === 'allowed_warning';
-          if (info.status === 'rejected' && !overage) cb.limited?.(info.resetsAt ? info.resetsAt * 1000 : null);
-          if (info.status === 'allowed_warning' && !overage) {
-            cb.usageWarning?.({ resetsAt: info.resetsAt ? info.resetsAt * 1000 : null, rateLimitType: info.rateLimitType ?? null, utilization: info.utilization ?? null });
-          }
-        }
-        break;
-      }
-      case 'assistant': {
-        if (msg.parent_tool_use_id) break; // subagent chatter stays off the main screen
-        const out: LogEntry[] = [];
-        for (const block of msg.message.content) {
-          if (block.type === 'text' && block.text.trim()) {
-            const lines = block.text.trim().split('\n');
-            lines.slice(0, 30).forEach((l, i) => out.push({ kind: 'text', text: `${i === 0 ? '● ' : '  '}${l}` }));
-            if (lines.length > 30) out.push({ kind: 'text', text: `  … (${lines.length - 30} more lines)` });
-          } else if (block.type === 'thinking') {
-            out.push({ kind: 'thinking', text: '✻ Thinking…' });
-          } else if (block.type === 'tool_use') {
-            const toolInput = (block.input ?? {}) as Record<string, unknown>;
-            toolNames.set(block.id, block.name);
-            out.push({ kind: 'tool', tool: block.name, text: `⏺ ${describeTool(opts.cwd, block.name, toolInput)}` });
-            if (block.name === 'TodoWrite') out.push(...todoLines(toolInput));
-            cb.tool(block.name);
-            if (block.name === 'mcp__playwright__browser_navigate' && typeof toolInput.url === 'string') cb.browserUrl(toolInput.url);
-          }
-        }
-        if (out.length) cb.log(out);
-        break;
-      }
-      case 'user': {
-        if (msg.parent_tool_use_id) break;
-        const content = msg.message.content;
-        if (!Array.isArray(content)) break;
-        const out: LogEntry[] = [];
-        for (const block of content) {
-          if (block.type !== 'tool_result') continue;
-          const name = toolNames.get(block.tool_use_id) ?? '';
-          const text = resultText(block.content);
-          let images = 0;
-          if (Array.isArray(block.content)) {
-            for (const part of block.content) {
-              if (part.type === 'image' && part.source.type === 'base64') {
-                images += 1;
-                cb.screenshot(Buffer.from(part.source.data, 'base64'), part.source.media_type);
-              }
-            }
-          }
-          const saved = name === 'mcp__playwright__browser_take_screenshot' && !images ? screenshotFile(opts.cwd, text) : null;
-          if (saved) cb.screenshot(saved.data, saved.mime);
-          if (name.startsWith('mcp__playwright__')) {
-            const url = text.match(/Page URL:\s*(\S+)/);
-            if (url) cb.browserUrl(url[1]);
-          }
-          if (name === 'TodoWrite') continue;
-          if (block.is_error) out.push({ kind: 'error', text: `  ⎿ ${clip(tidyPaths(opts.cwd, text).split('\n')[0] || 'Error', 200)}` });
-          else out.push(...summariseResult(opts.cwd, name, text));
-        }
-        cb.tool(null);
-        if (out.length) cb.log(out);
-        break;
-      }
-      case 'result': {
-        lastCost = msg.total_cost_usd;
-        lastTurns = msg.num_turns;
-        if (msg.subtype === 'success' && !msg.is_error && msg.num_turns === 0) {
-          // A resumed session can first replay a turn left over from before an office restart: an empty "success"
-          // that answers none of our prompts, with the real turn right behind it. Counting it ended the session
-          // while the real turn ran on without its permission channel. If nothing follows, it was the answer.
-          emptyTurn = setTimeout(() => answered(msg), 30_000);
-          break;
-        }
-        if (msg.subtype === 'success' && !msg.is_error && msg.result.trim()) cb.turn?.(msg.result.trim());
-        answered(msg);
-        break;
-      }
-    }
-  };
-
-  (async () => {
-    try {
-      for await (const msg of query({ prompt: input, options })) handle(msg);
-      if (pendingTurns > 0) {
-        cb.finished({ ok: false, text: '', costUsd: lastCost, turns: lastTurns, errors: [stopped ? 'Stopped by manager' : 'Session ended unexpectedly'] });
-      }
-    } catch (err) {
-      input.close();
-      const message = stopped ? 'Stopped by manager' : err instanceof Error ? err.message : String(err);
-      cb.finished({ ok: false, text: '', costUsd: lastCost, turns: lastTurns, errors: [message] });
-    }
-  })();
-
-  return {
-    send(text) {
-      pendingTurns += 1;
-      input.push(text);
-    },
-    stop() {
-      stopped = true;
-      clearTimeout(emptyTurn);
-      input.close();
-      abort.abort();
-    },
-  };
+export function startSession(_opts: SessionOptions, _callbacks: SessionCallbacks): SessionHandle {
+  throw new Error('Claude SDK execution is disabled; use Codex, Gemini or OpenCode');
 }

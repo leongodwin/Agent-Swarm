@@ -16,7 +16,7 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
   const [job,setJob]=useState<SynthesisJob|null>(null);
   const [modelAvailable,setModelAvailable]=useState(false);
   const [telemetryError,setTelemetryError]=useState('');
-  const activeJob=!!job&&!['completed','blocked','failed','cancelled'].includes(job.status);
+  const activeJob=!!job&&(job.runtimeCleanup==='awaiting-completion'||!['completed','blocked','failed','cancelled'].includes(job.status));
   const [loaded,setLoaded]=useState<{repoId:string;input:HldArtifact['input']}|null>(null);
   const scope=useRef(repo?.id),epoch=useRef(0),currentInput=useRef('');scope.current=repo?.id;
   const [components,setComponents] = useState<HldComponent[]>([]);
@@ -99,11 +99,11 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
       <button className="btn btn-small" onClick={() => void copy()}>Copy Markdown</button>
       <button className="btn btn-small" disabled={!repo || !!saving} onClick={() => void load()}>{saving==='load'?'Loading…':'Load saved draft'}</button>
       <button className="btn btn-small" disabled={!repo || !!saving || activeJob} onClick={() => void save()}>{saving==='save'?'Saving…':'Save draft to repository'}</button>
-      <button className="btn btn-small" disabled={!repo||!modelAvailable||!!saving||activeJob} onClick={()=>void synthesize()}>{saving==='synthesize'?'Starting…':'Synthesize with Claude'}</button>
+      <button className="btn btn-small" disabled={!repo||!modelAvailable||!!saving||activeJob} onClick={()=>void synthesize()}>{saving==='synthesize'?'Starting…':'Synthesize with Codex'}</button>
     </div>
     <p className="muted small">{draft.generationMethod==='model-synthesis'?'Model-generated draft. Independent architecture approval and tenant verification are pending.':'Requirements template. Model synthesis, architecture approval and tenant verification are pending.'}</p>
     {telemetryError&&<p role="alert">{telemetryError}</p>}
-    {job&&<section aria-label="Architecture synthesis telemetry"><p><strong>Model job: {job.status}</strong> · {Math.round((job.elapsedMs??Math.max(0,Date.now()-job.startedAt))/1000)} seconds · five-minute deadline</p>{job.error&&<p role="alert">{job.error}</p>}<ol>{job.events.slice(-5).map((event,index)=><li key={`${event.at}-${index}`}>{event.text}</li>)}</ol>{activeJob&&<button className="btn btn-small" onClick={()=>void cancel()}>Cancel synthesis</button>}{job.status==='completed'&&<button className="btn btn-small" disabled={!!saving} onClick={()=>void loadModel()}>Load model-generated draft</button>}</section>}
+    {job&&<section aria-label="Architecture synthesis telemetry"><p><strong>Model job: {job.status}</strong> · {Math.round((job.elapsedMs??Math.max(0,Date.now()-job.startedAt))/1000)} seconds · five-minute deadline</p>{job.error&&<p role="alert">{job.error}</p>}{job.runtimeCleanup==='awaiting-completion'&&['completed','failed','blocked','cancelled'].includes(job.status)&&<p role="status">Waiting for model completion acknowledgement; its session slot remains occupied.</p>}<ol>{job.events.slice(-5).map((event,index)=><li key={`${event.at}-${index}`}>{event.text}</li>)}</ol>{activeJob&&<button className="btn btn-small" onClick={()=>void cancel()}>Cancel synthesis</button>}{job.status==='completed'&&<button className="btn btn-small" disabled={!!saving} onClick={()=>void loadModel()}>Load model-generated draft</button>}</section>}
     {loaded?.repoId===repo?.id&&<p className="muted small">Showing stored requirements. <button className="btn btn-small" disabled={!!saving} onClick={()=>{setLoaded(null);setSaved(null);}}>Use current project brief</button></p>}
     <div className="row" role="tablist" aria-label="Architecture draft views" style={{flexWrap:'wrap',gap:8}} onKeyDown={event=>{
       const current=views.findIndex(([id])=>id===activeTab);

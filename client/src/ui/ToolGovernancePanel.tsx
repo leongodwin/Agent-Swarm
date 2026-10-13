@@ -9,12 +9,14 @@ export function ToolGovernancePanel() {
   const policyCurrent = useRef(policies); policyCurrent.current = policies;
   const current = useRef(resource); current.current = resource;
   const agents = useStore((state) => state.agents);
+  const sessions=useStore(state=>state.sessionUsage);
   useEffect(() => { const timer=setInterval(() => { if (!current.current.loading) current.current.refresh(); },5000); return () => clearInterval(timer); },[]);
   useEffect(() => { const timer=setInterval(() => { if (!policyCurrent.current.loading) policyCurrent.current.refresh(); },5000); return () => clearInterval(timer); },[]);
   const view=resource.value;
   return <section aria-label="Operations and tool audit">
     <div className="row"><h3>Operations &amp; tool audit</h3><span className="spacer" /><button className="btn btn-small" onClick={resource.refresh} disabled={resource.loading}>Refresh audit</button></div>
     <p className="muted small">Recorded request safeguards. These counts cover observed checkpoints, not all tool calls or verified tenant compliance.</p>
+    {sessions&&<div className="card" aria-label="Shared session budget"><strong>Shared session budget</strong><p>{sessions.used} slots occupied · limit {sessions.limit||'unlimited'} · {sessions.agentSessions} coding-agent sessions</p>{sessions.blockedReason&&<p role="alert">Session capacity is unverified: {sessions.blockedReason}</p>}<ul>{sessions.auxiliary.map(item=><li key={item.jobId}>Architecture {item.jobId} · {item.repoId} · {item.state}</li>)}</ul><p className="muted small">Reserved and stopping model jobs keep their slots until runtime completion is acknowledged. These counts do not certify physical process termination or cross-machine capacity.</p></div>}
     <div className="card" aria-label="Tenant policy inventory">
       <strong>Standard tenant policy inventory</strong>
       {policies.error ? <p role="alert">Policy inventory unavailable: {policies.error}</p> : policies.value ? <>

@@ -104,9 +104,10 @@ swarm.requestDeliveryReview = async (id) => {
   return swarm.reviewDeliveryRelease(release.plan.qaOwner, release.repoId, id);
 };
 const synthesis=new HldSynthesisService(path.join(HOME_DIR,backend.demo?'demo-architecture':'architecture'),{
+  reserve:(repoId,jobId)=>swarm.reserveArchitectureSession(repoId,jobId),
   assertOpen(){if(backend.demo)throw new HttpError(409,'Demo cannot synthesize with a live model');if(officeShutdown.closed)throw new HttpError(503,'Office is shutting down');if(swarm.isDraining)throw new HttpError(409,'Office maintenance pauses new architecture jobs');},
   context(repoId){const repo=swarm.snapshot().repos.find(item=>item.id===repoId);if(!repo?.checkoutPath)throw new HttpError(404,'Architecture project checkout is unavailable');const catalogue=discoverSkills();return {checkoutPath:repo.checkoutPath,fingerprint:JSON.stringify([repo.id,repo.localPath,repo.targetTenancy,repo.mission,catalogue.fingerprint,delivery.view().policy?.copilotPaused]),copilotPaused:!!delivery.view().policy?.copilotPaused,skills:selectSkills(catalogue,`${repo.mission} ${repo.summary}`).map(({id,name,platform,sha256,version,description,toolStatus})=>({id,name,platform,sha256,version,description,toolStatus}))};},
-  admission:repoId=>swarm.capabilityPreflight(repoId,'claude'),start:(options,callbacks)=>backend.startSession(options,callbacks),
+  admission:repoId=>swarm.capabilityPreflight(repoId,'codex'),start:(options,callbacks)=>backend.startSession(options,callbacks),
 });
 let synthesisUnavailableReason:string|undefined;
 try{await synthesis.init();}catch(error){synthesisUnavailableReason=error instanceof Error?error.message:'Architecture synthesis is unavailable';console.warn(synthesisUnavailableReason);await synthesis.close();}
@@ -147,6 +148,7 @@ if (underLauncher()) {
     if (m?.type === 'office:shutdown') void shutdown(m.restart === false ? 'stop' : 'restart');
   });
 }
+swarm.restoreArchitectureCleanup(synthesis.pendingCleanup(),synthesisUnavailableReason);
 try { await swarm.init(); }
 catch (error) { console.error('Office startup failed:', error); await shutdown('startup failure'); }
 if (officeShutdown.closed) await shutdown('stop');

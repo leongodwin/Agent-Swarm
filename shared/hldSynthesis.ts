@@ -10,7 +10,8 @@ export const synthesisOutputSchema=z.strictObject({
   implementationPlan:hldResultSchema.shape.implementationPlan.min(3),mermaidDiagrams:hldResultSchema.shape.mermaidDiagrams,
 });
 export const synthesisJobSchema=z.strictObject({id:z.uuid(),repoId:z.string().min(1).max(8000),status:z.enum(['queued','checking','running','saving','completed','blocked','failed','cancelled']),
-  runtime:z.literal('claude-sdk'),startedAt:z.number().int().nonnegative(),endedAt:z.number().int().nonnegative().optional(),elapsedMs:z.number().int().nonnegative().optional(),deadlineMs:z.literal(300000),
+  runtimeCleanup:z.enum(['awaiting-completion','released']).optional(),
+  runtime:z.enum(['codex-cli','claude-sdk']),startedAt:z.number().int().nonnegative(),endedAt:z.number().int().nonnegative().optional(),elapsedMs:z.number().int().nonnegative().optional(),deadlineMs:z.literal(300000),
   events:z.array(z.strictObject({at:z.number().int().nonnegative(),kind:z.enum(['progress','error']),text:z.string().max(1000)})).max(100),
   error:z.string().max(4000).optional(),costUsd:z.number().finite().nonnegative(),turns:z.number().int().nonnegative(),
   result:z.strictObject({docId:hldResultSchema.shape.docId,artifactSha256:z.string().regex(/^[a-f0-9]{64}$/)}).optional(),

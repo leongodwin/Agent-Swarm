@@ -32,7 +32,7 @@ const probe = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('http'), url: endpoint, tokenEnv: key.optional(), azureCli: azureCli.optional(), pointer: z.array(z.string()).min(1), equals: z.union([z.string(), z.number(), z.boolean()]).optional(), matches: z.json().optional(), freshness: z.object({ pointer: z.array(z.string()).min(1), maxAgeSeconds: z.number().int().min(60).max(86400) }).strict().optional() }).strict(),
   z.object({ kind: z.literal('pac-connection'), environmentUrl: endpoint, api: z.string().regex(/^shared_[a-z0-9]+$/), account: z.email().optional(), connectionId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional() }).strict(),
   z.object({ kind: z.literal('mcp'), url: endpoint.optional(), command: z.string().min(1).optional(), args: z.array(z.string()).default([]), tokenEnv: key.optional(), tools: z.array(z.string().min(1)).min(1) }).strict(),
-  z.object({ kind: z.literal('cli'), executable: z.enum(['git', 'gh', 'pac', 'node', 'dotnet', 'codex', 'claude', 'opencode', 'copilot']), minimumVersion: z.string().regex(/^\d+\.\d+\.\d+$/) }).strict(),
+  z.object({ kind: z.literal('cli'), executable: z.enum(['git', 'gh', 'pac', 'node', 'dotnet', 'codex', 'gemini', 'opencode']), minimumVersion: z.string().regex(/^\d+\.\d+\.\d+$/) }).strict(),
 ]);
 export const capabilityConfigSchema = z.object({
   environmentUrl: endpoint,
@@ -242,7 +242,7 @@ export class CapabilityService {
       })));
       try { await probe({ id: 'github-auth', category: 'authentication', remedy: 'Sign in with gh auth login', probe: { kind: 'github-auth' } }); checks.push({ id: 'github-auth', category: 'authentication', passed: true, detail: 'GitHub authentication verified', remedy: '' }); }
       catch { checks.push({ id: 'github-auth', category: 'authentication', passed: false, detail: 'GitHub authentication unavailable', remedy: 'Sign in with gh auth login and refresh readiness.' }); }
-      const worker = ['claude', 'codex', 'opencode', 'copilot', 'git', 'node'].includes(cli) ? cli : 'git';
+      const worker = ['codex', 'gemini', 'opencode', 'git', 'node'].includes(cli) ? cli : 'git';
       try { await probe({ id: 'worker-cli', category: 'cli', remedy: 'Install the selected worker CLI', probe: { kind: 'cli', executable: worker as 'git', minimumVersion: '0.0.1' } }); checks.push({ id: 'worker-cli', category: 'cli', passed: true, detail: 'Worker CLI responds', remedy: '' }); }
       catch { checks.push({ id: 'worker-cli', category: 'cli', passed: false, detail: 'Worker CLI is unavailable', remedy: 'Install the selected worker CLI and refresh readiness.' }); }
       if (JSON.stringify(config) !== JSON.stringify(this.configs[repoId])) checks.push({ id: 'configuration-changed', category: 'environment', passed: false, detail: 'Configuration changed during the check', remedy: 'Refresh readiness with the latest configuration' });

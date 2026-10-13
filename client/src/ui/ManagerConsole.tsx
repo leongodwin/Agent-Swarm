@@ -14,7 +14,7 @@ import { ProjectPicker } from './ProjectPicker';
 import { StatusPill } from './TerminalView';
 import { ToolGovernancePanel } from './ToolGovernancePanel';
 
-const MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5', 'claude-haiku-4-5'];
+const MODELS: string[] = [];
 const EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 const cliName = (clis: CliView[], id: AgentCli) => clis.find((c) => c.id === id)?.label ?? id;
@@ -302,8 +302,8 @@ function CeoTab() {
             <span className="muted small">CEO</span>
             <StatusPill status={ceo.status} />
             <span className="spacer" />
-            <select aria-label="CEO coding agent" title="Coding agent for the next CEO job; readiness is checked before execution" value={ceo.cli||'copilot'} onChange={event=>void attempt(()=>api.updateAgent(ceo.id,{cli:event.target.value as AgentCli}))} style={{width:'auto'}}>
-              {!clis.some(cli=>cli.id===(ceo.cli||'copilot'))&&<option value={ceo.cli||'copilot'}>{ceo.cli||'copilot'} · discovery pending</option>}
+            <select aria-label="CEO coding agent" title="Coding agent for the next CEO job; readiness is checked before execution" value={ceo.cli||'codex'} onChange={event=>void attempt(()=>api.updateAgent(ceo.id,{cli:event.target.value as AgentCli}))} style={{width:'auto'}}>
+              {!clis.some(cli=>cli.id===(ceo.cli||'codex'))&&<option value={ceo.cli||'codex'}>{ceo.cli||'codex'} · discovery pending</option>}
               <CliOptions clis={clis}/>
             </select>
             <input
@@ -411,7 +411,7 @@ function TeamTab() {
   const openOverlay = useStore((s) => s.openOverlay);
   const terminal = settings.runtime === 'terminal';
   // The Agent SDK runtime is Claude Code for everyone.
-  const workerCli = (a: { cli: AgentCli | '' }): AgentCli => (terminal ? a.cli || settings.defaultCli : 'claude');
+  const workerCli = (a: { cli: AgentCli | '' }): AgentCli => (terminal ? a.cli || settings.defaultCli : 'codex');
   const [names, setNames] = useState<Record<string, string>>({});
   const [openBrief, setOpenBrief] = useState<string | null>(null);
   if (repos.length === 0) return <p className="muted">Connect a repo first; agents need a floor to sit on.</p>;
@@ -662,7 +662,7 @@ function SettingsTab() {
   const demo = useStore((s) => s.demo);
   const set = (p: Parameters<typeof api.updateSettings>[0]) => void attempt(() => api.updateSettings(p));
   const terminal = settings.runtime === 'terminal';
-  const defaultCli = terminal ? settings.defaultCli : 'claude';
+  const defaultCli = terminal ? settings.defaultCli : 'codex';
   return (
     <div className="tab-grid">
       <div className="card">
@@ -702,8 +702,8 @@ function SettingsTab() {
         </label>
         <p className="muted small">
           {terminal
-            ? 'Each worker can use their own coding agent, model and effort (Team tab); the CEO always runs GitHub Copilot CLI. Claude Code reports every step; other agents report their final response.'
-            : 'Workers use Claude Code through the Agent SDK; the CEO always runs GitHub Copilot CLI. Each worker can use their own model and effort (Team tab).'}
+            ? 'Codex is the default. Workers and the CEO may use Codex, Gemini or OpenCode. OpenCode requires an explicit OpenAI or Gemini model.'
+            : 'Codex is the default; only Codex, Gemini and OpenCode are permitted.'}
         </p>
         <label className="field">
           <span>Session limit</span>
@@ -724,7 +724,7 @@ function SettingsTab() {
             onBlur={(e) => Number(e.target.value) !== settings.pacingSessions && set({ pacingSessions: Number(e.target.value) || 3 })}
           />
         </label>
-        <p className="muted small">When Claude warns that usage is getting high, new issues only start while fewer sessions than this are running. QA, fixes and the CEO carry on.</p>
+        <p className="muted small">When a coding runtime warns that usage is getting high, new issues only start while fewer sessions than this are running. QA, fixes and the CEO carry on.</p>
         <h3>🧠 The CEO</h3>
         <label className="toggle block">
           <input type="radio" checked={settings.hiring === 'approve'} onChange={() => set({ hiring: 'approve' })} />
@@ -754,12 +754,6 @@ function SettingsTab() {
           <input type="radio" checked={settings.runtime === 'terminal'} onChange={() => set({ runtime: 'terminal' })} />
           <span>
             <b>Real terminals</b> (recommended): every agent is its actual coding agent running in its own terminal. Open a desk to watch it live or type into it.
-          </span>
-        </label>
-        <label className="toggle block">
-          <input type="radio" checked={settings.runtime === 'sdk'} onChange={() => set({ runtime: 'sdk' })} />
-          <span>
-            <b>Agent SDK</b>: Claude Code through the Claude Agent SDK, shown as a log of its steps. Claude Code only.
           </span>
         </label>
         <p className="muted small">

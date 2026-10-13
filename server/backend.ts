@@ -1,6 +1,8 @@
+import {startCodexPlanning} from './codexPlanning.ts';
+import {runtimeModelError} from '../shared/runtimePolicy.ts';
 import * as github from './github.ts';
 import * as workspace from './workspace.ts';
-import { startSession, type SessionCallbacks, type SessionHandle, type SessionOptions } from './agentRunner.ts';
+import { type SessionCallbacks, type SessionHandle, type SessionOptions } from './agentRunner.ts';
 import { hooksReady, officeProcesses, reconnectClis, releaseClis, startCliSession, terminalsAvailable, type ReconnectedCli } from './cliRunner.ts';
 import { detectClis } from './clis.ts';
 import { realPreviews, type PreviewBackend } from './previewRunner.ts';
@@ -99,7 +101,7 @@ export const realBackend: Backend = {
   prepareDesk: workspace.prepareDesk,
   removeDesk: workspace.removeDesk,
   releaseDesk: (fullName, agentSlug, port) => workspace.releaseDesk(fullName, agentSlug, port, officeProcesses()),
-  startSession: (opts, cb) => (opts.terminal ? startCliSession(opts, cb) : startSession(opts, cb)),
+  startSession: (opts, cb) => {const error=runtimeModelError(opts.cli??'codex',opts.model);if(error)throw new Error(error);return opts.terminal?startCliSession(opts,cb):startCodexPlanning(opts,cb);},
   terminals: terminalsAvailable,
   reconnectClis: (terminalFor) => (terminalsAvailable ? reconnectClis(terminalFor) : Promise.resolve([])),
   hooksReady,

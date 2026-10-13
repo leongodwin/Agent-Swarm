@@ -1,3 +1,4 @@
+import {runtimeModelError} from '../shared/runtimePolicy.ts';
 import { deliveryCapabilitiesPrompt } from './deliveryCapabilities.ts';
 import type { SessionAuthorization } from './toolGovernance.ts';
 import { DELIVERY_ENGINEERING } from '../shared/delivery.ts';
@@ -232,7 +233,7 @@ const LOOKS: AgentLook[] = ['feminine', 'masculine'];
 const MAX_DESKS: Record<AgentRole, number> = { dev: 12, qa: 3, ceo: 1 };
 const MAX_QA_ROUNDS = 3;
 // Claude Code keeps its own default model when the office runs in SDK mode.
-const DEFAULT_MODEL = 'claude-opus-5-5';
+const DEFAULT_MODEL = '';
 const EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 // The CEO uses the selected CLI's default model unless the manager overrides it.
 const CEO_MODEL = '';
@@ -260,7 +261,7 @@ const FREE: AgentStatus[] = ['idle', 'done'];
 const ERROR_COOLDOWN_MS = 2 * 60_000;
 // Auto-assign stops retrying an issue after this many failed sessions; the manager can still assign it by hand.
 const MAX_ISSUE_FAILURES = 2;
-// How long the office waits after Claude's usage limit is hit when Claude doesn't say when it resets.
+// How long the office waits after Coding runtime usage limit is hit when Claude doesn't say when it resets.
 const LIMIT_PAUSE_MS = 15 * 60_000;
 const oneLine = (err: unknown) => (err instanceof Error ? err.message : String(err)).split(/\r?\n/)[0].slice(0, 200);
 
@@ -299,6 +300,31 @@ const ICON = { pass: '✅', fail: '❌', skip: '⏭️' } as const;
 export { HttpError };
 
 export class Swarm {
+  private sessionCapacityBlocker:string|undefined;
+  restoreArchitectureCleanup(records:{jobId:string;repoId:string;reservedAt:number}[],unavailableReason?:string){
+    for(const record of records)this.auxiliarySessions.set(record.jobId,{...record,kind:'architecture',state:'stopping'});
+    // A corrupt store cannot prove how many model turns are still outstanding.
+    this.sessionCapacityBlocker=records.length?undefined:unavailableReason;
+  }
+  private lastSessionUsage='';
+  private emitSessionUsage(){const usage=this.sessionUsage(),key=JSON.stringify(usage);if(key===this.lastSessionUsage)return;this.lastSessionUsage=key;this.broadcast({type:'session_usage',usage});}
+  private auxiliarySessions=new Map<string,import('../shared/sessionUsage.ts').SessionUsage['auxiliary'][number]>();
+  sessionUsage():import('../shared/sessionUsage.ts').SessionUsage {
+    const agentSessions=this.state.agents.filter(a=>BUSY.includes(a.status)).length,limit=this.state.settings.sessionLimit;
+    const auxiliary=[...this.auxiliarySessions.values()].map(item=>({...item})),used=agentSessions+auxiliary.length;
+    return {limit,used,agentSessions,freeSlots:this.sessionCapacityBlocker?null:limit>0?Math.max(0,limit-used):null,auxiliary,...(this.sessionCapacityBlocker?{blockedReason:this.sessionCapacityBlocker}:{})};
+  }
+  reserveArchitectureSession(repoId:string,jobId:string):import('../shared/sessionUsage.ts').AuxiliarySessionLease {
+    this.requireOpen();this.repo(repoId);
+    if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(jobId))throw new HttpError(400,'Invalid architecture session identity');
+    if(this.auxiliarySessions.has(jobId))throw new HttpError(409,'Architecture session already owns a slot');
+    this.ensureSlot();
+    const reservation:import('../shared/sessionUsage.ts').SessionUsage['auxiliary'][number]={jobId,repoId,kind:'architecture',state:'reserved',reservedAt:Date.now()};
+    this.auxiliarySessions.set(jobId,reservation);
+    const publish=()=>{this.emitSessionUsage();this.emitUsage();};
+    const change=(state:'running'|'stopping')=>{if(this.auxiliarySessions.get(jobId)!==reservation)throw new HttpError(409,'Architecture session no longer owns its slot');if(state==='running'){this.requireOpen();if(reservation.state==='stopping')throw new HttpError(409,'Architecture runtime is stopping');}reservation.state=state;publish();};
+    publish();return {running:()=>change('running'),stopping:()=>change('stopping'),release:()=>{if(this.auxiliarySessions.get(jobId)!==reservation)return;this.auxiliarySessions.delete(jobId);publish();this.later(()=>this.schedule(),0);}};
+  }
   capabilityFingerprint = () => '';
   workerAdmissionContext: (repoIds: string[]) => string = () => '';
   capabilityStatus = () => '{}';
@@ -318,7 +344,7 @@ export class Swarm {
       defaultModel: '',
       defaultEffort: 'medium',
       runtime: 'terminal',
-      defaultCli: 'copilot',
+      defaultCli: 'codex',
       hiring: 'approve',
       teamCap: 6,
       ceoHeartbeatMin: 60,
@@ -479,11 +505,13 @@ export class Swarm {
       };
       for (const m of this.state.messages) this.messageSeq = Math.max(this.messageSeq, m.id + 1);
       if (!EFFORTS.includes(this.state.settings.defaultEffort)) this.state.settings.defaultEffort = 'medium';
-      if (this.state.settings.runtime !== 'sdk') this.state.settings.runtime = 'terminal';
-      if (!isCli(this.state.settings.defaultCli)) this.state.settings.defaultCli = 'copilot';
+      this.state.settings.runtime = 'terminal';
+      if(/claude|anthropic/i.test(this.state.settings.defaultModel))this.state.settings.defaultModel='';
+      for(const agent of this.state.agents)if(/claude|anthropic/i.test(agent.model))agent.model='';
+      if (!isCli(this.state.settings.defaultCli)) this.state.settings.defaultCli = 'codex';
       if (this.state.version < 2) {
         if (this.state.settings.defaultCli === 'claude') {
-          this.state.settings.defaultCli = 'copilot';
+          this.state.settings.defaultCli = 'codex';
           this.state.settings.defaultModel = '';
         }
         const ceo = this.state.agents.find((a) => a.id === CEO_ID);
@@ -707,6 +735,7 @@ export class Swarm {
 
   snapshot(): WorldSnapshot {
     return {
+      sessionUsage:this.sessionUsage(),
       draining:this.draining,
       user: this.user,
       ghReady: !this.ghError,
@@ -763,6 +792,7 @@ export class Swarm {
     if (!this.agentRt.has(a.id)) return;
     const { log: _log, ...rest } = this.agentView(a, false);
     this.broadcast({ type: 'agent', agent: rest });
+    this.emitSessionUsage();
   }
 
   private setQa(rec: QaRecord, patch: Partial<QaRecord>) {
@@ -839,13 +869,13 @@ export class Swarm {
   }
 
   private running() {
-    return this.state.agents.filter((a) => BUSY.includes(a.status)).length;
+    return this.sessionUsage().used;
   }
 
   /** True when the manager has set a session limit and every slot is taken. */
   private slotsFull() {
     const limit = this.state.settings.sessionLimit;
-    return this.draining || limit > 0 && this.running() >= limit;
+    return this.draining || !!this.sessionCapacityBlocker || limit > 0 && this.running() >= limit;
   }
 
   private agentSlug(a: PersistedAgent) {
@@ -1393,6 +1423,8 @@ export class Swarm {
     },
   ) {
     this.requireOpen();
+    if(opts.cli!==undefined&&opts.cli!==''&&!isCli(opts.cli))throw new HttpError(400,'Only Codex, Gemini and OpenCode are permitted');
+    const modelError=runtimeModelError((opts.cli||this.state.settings.defaultCli) as AgentCli,opts.model??'');if(modelError&&opts.model!==undefined)throw new HttpError(400,modelError);
     const repo = this.repo(repoId);
     const role: AgentRole = opts.role === 'qa' ? 'qa' : 'dev';
     const used = new Set(this.state.agents.filter((a) => a.repoId === repo.id && a.role === role).map((a) => a.desk));
@@ -1466,6 +1498,8 @@ export class Swarm {
   ) {
     this.requireOpen();
     const a = this.agent(id);
+    if(patch.cli!==undefined&&patch.cli!==''&&!isCli(patch.cli))throw new HttpError(400,'Unsupported coding runtime');
+    const modelError=runtimeModelError((patch.cli||a.cli||this.state.settings.defaultCli),patch.model??a.model);if(modelError)throw new HttpError(400,modelError);
     if (patch.cli !== undefined) a.cli = isCli(patch.cli) ? patch.cli : '';
     if (patch.name?.trim() && patch.name.trim() !== a.name) {
       a.name = patch.name.trim().slice(0, 24);
@@ -1632,6 +1666,7 @@ export class Swarm {
   }
 
   private ensureSlot() {
+    if(this.sessionCapacityBlocker)throw new HttpError(409,`Session capacity is unverified: ${this.sessionCapacityBlocker}`);
     if(this.draining)throw new HttpError(409,'Office is draining; new agent work is paused');
     if (this.slotsFull()) {
       throw new HttpError(429, `All ${this.state.settings.sessionLimit} session slots are busy. Raise or clear the session limit in the manager's console, or wait.`);
@@ -1676,14 +1711,15 @@ export class Swarm {
       else if (inTerminal) cli = a.sessionCli;
       else if (a.sessionCli !== 'claude') resume = undefined;
     }
-    if (!inTerminal) return { resumeSessionId: resume };
+    if (!inTerminal) return { cli, resumeSessionId: resume };
+    const policyError=runtimeModelError(cli,this.modelFor(a,cli));if(policyError)throw new HttpError(409,policyError);
     const what = a.role === 'ceo' ? a.issueTitle : a.task === 'qa' ? `QA · PR #${a.prNumber}` : a.task === 'fix' ? `fixing PR #${a.prNumber}` : a.issueNumber ? `#${a.issueNumber} ${a.issueTitle ?? ''}` : null;
     return { terminal: this.terminalFor(a), cli, label: `${a.name}${what ? ` · ${what}` : ''}`.slice(0, 80).trim(), resumeSessionId: resume };
   }
 
   /** The model to ask for (the Agent SDK runs Claude Code). '' lets another coding agent use its own default. */
   private modelFor(a: PersistedAgent, cli: AgentCli | undefined) {
-    return effectiveModel(a.model, cli ?? 'claude', this.state.settings, DEFAULT_MODEL);
+    return effectiveModel(a.model, cli ?? 'codex', this.state.settings, DEFAULT_MODEL);
   }
 
   // ---------- terminals ----------
@@ -1859,8 +1895,7 @@ export class Swarm {
     const generation = this.taskGeneration(a);
     const context = this.workerContext(a, repo, resume, retainedCli);
     if (context === null) return 'Execution context is unavailable; restore configuration before retrying';
-    const terminal = a.role === 'ceo' || this.state.settings.runtime === 'terminal' && this.backend.terminals;
-    const cli = retainedCli ?? (!terminal ? 'node' : resume && a.sessionCli && a.role !== 'ceo' ? a.sessionCli : a.cli || this.state.settings.defaultCli);
+    const cli = retainedCli ?? (resume && a.sessionCli && a.role !== 'ceo' ? a.sessionCli : a.cli || this.state.settings.defaultCli);
     const projects = [repo, ...this.linkedRepos(repo)];
     if (projects.length !== repo.links.length + 1) return 'A linked project is no longer connected';
     const blocker = await this.projectReadiness(projects, cli, this.taskStops.get(a.id)?.signal);
@@ -1986,7 +2021,7 @@ export class Swarm {
         sessionId: (id) => {
           if (!live()) return;
           a.sessionId = id;
-          a.sessionCli = id ? (how.cli ?? 'claude') : null;
+          a.sessionCli = id ? (how.cli ?? 'codex') : null;
         },
         browserUrl: (url) => {
           if (!live()) return;
@@ -2030,7 +2065,7 @@ export class Swarm {
     if (result.interrupted) this.interrupted(a);
 
     if (!result.ok && this.isOpenCodeLimit(result, a)) {
-      const recovered = await this.fallbackFromOpenCodeToCopilot(a, repo);
+      const recovered = await this.fallbackFromOpenCodeToCodex(a, repo);
       if (recovered) {
         this.emitAgent(a);
         this.save();
@@ -2078,27 +2113,27 @@ export class Swarm {
     return false;
   }
 
-  private async fallbackFromOpenCodeToCopilot(a: PersistedAgent, repo: PersistedRepo): Promise<boolean> {
-    const fallbackModel = 'claude-sonnet-5.5';
-    a.cli = 'copilot';
+  private async fallbackFromOpenCodeToCodex(a: PersistedAgent, repo: PersistedRepo): Promise<boolean> {
+    const fallbackModel = '';
+    a.cli = 'codex';
     a.model = fallbackModel;
     a.sessionId = null;
     a.sessionCli = null;
     a.lastError = null;
 
     if (this.state.settings.defaultCli === 'opencode') {
-      this.state.settings.defaultCli = 'copilot';
+      this.state.settings.defaultCli = 'codex';
       this.state.settings.defaultModel = fallbackModel;
     }
 
     this.appendLog(a, [
-      { kind: 'system', text: `🔄 OpenCode free tier limit reached. Automatically falling back to GitHub Copilot (model: ${fallbackModel}).` },
+      { kind: 'system', text: `🔄 OpenCode free tier limit reached. Automatically falling back to Codex (model: ${fallbackModel}).` },
     ]);
     this.postMessage(
       'office',
-      `🔄 OpenCode free tier limit reached for ${a.name}. Automatically switching to GitHub Copilot (${fallbackModel}) to continue uninterrupted.`,
+      `🔄 OpenCode free tier limit reached for ${a.name}. Automatically switching to Codex (${fallbackModel}) to continue uninterrupted.`,
     );
-    this.toast('info', `${a.name} hit OpenCode limit: switched to GitHub Copilot (${fallbackModel}).`);
+    this.toast('info', `${a.name} hit OpenCode limit: switched to Codex (${fallbackModel}).`);
 
     if (a.task === 'issue' && a.issueNumber) {
       const issue = this.repoRt.get(repo.id)?.issues.find((i) => i.number === a.issueNumber);
@@ -2605,6 +2640,10 @@ export class Swarm {
   updateSettings(patch: Partial<SwarmSettings>) {
     this.requireOpen();
     const s = this.state.settings;
+    if(patch.defaultCli!==undefined&&!isCli(patch.defaultCli))throw new HttpError(400,'Only Codex, Gemini and OpenCode are permitted');
+    if(patch.runtime==='sdk')throw new HttpError(400,'Claude SDK runtime is disabled');
+    const modelError=runtimeModelError(patch.defaultCli??s.defaultCli,patch.defaultModel??s.defaultModel);
+    if(modelError&&patch.defaultModel!==undefined)throw new HttpError(400,modelError);
     if (patch.sessionLimit !== undefined) s.sessionLimit = Math.max(0, Math.round(Number(patch.sessionLimit)) || 0);
     // The default model belongs to the default coding agent: a new agent starts on its own default.
     if (isCli(patch.defaultCli) && patch.defaultCli !== s.defaultCli) {
@@ -2626,6 +2665,7 @@ export class Swarm {
     if (patch.pacingSessions !== undefined) s.pacingSessions = clampPacingSessions(patch.pacingSessions);
     this.save();
     this.broadcast({ type: 'settings', settings: s });
+    this.emitSessionUsage();
     this.emitCeo();
     this.later(() => this.schedule(), 200);
     return s;
@@ -2661,7 +2701,7 @@ export class Swarm {
   private scheduleOffset = 0;
   private issueFailures = new Map<string, number>(); // `${repoId}#${issue}` → failed sessions on it
   private nudged = new Set<string>(); // `${repoId}#${issue}`: its developer was asked once to finish the missing PR
-  private pausedUntil = 0; // Claude's usage limit was hit: nothing new starts before this
+  private pausedUntil = 0; // Coding runtime usage limit was hit: nothing new starts before this
   private pacingUntil = 0; // Claude warned about usage: new issues are paced until this
   private lastUsage = '';
 
@@ -2761,7 +2801,7 @@ export class Swarm {
     if (until <= this.pausedUntil) return;
     const fresh = Date.now() >= this.pausedUntil;
     this.pausedUntil = until;
-    if (fresh) this.postMessage('office', `⏸ Claude's usage limit was reached. The office starts no new work until ${new Date(until).toLocaleTimeString()}; sessions already running carry on.`);
+    if (fresh) this.postMessage('office', `⏸ Coding runtime usage limit was reached. The office starts no new work until ${new Date(until).toLocaleTimeString()}; sessions already running carry on.`);
     this.emitUsage();
   }
 
@@ -2776,7 +2816,7 @@ export class Swarm {
     this.emitUsage();
   }
 
-  /** May work of this kind start now, as far as Claude's usage goes? */
+  /** May work of this kind start now, as far as Coding runtime usage goes? */
   private mayStart(kind: WorkKind) {
     return mayStart(kind, { now: Date.now(), pausedUntil: this.pausedUntil, pacingUntil: this.pacingUntil, running: this.running(), pacingSessions: this.state.settings.pacingSessions });
   }
@@ -2797,7 +2837,7 @@ export class Swarm {
   private tickUsage() {
     if (this.pacingUntil && Date.now() >= this.pacingUntil) {
       this.pacingUntil = 0;
-      this.postMessage('office', "✅ Claude's usage is back to normal. The office starts new work at full speed again.");
+      this.postMessage('office', "✅ Coding runtime usage is back to normal. The office starts new work at full speed again.");
     }
     this.emitUsage();
   }
@@ -2835,7 +2875,7 @@ export class Swarm {
             if (rt?.session) {
               try { rt.session.stop(); } catch {}
             }
-            void this.fallbackFromOpenCodeToCopilot(a, repo);
+            void this.fallbackFromOpenCodeToCodex(a, repo);
           }
         }
       }
@@ -3021,7 +3061,7 @@ export class Swarm {
         skin: pick(SKIN),
         model: CEO_MODEL,
         effort: CEO_EFFORT,
-        cli: 'copilot',
+        cli: 'codex',
         status: 'idle',
         issueNumber: null,
         issueTitle: null,
@@ -3099,11 +3139,12 @@ export class Swarm {
     this.later(() => this.schedule(), 150);
   }
 
-  private ceoCli(a:PersistedAgent):AgentCli{return isCli(a.cli)?a.cli:'copilot';}
-  private ceoModelFingerprint(model:string,cli:AgentCli='copilot'){return crypto.createHash('sha256').update(JSON.stringify([cli,'unsupported-model',model])).digest('hex');}
+  private ceoCli(a:PersistedAgent):AgentCli{return isCli(a.cli)?a.cli:'codex';}
+  private ceoModelFingerprint(model:string,cli:AgentCli='codex'){return crypto.createHash('sha256').update(JSON.stringify([cli,'unsupported-model',model])).digest('hex');}
   private holdCeoModel(model:string){
-    const reason='GitHub Copilot CLI rejected the configured CEO model. Select an available model, clear the override, or select a compatible coding agent; queued work is held until the model changes or its coding agent changes.';
-    this.state.ceo.modelBlock={fingerprint:this.ceoModelFingerprint(model),reason};
+    const selected=this.state.agents.find(agent=>agent.id===CEO_ID);
+    const reason='The coding runtime rejected the configured CEO model. Select an available model, clear the override, or select a compatible coding agent; queued work is held until the model changes or its coding agent changes.';
+    this.state.ceo.modelBlock={fingerprint:this.ceoModelFingerprint(model,selected?this.ceoCli(selected):'codex'),reason};
     this.state.ceo.blockedReason=reason;this.state.ceo.retryAt=null;
   }
   /** Start the CEO's next job when they're free and a session slot is open. Replies to the manager go first. */
@@ -3240,14 +3281,14 @@ export class Swarm {
         sessionId: (id) => {
           if (!live()) return;
           a.sessionId = id;
-          a.sessionCli = id ? (how.cli ?? 'copilot') : null;
+          a.sessionCli = id ? (how.cli ?? 'codex') : null;
         },
         browserUrl: () => undefined,
         screenshot: () => undefined,
         turn: (text) => { if (live()) this.postMessage('ceo', text); },
         limited: (at) => {if (live()) this.pauseForLimit(at);},
         usageWarning: (info) => {if (live()) this.paceForWarning(info);},
-        finished: (result) => {if (!live()) return; completed = true; this.onCeoFinished(a, result, job, generation);},
+        finished: (result) => {if (!live()) return; completed = true; this.onCeoFinished(a, result, job, generation,selectedCli);},
       },
     );
     if (ownsJob()) rt.session = completed ? null : handle;
@@ -3293,7 +3334,7 @@ export class Swarm {
     });
   }
 
-  private onCeoFinished(a: PersistedAgent, result: SessionResult, job: CeoJob, generation: number) {
+  private onCeoFinished(a: PersistedAgent, result: SessionResult, job: CeoJob, generation: number,sessionCli:AgentCli) {
     const rt = this.agentRt.get(a.id);
     if (!this.ownsTask(a, generation) || this.state.ceo.job !== job || !rt || this.officeUpdate.handedOver) return;
     rt.session = null;
@@ -3308,8 +3349,8 @@ export class Swarm {
     } else if (!result.ok) {
       a.status = 'error';
       a.lastError = result.errors.join('; ') || 'Session failed';
-      if(result.configurationError?.cli==='copilot'&&result.configurationError.kind==='unsupported-model'){
-        this.holdCeoModel(result.configurationError.model);
+      if(result.configurationError?.cli===sessionCli&&result.configurationError.kind==='unsupported-model'){
+        if(sessionCli===this.ceoCli(a))this.holdCeoModel(result.configurationError.model);
         this.enqueueCeo(job);
       }
       this.appendLog(a, [{ kind: 'error', text: `✗ ${a.lastError}` }]);
@@ -3616,6 +3657,7 @@ export class Swarm {
           teamCap: s.teamCap,
           sessionLimit: s.sessionLimit || 'none',
           sessionsRunning: this.running(),
+          sessionUsage:this.sessionUsage(),
           usage: usageLabel(this.usageNow(), Date.now()),
           deskLimits: { dev: MAX_DESKS.dev, qa: MAX_DESKS.qa },
         },

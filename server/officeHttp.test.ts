@@ -196,8 +196,8 @@ it('requires a current process and quiescent authenticated office for terminal-p
   expect((await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid+1})).status).toBe(409);
   expect((await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid,command:'arbitrary'})).status).toBe(400);
   expect(handoff).not.toHaveBeenCalled();
-  const state=swarm.snapshot();const snapshot=vi.spyOn(swarm,'snapshot');
-  snapshot.mockReturnValue({...state,agents:state.agents.map(agent=>({...agent,status:'working'}))});
+  const usage=swarm.sessionUsage();const snapshot=vi.spyOn(swarm,'sessionUsage');
+  snapshot.mockReturnValue({...usage,used:1,agentSessions:1});
   expect((await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid})).status).toBe(409);expect(handoff).not.toHaveBeenCalled();snapshot.mockRestore();
   const response=await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid});expect(response.status).toBe(202);expect(await response.json()).toMatchObject({accepted:true,preserveTerminals:true});expect(handoff).toHaveBeenCalledOnce();
 });

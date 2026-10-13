@@ -13,10 +13,11 @@ async function fixture(admission:SynthesisDependencies['admission']=async()=>nul
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'hld-synthesis-')),checkout=path.join(root,'repo');await fs.mkdir(checkout);
   let fingerprint='original';let callbacks!:SessionCallbacks;
   const stop=vi.fn(),start=vi.fn((_options:SessionOptions,cb:SessionCallbacks)=>{callbacks=cb;return {stop,send:vi.fn()};});
-  const deps:SynthesisDependencies={assertOpen:()=>{},context:()=>({checkoutPath:checkout,fingerprint,copilotPaused:true,skills:[{id:'dataverse:dv-metadata',sha256:'a'.repeat(64),toolStatus:'unverified'}]}),admission,start};
+  const lease={running:vi.fn(),stopping:vi.fn(),release:vi.fn()};
+  const deps:SynthesisDependencies={reserve:()=>lease,assertOpen:()=>{},context:()=>({checkoutPath:checkout,fingerprint,copilotPaused:true,skills:[{id:'dataverse:dv-metadata',sha256:'a'.repeat(64),toolStatus:'unverified'}]}),admission,start};
   const service=new HldSynthesisService(root,deps);await service.init();
   cleanup.push(async()=>{await service.close();await fs.rm(root,{recursive:true,force:true,maxRetries:5});});
-  return {service,root,checkout,start,stop,deps,get callbacks(){return callbacks;},change:()=>{fingerprint='changed';}};
+  return {service,root,checkout,start,stop,deps,lease,get callbacks(){return callbacks;},change:()=>{fingerprint='changed';}};
 }
 const success=(structured:unknown=output)=>({ok:true,text:'',structured,costUsd:0.01,turns:1,errors:[]});
 it('runs structured model synthesis with no tool authority and retains a validated version across restart',async()=>{
@@ -46,6 +47,18 @@ it('denies concurrent model jobs and late output from cancelled ownership',async
   const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
   await expect(f.service.start('other/project',input)).rejects.toThrow('already running');expect(()=>f.service.cancel('other/project',job.id)).toThrow('outside this project');
   f.service.cancel('synthetic/project',job.id);f.callbacks.finished(success());await f.service.close();expect(f.stop).toHaveBeenCalledOnce();expect(await fs.readdir(f.checkout)).toEqual([]);expect(f.service.view('synthetic/project',job.id)[0].status).toBe('cancelled');
+});
+it('keeps cancelled capacity occupied until the exact model callback acknowledges completion',async()=>{
+  const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
+  f.service.cancel('synthetic/project',job.id);expect(f.lease.stopping).toHaveBeenCalledOnce();expect(f.lease.release).not.toHaveBeenCalled();
+  expect(f.service.view('synthetic/project',job.id)[0].runtimeCleanup).toBe('awaiting-completion');await expect(f.service.start('synthetic/project',input)).rejects.toThrow('already running');
+  f.callbacks.finished(success());expect(f.lease.release).toHaveBeenCalledOnce();expect(f.service.view('synthetic/project',job.id)[0].runtimeCleanup).toBe('released');f.callbacks.finished(success());expect(f.lease.release).toHaveBeenCalledOnce();
+});
+it('preserves and denies a cold restart with unacknowledged model cleanup',async()=>{
+  const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());f.service.cancel('synthetic/project',job.id);await f.service.close();
+  const file=path.join(f.root,'architecture-synthesis.json'),before=await fs.readFile(file,'utf8');const restored=new HldSynthesisService(f.root,f.deps);
+  await expect(restored.init()).rejects.toThrow('lacks completion acknowledgement');expect(restored.pendingCleanup()).toEqual([{jobId:job.id,repoId:'synthetic/project',reservedAt:job.startedAt}]);
+  await restored.close();expect(await fs.readFile(file,'utf8')).toBe(before);
 });
 it('denies changed project or skill scope before publishing the model result',async()=>{
   const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());f.change();f.callbacks.finished(success());

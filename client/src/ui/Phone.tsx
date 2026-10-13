@@ -76,7 +76,7 @@ export function Resume({ req, highlight }: { req: HireRequestView; highlight?: b
       {open && <Markdown className="resume-brief" text={req.brief} />}
       {hire && pending && (
         <div className="muted small">
-          {effectiveModel(req.model, settings.runtime === 'terminal' ? settings.defaultCli : 'claude', settings, 'claude-opus-5-5') || 'default model'} · {req.effort || settings.defaultEffort} effort
+          {effectiveModel(req.model, settings.runtime === 'terminal' ? settings.defaultCli : 'codex', settings, '') || 'default model'} · {req.effort || settings.defaultEffort} effort
         </div>
       )}
       {!pending && req.note && <div className="muted small">Your note: “{req.note}”</div>}

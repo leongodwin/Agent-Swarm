@@ -78,7 +78,7 @@ describe('launchArgs', () => {
   const ctx = (patch: Partial<LaunchContext> = {}): LaunchContext => ({
     prompt: '--looks like a flag',
     systemAppend: 'You are Ada.',
-    model: '',
+    model: 'openai/gpt-synthetic',
     effort: 'medium',
     sessionId: '11111111-1111-1111-1111-111111111111',
     name: 'Ada · #1',
@@ -91,23 +91,13 @@ describe('launchArgs', () => {
     browser: null,
     ...patch,
   });
-  it('starts Claude Code on a chosen session id, with the prompt after --', () => {
-    const { args } = launchArgs('claude', ctx());
-    expect(args.slice(0, 2)).toEqual(['--session-id', '11111111-1111-1111-1111-111111111111']);
-    expect(args.slice(-2)).toEqual(['--', '--looks like a flag']);
-    // the manager's own setup loads: no limiting its setting sources or MCP servers
-    expect(args).not.toContain('--setting-sources');
-    expect(args).not.toContain('--strict-mcp-config');
-    expect(args).not.toContain('--mcp-config');
-  });
 
-  it("resumes Claude Code sessions and keeps the CEO's hands off the shell", () => {
-    const { args } = launchArgs('claude', ctx({ resumeId: 'abc', role: 'ceo', files: { settings: 's', mcp: 'mcp.json', system: 'i' } }));
-    expect(args.slice(0, 2)).toEqual(['--resume', 'abc']);
-    expect(args).toContain('--mcp-config');
-    expect(args.slice(args.indexOf('--disallowedTools'), args.indexOf('--'))).toEqual(['--disallowedTools', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'Bash', 'PowerShell', 'NotebookEdit']);
-  });
 
+
+
+  it.each(['claude','copilot'] as const)('rejects %s before constructing launch arguments',cli=>{
+    expect(()=>launchArgs(cli,ctx())).toThrow('Only Codex');
+  });
   it("runs Codex without its sandbox or approvals, and resumes Codex's thread", () => {
     const fresh = launchArgs('codex', ctx()).args;
     expect(fresh).toContain('--dangerously-bypass-approvals-and-sandbox');
@@ -153,33 +143,7 @@ describe('launchArgs', () => {
     expect(config({}).autoupdate).toBe(false);
   });
 
-  it('runs Copilot non-interactively, resumes by session id, and adds the CEO office MCP server', () => {
-    const context = ctx({
-      model: 'gpt-5',
-      effort: 'high',
-      files: { settings: 'settings.json', mcp: 'mcp.json', system: 'instructions.md' },
-    });
-    const fresh = launchArgs('copilot', context);
-    expect(fresh.args).toEqual([
-      '--no-auto-update',
-      '--allow-all',
-      '--silent',
-      '--model',
-      'gpt-5',
-      '--effort',
-      'high',
-      '--session-id',
-      context.sessionId,
-      '--additional-mcp-config',
-      '@mcp.json',
-      '-p',
-      context.prompt,
-    ]);
-    expect(fresh.env).toEqual({});
 
-    const resumed = launchArgs('copilot', ctx({ resumeId: 'session-1' })).args;
-    expect(resumed.slice(resumed.indexOf('--resume=session-1'), resumed.indexOf('-p'))).toEqual(['--resume=session-1']);
-  });
 });
 
 describe('oneAtATime', () => {

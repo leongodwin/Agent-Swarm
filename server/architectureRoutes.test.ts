@@ -42,7 +42,7 @@ it('authenticates the non-demo route, resolves checkout ownership and confirms t
 });
 it('authenticates model jobs, binds their project, and exposes an actionable admission blocker',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'hld-job-route-'));const start=vi.fn(()=>{throw new Error('Blocked model must not start');});
-  const service=new HldSynthesisService(root,{assertOpen(){},context(){return {checkoutPath:root,fingerprint:'synthetic',copilotPaused:true,skills:[]};},admission:async()=> 'Synthetic model account is not authenticated',start});await service.init();
+  const service=new HldSynthesisService(root,{reserve:()=>({running(){},stopping(){},release(){}}),assertOpen(){},context(){return {checkoutPath:root,fingerprint:'synthetic',copilotPaused:true,skills:[]};},admission:async()=> 'Synthetic model account is not authenticated',start});await service.init();
   const app=express();createBrowserAuth().install(app);app.use(express.json());registerArchitectureRoutes(app,{demo:false,synthesis:service,connectedRepo(id){if(!['scoped/repo','other/repo'].includes(id))throw new HttpError(404,'Not connected');return {checkoutPath:root};}});
   app.use((error:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>res.status(error instanceof HttpError?error.status:500).json({error:error instanceof Error?error.message:'Failed'}));
   const server=http.createServer(app);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;

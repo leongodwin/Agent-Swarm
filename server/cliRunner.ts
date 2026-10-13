@@ -1,3 +1,4 @@
+import {runtimeModelError} from '../shared/runtimePolicy.ts';
 import { playwrightMcp } from './browserTools.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -374,10 +375,11 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   // while it worked (reattach); anything else replaces it.
   const prev = lives.get(term);
   const waiting = !!prev?.proc && !prev.session;
-  const adopt = waiting && (!!opts.reattach || (prev!.cli === (opts.cli ?? 'claude') && !!opts.resumeSessionId && prev!.resumeId === opts.resumeSessionId));
+  const adopt = waiting && (!!opts.reattach || (prev!.cli === (opts.cli ?? 'codex') && !!opts.resumeSessionId && prev!.resumeId === opts.resumeSessionId));
   if (prev && !adopt) endLive(prev);
   let live: LiveCli | null = adopt ? prev! : null;
-  const cli = live?.cli ?? opts.cli ?? 'claude';
+  const cli = live?.cli ?? opts.cli ?? 'codex';
+  const policyError=runtimeModelError(cli,opts.model);if(policyError)throw new Error(policyError);
   const label = cliLabel(cli);
 
   const token = crypto.randomUUID();

@@ -1,5 +1,5 @@
+import {allowedRuntime,runtimeModelError} from '../shared/runtimePolicy.ts';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { run } from './exec.ts';
 import type { AgentCli, CliView, EffortLevel } from '../shared/types.ts';
@@ -16,10 +16,9 @@ export interface CliDef {
 }
 
 export const CLIS: CliDef[] = [
-  { id: 'claude', label: 'Claude Code', command: 'claude', integrated: true },
   { id: 'codex', label: 'Codex', command: 'codex', integrated: false },
   { id: 'opencode', label: 'OpenCode', command: 'opencode', integrated: false },
-  { id: 'copilot', label: 'GitHub Copilot CLI', command: 'copilot', integrated: false },
+  { id: 'gemini', label: 'Gemini', command: 'gemini', integrated: false },
 ];
 
 export const isCli = (v: unknown): v is AgentCli => CLIS.some((c) => c.id === v);
@@ -72,38 +71,9 @@ export function unwrapCmdShim(shimPath: string, text: string): { file: string; a
  * terminal runtime works without Claude Code installed, on the version the office was tested with. Same lookup as
  * the SDK's own and bin/cubefarm.js.
  */
-let bundled: string | null | undefined;
-
-function bundledClaude(): string | null {
-  if (bundled !== undefined) return bundled;
-  bundled = null;
-  let sdk: string;
-  try {
-    sdk = createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk');
-  } catch {
-    return null;
-  }
-  const { platform, arch } = process;
-  // Only Linux needs the report (glibc or musl). On Windows it walks every native handle, and with pseudo-consoles
-  // closing on other threads that takes the whole office down.
-  const report = platform === 'linux' ? (process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined) : undefined;
-  const musl = platform === 'linux' && !report?.header?.glibcVersionRuntime;
-  const targets = platform === 'linux' ? (musl ? [`linux-${arch}-musl`, `linux-${arch}`] : [`linux-${arch}`, `linux-${arch}-musl`]) : [`${platform}-${arch}`];
-  for (const target of targets) {
-    try {
-      bundled = createRequire(sdk).resolve(`@anthropic-ai/claude-agent-sdk-${target}/claude${WIN ? '.exe' : ''}`);
-      return bundled;
-    } catch {
-      // not installed for this target
-    }
-  }
-  return null;
-}
-
 /** How to start a CLI: the program and the arguments that come before the office's own. */
 export function commandFor(id: AgentCli): { file: string; args: string[] } | null {
-  const bundled = id === 'claude' ? bundledClaude() : null;
-  if (bundled) return { file: bundled, args: [] };
+  if (!allowedRuntime(id)) return null;
   const def = CLIS.find((c) => c.id === id);
   const found = def && resolveCommand(def.command);
   if (!found) return null;
@@ -174,32 +144,9 @@ export function codexHookCommand(node: string, script: string, win = WIN): strin
 }
 
 export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
+  const error=runtimeModelError(id,ctx.model);if(error)throw new Error(error);
   switch (id) {
-    case 'claude': {
-      const disallowed = ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', ...(ctx.role === 'ceo' ? ['Bash', 'PowerShell', 'NotebookEdit'] : [])];
-      const args = [
-        ...(ctx.resumeId ? ['--resume', ctx.resumeId] : ['--session-id', ctx.sessionId]),
-        ...(ctx.model ? ['--model', ctx.model] : []),
-        ...(ctx.effort ? ['--effort', ctx.effort] : []),
-        // The office's PreToolUse hook answers every permission question (allow, or deny with an office rule).
-        '--permission-mode',
-        'acceptEdits',
-        // On top of the manager's own setup (settings, skills, plugins, MCP servers): the office's hooks and servers.
-        '--settings',
-        ctx.files.settings,
-        ...(ctx.files.mcp ? ['--mcp-config', ctx.files.mcp] : []),
-        '--append-system-prompt-file',
-        ctx.files.system,
-        '--name',
-        ctx.name,
-        ...ctx.additionalDirectories.flatMap((d) => ['--add-dir', d]),
-        '--disallowedTools',
-        ...disallowed,
-        '--',
-        ctx.prompt,
-      ];
-      return { args, env: { DISABLE_AUTOUPDATER: '1' } }; // the office's own copy: agents mustn't each try to update it
-    }
+    case 'gemini': return {args:[...(ctx.model?['--model',ctx.model]:[]),...(ctx.resumeId?['--resume',ctx.resumeId]:[]),'--prompt-interactive',`${ctx.systemAppend}\n\n${ctx.prompt}`],env:{}};
     case 'codex': {
       const toml = (s: string) => JSON.stringify(s); // a JSON string is a valid TOML basic string
       const args = [
@@ -221,6 +168,9 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
     }
     case 'opencode': {
       const config = {
+        enabled_providers: ['openai','google'],
+        model: ctx.model,
+        small_model: ctx.model,
         plugin: [ctx.plugin],
         instructions: [ctx.files.system],
         autoupdate: false, // several agents starting at once must not each reinstall it
@@ -241,22 +191,7 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
       ];
       return { args, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config), CUBEFARM_NOTIFY_URL: ctx.notify.url } };
     }
-    case 'copilot': {
-      // Gemini and non-reasoning flash models in GitHub Copilot CLI reject the --effort flag
-      const supportsEffort = !ctx.model || (!ctx.model.toLowerCase().includes('gemini') && !ctx.model.toLowerCase().includes('flash'));
-      const args = [
-        '--no-auto-update',
-        '--allow-all',
-        '--silent',
-        ...(ctx.model ? ['--model', ctx.model] : []),
-        ...(ctx.effort && supportsEffort ? ['--effort', ctx.effort] : []),
-        ...(ctx.resumeId ? [`--resume=${ctx.resumeId}`] : ['--session-id', ctx.sessionId]),
-        ...(ctx.files.mcp ? ['--additional-mcp-config', `@${ctx.files.mcp}`] : []),
-        '-p',
-        ctx.prompt,
-      ];
-      return { args, env: {} };
-    }
+    default: throw new Error('Unsupported coding runtime');
   }
 }
 
