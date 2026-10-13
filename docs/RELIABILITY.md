@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Worker execution context
+
+Capability admission is bound to the worker task generation and its execution configuration: runtime/defaults, CLI checkpoint, model/effort, actor instructions, primary/linked project identities and requirements, target tenancy, browser mode and platform pause. The office also binds the scoped capability configuration digest and delivery policy. Probe observations and unrelated projects do not change this configuration digest.
+
+Every linked reference repository receives capability checks with the same selected runtime. Changes during readiness deny admission; missing/changed configuration during workspace preparation or before launch denies execution and allows a fresh checked retry. QA and repair records leave their in-progress state when launch admission fails. Live follow-ups verify their scope again before sending; continuation and release-review callers report a denied launch instead of reporting success.
+
+These tests exercise the actual coordinator with synthetic capability/session providers. They do not establish native CLI authentication, persistent sign-in, physical cancellation, fresh effective tenant policy/schema evaluation, or revocation of authority from an already-running process. Changes made outside the office and full pre-tool broker containment require separate live checks and enforcement. Evidence: `.swarm-reliability/admission-context-coverage-2026-10-13.txt`, `admission-context-coverage-exit-2026-10-13.txt`, `admission-context-api-e2e-2026-10-13.txt`, and `admission-context-live-runtime-2026-10-13.json`.
+
 ## Office startup and shutdown
 
 Shutdown handlers are installed before retained-session recovery and capability admission. Quit/restart closes the swarm, tenancy, delivery scheduler, policy reader, capability checks and delivery admission barriers immediately. Cleanup runs concurrently and settles every service; a failing or stalled provider cannot prevent the others from starting cleanup. Repeated requests share one completion and preserve the first restart/quit decision.

@@ -35,7 +35,7 @@ describe('Review regressions', () => {
   });
   it('starts a release review only with its free assigned QA agent and no PR side effects', async () => {
     const agent = { id: 'sherlock', role: 'qa', repoId: 'test/repo', status: 'idle' };
-    const startAgentSession = vi.fn();
+    const startAgentSession = vi.fn((..._args: unknown[]) => true);
     const fake = {reserveTask: () => 1, ownsTask: () => true, deskWriters: new Map(), state: { agents: [agent] }, agentRt: new Map(), slotsFull: () => false, repo: () => ({ fullName: 'test/repo' }), backend: { mainDir: () => 'checkout' }, startAgentSession, save: vi.fn(), emitAgent: vi.fn(), checkTaskCapabilities: vi.fn(async () => true) };
     const review = (Swarm.prototype as unknown as { reviewDeliveryRelease(...args: string[]): Promise<string> }).reviewDeliveryRelease;
     expect(await review.call(fake, 'sherlock', 'test/repo', 'release')).toContain('started');

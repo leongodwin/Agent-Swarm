@@ -297,6 +297,7 @@ export { HttpError };
 
 export class Swarm {
   capabilityFingerprint = () => '';
+  workerAdmissionContext: (repoIds: string[]) => string = () => '';
   capabilityStatus = () => '{}';
   capabilityPreflight: (repoId: string, cli: string) => Promise<string | null> = async () => { throw new Error('Capability service is not configured'); };
   ceoPreflight: (repoIds: string[]) => Promise<string | null> = async () => { throw new Error('CEO readiness is not configured'); };
@@ -358,6 +359,7 @@ export class Swarm {
   private messageSeq = 1;
   private agentRt = new Map<string, AgentRuntime>();
   private taskGenerations = new Map<string, number>();
+  private workerAdmissions = new Map<string, { generation: number; context: string; resume?: string; retainedCli?: AgentCli }>();
   private deskWriters = new Map<string, SerialWriter>();
   private deskOperation<T>(a: PersistedAgent, action: () => Promise<T>): Promise<T> {
     let writer = this.deskWriters.get(a.id);
@@ -367,6 +369,7 @@ export class Swarm {
 
   private taskGeneration(a: PersistedAgent) { return this.taskGenerations.get(a.id) ?? 0; }
   private reserveTask(a: PersistedAgent) {
+    this.workerAdmissions.delete(a.id);
     const generation = this.taskGeneration(a) + 1; this.taskGenerations.set(a.id, generation); return generation;
   }
   private ownsTask(a: PersistedAgent, generation: number) {
@@ -1727,7 +1730,7 @@ export class Swarm {
   }
 
   private async prepare(a: PersistedAgent, repo: PersistedRepo, base: { pr?: number }, branch: string, generation = this.taskGeneration(a)): Promise<string | null> {
-    const active = () => this.ownsTask(a, generation) && a.status === 'preparing';
+    const active = () => this.ownsTask(a, generation) && a.status === 'preparing' && this.validWorkerAdmission(a, repo);
     const slug = this.agentSlug(a);
     return this.deskOperation(a, async () => {
     try {
@@ -1751,11 +1754,52 @@ export class Swarm {
     });
   }
 
+  private workerContext(a: PersistedAgent, repo: PersistedRepo, resume?: string, retainedCli?: AgentCli) {
+    const project = (r: PersistedRepo) => [r.id, r.fullName, r.localPath, r.defaultBranch, r.targetTenancy, r.browserTesting, r.mission, r.summary, r.qaBrief];
+    try {
+    return JSON.stringify([
+      this.state.repos.includes(repo), this.state.agents.includes(a), project(repo),
+      repo.links.map(id => { const linked = this.state.repos.find(r => r.id === id); return linked ? project(linked) : [id, null]; }),
+      a.repoId, a.name, a.role, a.cli, a.sessionCli, a.model, a.effort, a.brief,
+      this.state.settings.runtime, this.state.settings.defaultCli, this.state.settings.defaultModel, this.state.settings.defaultEffort,
+      this.backend.terminals, resume, retainedCli, this.taskPaused(a.issueTitle ?? ''),
+      this.workerAdmissionContext([repo.id, ...repo.links]),
+    ]);
+    } catch { return null; }
+  }
+
+  private validWorkerAdmission(a: PersistedAgent, repo: PersistedRepo, continuation?: {resume?: string; retainedCli?: AgentCli}) {
+    const admission = this.workerAdmissions.get(a.id);
+    // Workspace checks use the exact continuation selected at admission.
+    const {resume, retainedCli} = continuation ?? admission ?? {};
+    if (admission?.generation === this.taskGeneration(a) && admission.context === this.workerContext(a, repo, resume, retainedCli)) return true;
+    a.status = this.taskPaused(a.issueTitle ?? '') ? 'stopped' : 'error'; a.endedAt = Date.now();
+    a.lastError = 'Execution context changed or readiness is missing; retry with fresh capability checks';
+    const record = this.state.qa.find(q => q.repoId === a.repoId && q.prNumber === a.prNumber);
+    if (a.task === 'qa' && record?.status === 'testing') this.setQa(record, {status: 'queued', qaAgentId: null, testedSha: null, passedSha: null});
+    if (a.task === 'fix' && record?.status === 'fixing') this.setQa(record, {status: 'failed'});
+    this.appendLog(a, [{kind: 'error', text: a.lastError}]); this.emitAgent(a); this.save();
+    return false;
+  }
+
   private async sessionReadiness(a: PersistedAgent, repo: PersistedRepo, resume?: string, retainedCli?: AgentCli): Promise<string | null> {
-    if (this.backend.demo) return null;
+    const generation = this.taskGeneration(a);
+    const context = this.workerContext(a, repo, resume, retainedCli);
+    if (context === null) return 'Execution context is unavailable; restore configuration before retrying';
     const terminal = a.role === 'ceo' || this.state.settings.runtime === 'terminal' && this.backend.terminals;
     const cli = retainedCli ?? (!terminal ? 'node' : resume && a.sessionCli && a.role !== 'ceo' ? a.sessionCli : a.cli || this.state.settings.defaultCli);
-    return this.boundedReadiness(() => this.capabilityPreflight(repo.id, cli), 'Capability');
+    const projects = [repo, ...this.linkedRepos(repo)];
+    if (projects.length !== repo.links.length + 1) return 'A linked project is no longer connected';
+    const blocker = this.backend.demo ? null : await this.boundedReadiness(async () => {
+      const checks = await Promise.all(projects.map(async project => {
+        const result = await this.capabilityPreflight(project.id, cli);
+        return result === null ? null : `${projects.length > 1 ? `${project.id}: ` : ''}${result || 'Capability decision is unavailable'}`;
+      }));
+      return checks.find(result => result !== null) ?? null;
+    }, 'Capability');
+    if (context !== this.workerContext(a, repo, resume, retainedCli)) return 'Execution context changed during readiness verification; retry with fresh capability checks';
+    if (blocker === null && this.ownsTask(a, generation)) this.workerAdmissions.set(a.id, {generation, context, resume, retainedCli});
+    return blocker;
   }
 
   private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo, resume?: string, generation = this.taskGeneration(a)) {
@@ -1809,7 +1853,8 @@ export class Swarm {
     /** typed: the manager typed the prompt at the CLI; reattach: follow the CLI that kept working through a restart. */
     mode: 'typed' | 'reattach' | null = null,
   ) {
-    if (this.closed) return;
+    if (this.closed) return false;
+    if (!this.validWorkerAdmission(a, repo, {resume: resumeSessionId, retainedCli: mode === 'reattach' ? a.sessionCli ?? undefined : undefined})) return false;
     const rt = this.agentRt.get(a.id)!;
     const generation = this.taskGeneration(a);
     let completed = false;
@@ -1873,6 +1918,7 @@ export class Swarm {
     );
     if (this.ownsTask(a, generation)) rt.session = completed ? null : handle;
     else if (!completed) handle.stop();
+    return true;
   }
 
   private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a)) {
@@ -2458,7 +2504,7 @@ export class Swarm {
     a.startedAt = Date.now();
     if (a.task === null) a.task = 'issue';
     const fixing = a.task === 'fix' && a.prNumber ? { pr: a.prNumber, headRef: a.branch } : undefined;
-    this.startAgentSession(a, repo, cwd, text, this.buildSystemAppend(a, repo, cwd, a.branch, fixing), a.sessionId, undefined, typed ? 'typed' : null);
+    if (!this.startAgentSession(a, repo, cwd, text, this.buildSystemAppend(a, repo, cwd, a.branch, fixing), a.sessionId, undefined, typed ? 'typed' : null)) throw new HttpError(409, a.lastError || 'Session admission was cancelled');
   }
 
   updateSettings(patch: Partial<SwarmSettings>) {
@@ -3178,8 +3224,9 @@ export class Swarm {
     if (a.status !== 'preparing') throw new HttpError(409, 'Reviewer stopped during readiness verification');
     await this.deskWriters.get(a.id)?.drain().catch(() => undefined);
     if (!this.ownsTask(a, generation) || a.status !== 'preparing') throw new HttpError(409, 'Reviewer stopped while waiting for workspace cleanup');
-    this.startAgentSession(a, repo, this.backend.mainDir(repo.fullName),
+    const started = this.startAgentSession(a, repo, this.backend.mainDir(repo.fullName),
       `Independently review release ${releaseId}. If its run is reviewing, inspect every captured desktop/mobile screenshot, accessibility report, usability results and recovery rehearsal evidence, then call approve_visual with the run ID, evidence hash, five visual scores and specific review notes. Otherwise review the plan. Call delivery_status, inspect the exact pinned commit with git show, read docs/DELIVERY.md, and inspect all acceptance scenarios. Do not modify source or approve weak/static assertions. Every required issue must be implemented in the pinned commit, each component packaged, authorization must exercise denied access, and persistence must prove a write survives reload. If adequate call approve_release with the exact plan hash. Otherwise explain the specific gaps without approving.`, DELIVERY_ENGINEERING);
+    if (!started) throw new HttpError(409, a.lastError || 'Release-review admission was cancelled');
     this.save(); return 'Assigned QA review started';
   }
 

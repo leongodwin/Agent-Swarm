@@ -165,6 +165,9 @@ export class CapabilityService {
   }
   private save() { return this.writer.write(() => atomicWrite(path.join(this.root, 'capabilities.json'), JSON.stringify({ configs: this.configs, results: this.results }, null, 2))); }
   view() { return structuredClone({ results: Object.values(this.results), configuredProjects: Object.keys(this.configs) }); }
+  configurationFingerprint(repoIds: string[]) {
+    return crypto.createHash('sha256').update(JSON.stringify([...new Set(repoIds)].sort().map(id => [id, this.configs[id] ?? null]))).digest('hex');
+  }
   async configure(repoId: string, input: unknown) {
     if (this.stop.signal.aborted) throw new Error('Capability service is closing');
     if (this.demo) throw new HttpError(409, 'Demo cannot configure live capability probes');

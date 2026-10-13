@@ -57,6 +57,17 @@ it('deduplicates probes, caches by environment/CLI/config and persists blockers 
   probe.mockImplementation(async () => {}); expect((await service.check('repo', root, target, 'git', true)).status).toBe('ready');
   expect((await service.check('repo', root, 'https://other.crm4.dynamics.com')).status).toBe('blocked');
 });
+it('binds scoped admission to configuration without invalidation from probe results or unrelated projects', async () => {
+  const { root, service } = await fixture();
+  const missing = service.configurationFingerprint(['repo']);
+  await service.configure('repo', config);
+  const bound = service.configurationFingerprint(['repo']); expect(bound).not.toBe(missing);
+  await service.check('repo', root, target); expect(service.configurationFingerprint(['repo'])).toBe(bound);
+  await service.configure('other', config); expect(service.configurationFingerprint(['repo'])).toBe(bound);
+  expect(service.configurationFingerprint(['repo', 'other', 'repo'])).toBe(service.configurationFingerprint(['other', 'repo']));
+  await service.configure('repo', {...config, environmentUrl: 'https://changed.crm4.dynamics.com'});
+  expect(service.configurationFingerprint(['repo'])).not.toBe(bound);
+});
 it('rejects incomplete plans, ambiguous MCP transports and workflow checks without freshness', () => {
   expect(capabilityConfigSchema.safeParse({ ...config, checks: config.checks.slice(1) }).success).toBe(false);
   expect(capabilityConfigSchema.safeParse({ ...config, checks: [...config.checks, { id: 'flow', category: 'workflow', remedy: 'Repair flow and inspect run history', probe: { kind: 'http', url: 'https://provider.test/status', pointer: ['ok'], equals: true } }] }).success).toBe(false);

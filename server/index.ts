@@ -58,6 +58,7 @@ swarm.engineeringTools = () => createEngineeringTools(swarm.capabilityStatus, {
   }, release: (token) => canvasOwnership.release(token),
 });
 swarm.capabilityFingerprint = () => JSON.stringify(capabilities.view().results.map((r) => [r.repoId, r.status, r.configHash, r.checks]));
+swarm.workerAdmissionContext = repoIds => JSON.stringify([capabilities.configurationFingerprint(repoIds), delivery.view().policy]);
 swarm.capabilityPreflight = async (repoId, cli) => {
   const repo = swarm.snapshot().repos.find((r) => r.id === repoId);
   if (!repo) return 'Project not connected';

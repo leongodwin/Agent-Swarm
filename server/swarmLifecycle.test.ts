@@ -89,7 +89,7 @@ it('does not start a session when preparation completes after shutdown', async (
   let prepared!: (value: string) => void;
   fake.prepareDesk.mockImplementation(() => new Promise<string>(resolve => {prepared = resolve;}));
   await swarm.assign(agent.id, 1);
-  for (let i = 0; i < 10 && !prepared; i++) await Promise.resolve();
+  for (let i = 0; i < 60 && !prepared; i++) await Promise.resolve();
   expect(prepared).toBeTypeOf('function'); await swarm.shutdown(true); prepared(HOME_DIR);
   await Promise.resolve(); await Promise.resolve();
   expect(fake.startSession).not.toHaveBeenCalled();
@@ -288,6 +288,77 @@ it('checks the effective SDK runtime when terminal execution is unavailable', as
   const preflight = vi.fn(async () => 'Synthetic node runtime unavailable'); swarm.capabilityPreflight = preflight;
   await swarm.assign(agent.id, 1); for (let i = 0; i < 20; i++) await Promise.resolve();
   expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'node'); expect(fake.startSession).not.toHaveBeenCalled();
+});
+
+it.each(['runtime', 'model', 'agent', 'project', 'pause', 'policy'])('rejects changed %s context while capability admission is pending', async change => {
+  const {swarm, fake} = await office(true); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  let checked!: (value: string | null) => void;
+  swarm.capabilityPreflight = () => new Promise(resolve => {checked = resolve;});
+  await swarm.assign(agent.id, 1);
+  if (change === 'runtime') swarm.updateSettings({runtime: 'terminal', defaultCli: 'codex'});
+  if (change === 'model') swarm.updateSettings({defaultModel: 'changed-synthetic-model'});
+  if (change === 'agent') swarm.updateAgent(agent.id, {cli: 'codex'});
+  if (change === 'project') swarm.updateRepo('synthetic/repo', {mission: 'New synthetic scope'});
+  if (change === 'pause') swarm.taskPaused = () => true;
+  if (change === 'policy') swarm.workerAdmissionContext = () => 'updated-synthetic-policy';
+  checked(null); for (let i = 0; i < 50; i++) await Promise.resolve();
+  expect(fake.prepareDesk).not.toHaveBeenCalled(); expect(fake.startSession).not.toHaveBeenCalled();
+  expect(swarm.snapshot().agents.find(a => a.id === agent.id)?.lastError).toContain('Execution context changed');
+});
+
+it('denies an unavailable configuration snapshot without issuing probes or leaving a task preparing', async () => {
+  const {swarm, fake} = await office(true); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  const preflight = vi.fn(async () => null); swarm.capabilityPreflight = preflight;
+  swarm.workerAdmissionContext = () => {throw new Error('Synthetic configuration unavailable');};
+  await swarm.assign(agent.id, 1); for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(preflight).not.toHaveBeenCalled(); expect(fake.prepareDesk).not.toHaveBeenCalled();
+  expect(fake.startSession).not.toHaveBeenCalled();
+  expect(swarm.snapshot().agents.find(a => a.id === agent.id)).toMatchObject({status: 'error', lastError: expect.stringContaining('context is unavailable')});
+});
+
+it('does not launch unchecked settings changed during worktree preparation and can retry with fresh admission', async () => {
+  const {swarm, fake} = await office(true); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  let prepared!: (value: string) => void;
+  fake.prepareDesk.mockImplementationOnce(() => new Promise(resolve => {prepared = resolve;}));
+  const preflight = vi.fn(async () => null); swarm.capabilityPreflight = preflight;
+  await swarm.assign(agent.id, 1); for (let i = 0; i < 60 && !prepared; i++) await Promise.resolve();
+  expect(prepared).toBeTypeOf('function'); swarm.updateAgent(agent.id, {model: 'claude-synthetic-model'}); prepared(HOME_DIR);
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+  expect(fake.startSession).not.toHaveBeenCalled();
+  expect(swarm.snapshot().agents.find(a => a.id === agent.id)).toMatchObject({status: 'error', lastError: expect.stringContaining('Execution context changed')});
+  await swarm.assign(agent.id, 1); for (let i = 0; i < 60 && !fake.startSession.mock.calls.length; i++) await Promise.resolve();
+  expect(preflight).toHaveBeenCalledTimes(2); expect(fake.startSession).toHaveBeenCalledOnce();
+  expect(fake.startSession.mock.calls[0][0]).toMatchObject({model: 'claude-synthetic-model'});
+});
+
+it('checks linked repositories and denies a blocked reference before preparing the workspace', async () => {
+  const {swarm, fake} = await office(true);
+  const state = (swarm as unknown as {state: {repos: Array<{id: string; fullName: string; links: string[]}>}}).state;
+  const linked = {...state.repos[0], id: 'synthetic/reference', fullName: 'synthetic/reference', links: []}; state.repos.push(linked);
+  const runtime = (swarm as unknown as {repoRt: Map<string, unknown>}).repoRt;
+  runtime.set(linked.id, {...runtime.get('synthetic/repo') as Record<string, unknown>});
+  swarm.updateRepo('synthetic/repo', {links: [linked.id]});
+  const preflight = vi.fn(async (id: string) => id === linked.id ? 'Reference authentication expired' : null); swarm.capabilityPreflight = preflight;
+  const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  await swarm.assign(agent.id, 1); for (let i = 0; i < 60; i++) await Promise.resolve();
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'node'); expect(preflight).toHaveBeenCalledWith(linked.id, 'node');
+  expect(fake.prepareDesk).not.toHaveBeenCalled(); expect(fake.startSession).not.toHaveBeenCalled();
+  expect(swarm.snapshot().agents.find(a => a.id === agent.id)?.lastError).toContain(`${linked.id}: Reference authentication expired`);
+});
+
+it('does not send a live follow-up if its checked project scope changes', async () => {
+  const {swarm, fake} = await office(true); const agent = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  await swarm.assign(agent.id, 1); for (let i = 0; i < 60 && !fake.startSession.mock.calls.length; i++) await Promise.resolve();
+  const handle = fake.startSession.mock.results[0].value;
+  let checked!: (value: string | null) => void;
+  swarm.capabilityPreflight = () => new Promise(resolve => {checked = resolve;});
+  const pending = swarm.message(agent.id, 'Continue with the synthetic feature');
+  const rejected = expect(pending).rejects.toThrow('Execution context changed');
+  for (let i = 0; i < 20 && !checked; i++) await Promise.resolve();
+  expect(checked).toBeTypeOf('function');
+  swarm.updateRepo('synthetic/repo', {mission: 'Changed project scope'}); checked(null);
+  await rejected; expect(handle.send).not.toHaveBeenCalled();
+  expect(swarm.snapshot().agents.find(a => a.id === agent.id)?.status).toBe('working');
 });
 
 it('does not prepare a workspace when an assignment is stopped during its readiness check', async () => {
