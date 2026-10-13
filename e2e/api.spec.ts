@@ -4,9 +4,12 @@ import { WebSocket } from 'ws';
 test('browser API enforces sessions, schemas and connected repository IDs', async ({ request, baseURL }) => {
   expect((await request.get('/api/state')).status()).toBe(401);
   expect((await request.get('/api/governance/tools')).status()).toBe(401);
+  expect((await request.get('/api/governance/tenant')).status()).toBe(401);
   await request.get('/api/session');
   const governance = await (await request.get('/api/governance/tools')).json();
   expect(governance).toMatchObject({ evaluated: 0, blocked: 0, unavailable: 0, tenantPolicyVerified: false, scope: 'request-local-safeguards', recent: [] });
+  expect(await (await request.get('/api/governance/tenant')).json()).toMatchObject({status:'unavailable',complianceVerified:false});
+  expect((await request.post('/api/governance/tenant/refresh', {data:{tenantId:'5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c'}})).status()).toBe(409);
   const missingHook = await (await request.post('/api/hooks/test-missing-session', { data: { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'pac copilot publish' } } })).json();
   expect(missingHook.hookSpecificOutput.permissionDecision).toBe('deny');
   expect((await request.get('/api/state', { headers: { Origin: 'https://evil.example' } })).status()).toBe(403);

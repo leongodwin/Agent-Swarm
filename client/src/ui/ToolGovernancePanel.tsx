@@ -5,13 +5,25 @@ import { useStore } from '../store';
 
 export function ToolGovernancePanel() {
   const resource = useResource('office-tool-governance', api.toolGovernance);
+  const policies = useResource('office-tenant-policy', api.tenantDlp);
+  const policyCurrent = useRef(policies); policyCurrent.current = policies;
   const current = useRef(resource); current.current = resource;
   const agents = useStore((state) => state.agents);
   useEffect(() => { const timer=setInterval(() => { if (!current.current.loading) current.current.refresh(); },5000); return () => clearInterval(timer); },[]);
+  useEffect(() => { const timer=setInterval(() => { if (!policyCurrent.current.loading) policyCurrent.current.refresh(); },5000); return () => clearInterval(timer); },[]);
   const view=resource.value;
   return <section aria-label="Operations and tool audit">
     <div className="row"><h3>Operations &amp; tool audit</h3><span className="spacer" /><button className="btn btn-small" onClick={resource.refresh} disabled={resource.loading}>Refresh audit</button></div>
     <p className="muted small">Recorded request safeguards. These counts cover observed checkpoints, not all tool calls or verified tenant compliance.</p>
+    <div className="card" aria-label="Tenant policy inventory">
+      <strong>Standard tenant policy inventory</strong>
+      {policies.error ? <p role="alert">Policy inventory unavailable: {policies.error}</p> : policies.value ? <>
+        <p>Status: {policies.value.status}{policies.value.policyCount !== undefined && ` · ${policies.value.policyCount} policies in the saved observation`}</p>
+        {policies.value.caller && <p className="small">{policies.value.caller} · {policies.value.tenantId}</p>}
+        {policies.value.observedAt && <p className="small">Observed <time dateTime={policies.value.observedAt}>{new Date(policies.value.observedAt).toLocaleString()}</time></p>}
+        <p className="muted small">{policies.value.reason}. Inventory alone does not verify compliance.</p>
+      </> : <p role="status">Loading policy observation…</p>}
+    </div>
     {resource.loading && <p role="status">Loading tool audit…</p>}
     {resource.error && <p role="alert">Audit unavailable: {resource.error}</p>}
     {view && <>

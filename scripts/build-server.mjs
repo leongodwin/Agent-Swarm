@@ -23,4 +23,5 @@ await build({
 });
 // Loaded by path at runtime: agentRunner.ts hands it to each agent's Playwright browser.
 fs.copyFileSync(path.join(root, 'server', 'browser-init.js'), path.join(out, 'browser-init.js'));
+fs.copyFileSync(path.join(root, 'server', 'tenantDlpReader.ps1'), path.join(out, 'tenantDlpReader.ps1'));
 console.log(`built ${path.relative(root, out)}/index.js`);

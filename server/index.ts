@@ -26,6 +26,7 @@ import { createBrowserAuth } from './browserAuth.ts';
 import { CanvasOwnership } from './canvasOwnership.ts';
 import { z } from 'zod';
 import { ToolGovernanceService, setToolGovernanceGate } from './toolGovernance.ts';
+import { TenantDlpService } from './tenantDlp.ts';
 import { parseBody, proposalSchema, hldSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
@@ -39,6 +40,8 @@ const delivery = new DeliveryService(HOME_DIR, backend.demo, undefined, RESOURCE
 await delivery.init();
 const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'), () => !!delivery.view().policy?.copilotPaused);
 await toolGovernance.init();
+const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
+await tenantDlp.init();
 setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, input, checkpoint));
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();
@@ -132,6 +135,14 @@ app.get('/api/capabilities', route(() => capabilities.view()));
 app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
 app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, demo: backend.demo, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
 app.get('/api/governance/tools', route(() => toolGovernance.view()));
+app.get('/api/governance/tenant', route(() => tenantDlp.view()));
+app.post('/api/governance/tenant/refresh', route(async (req) => {
+  if (backend.demo) throw new HttpError(409, 'Demo cannot authenticate or read tenant policy');
+  const input = parseBody(z.object({ tenantId: z.uuid() }).strict(), req.body);
+  const tenancy = await backend.tenancy.info();
+  if (tenancy.status !== 'connected' || !tenancy.user) throw new HttpError(409, 'Connect the intended account before policy discovery');
+  return tenantDlp.refresh({ tenantId: input.tenantId, caller: tenancy.user });
+}));
 app.post('/api/authoring/canvas/:app/lease', route(async (req) => {
   if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
   const { app: appId } = parseBody(z.object({ app: z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i) }), req.params);
@@ -379,7 +390,7 @@ const shutdown = (signal: string) => {
   clearInterval(deliveryTimer);
   console.log(`\n  ${signal}: stopping floor previews…`);
   const force = setTimeout(() => process.exit(0), 15_000);
-  void capabilities.close().then(() => delivery.close()).then(() => swarm
+  void tenantDlp.close().then(() => capabilities.close()).then(() => delivery.close()).then(() => swarm
     .shutdown(signal === 'restart'))
     .catch((err) => console.error(err))
     .finally(() => {
