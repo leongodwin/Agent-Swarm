@@ -7,6 +7,7 @@ import { atomicWrite } from './atomicFile.ts';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {declaredSchemaObservation,type DeclaredSchemaObserver} from './declaredSchema.ts';
+import {comparePackageSchema} from './packageSchema.ts';
 
 /** Declaration-level standard checks may deny, but cannot authorize a release.
  * A full provider must also independently extract package resources and evaluate
@@ -27,8 +28,11 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
         const found=manifest.targetComponents.some(declared=>component.type===1?declared.kind==='dataverse-table'&&declared.logicalName.toLowerCase()===component.name?.toLowerCase():component.type===29?declared.kind==='cloud-flow'&&declared.logicalName.toLowerCase()===component.id:declared.kind==='canvas'&&declared.logicalName.toLowerCase()===component.name?.toLowerCase());
         if(!found)return {...base,status:'blocked',reasons:[`Package root component type ${component.type} lacks its exact approved component declaration`]};
       }
+      const packageSchema=comparePackageSchema(inventory,manifest);
+      if(packageSchema.status==='blocked')return {...base,status:'blocked',reasons:packageSchema.reasons};
+      packageIssues.push(...packageSchema.reasons);
       resources=inventory.resources.filter(resource=>resource.complete).map(resource=>({id:resource.id,complete:true,connectors:resource.connectors}));
-      if(!inventory.resourceInventoryComplete)packageIssues=inventory.issues.slice(0,15).map(issue=>issue.slice(0,1000));
+      if(!inventory.resourceInventoryComplete)packageIssues.push(...inventory.issues.slice(0,15).map(issue=>issue.slice(0,1000)));
       if(!resources.length)return {...base,reasons:['No fully inspectable app/flow resource connector inventory is available',...packageIssues]};
       for(const reference of inventory.connections)if(!manifest.postDeployActions.some(action=>action.type==='connection-reference-check'&&manifest.targetComponents.some(component=>component.key===action.component&&component.logicalName.toLowerCase()===reference.name)&&action.connectorId.replace(/^\/providers\/Microsoft.PowerApps\/apis\//i,'').toLowerCase()===reference.connector))return {...base,status:'blocked',reasons:[`Package connection reference ${reference.name} lacks its exact approved connector/binding declaration`]};
     }

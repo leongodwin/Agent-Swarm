@@ -12,11 +12,13 @@ const logical=(value:any)=>{const name=text(value).toLowerCase();if(!/^[a-z_][a-
 const guid=(value:string)=>{const id=value.replace(/[{}]/g,'').toLowerCase();if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))throw new Error('Invalid component ID');return id;};
 export interface PackageFile {path:string;bytes:number;sha256:string}
 export interface PackageResource {id:string;kind:'cloud-flow'|'canvas';complete:boolean;connectors:string[];tables:string[];operations:{type:string;operationId?:string;connector?:string}[]}
+export interface PackageRelationship {schemaName:string;kind:'one-to-many'|'many-to-many'|'unsupported';complete:boolean;metadataSha256:string;referencedEntity?:string;referencingEntity?:string;referencingAttribute?:string;entity1?:string;entity2?:string;intersectEntity?:string;cascade:Record<string,string>}
 export interface PackageInventory {
   schemaVersion:1;scope:'package-metadata-inventory';packageSha256:string;archiveComplete:boolean;resourceInventoryComplete:boolean;
   solution?:{name:string;version:string;managed:boolean};files:PackageFile[];
   components:{type:number;id?:string;name?:string;behavior?:string}[];
-  tables:{name:string;partial:boolean;attributes:{name:string;type:string;required:string;metadataSha256:string}[]}[];
+  tables:{name:string;partial:boolean;attributes:{name:string;type:string;required:string;metadataSha256:string}[];keys:{schemaName:string;attributes:string[];metadataSha256:string}[]}[];
+  relationships:PackageRelationship[];
   connections:{name:string;connector:string}[];resources:PackageResource[];issues:string[];complianceVerified:false;
 }
 export interface ArchiveLimits {compressedBytes:number;entryBytes:number;expandedBytes:number;entries:number;ratio:number}
@@ -68,7 +70,7 @@ function packagePath(value:any){const path=text(value).replace(/^\//,'');safeNam
 /** Read-only inspection: no extraction, executable code, tenant calls or formula execution.
  * Integrity completion is separate from connector/resource and effective-policy completion. */
 export async function inspectSolutionPackage(file:string,signal?:AbortSignal,limits:ArchiveLimits=defaults):Promise<PackageInventory> {
-  const report:PackageInventory={schemaVersion:1,scope:'package-metadata-inventory',packageSha256:'',archiveComplete:false,resourceInventoryComplete:false,files:[],components:[],tables:[],connections:[],resources:[],issues:[],complianceVerified:false};
+  const report:PackageInventory={schemaVersion:1,scope:'package-metadata-inventory',packageSha256:'',archiveComplete:false,resourceInventoryComplete:false,files:[],components:[],tables:[],relationships:[],connections:[],resources:[],issues:[],complianceVerified:false};
   const issue=(reason:string)=>{if(report.issues.length<100&&!report.issues.includes(reason))report.issues.push(reason);};
   try {
     for(const key of Object.keys(defaults) as (keyof ArchiveLimits)[])if(!Number.isSafeInteger(limits[key])||limits[key]<0||limits[key]>defaults[key])throw new Error('Invalid archive processing bounds');
@@ -79,7 +81,7 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
     if(!files.has('solution.xml')||!files.has('customizations.xml'))throw new Error('Required solution metadata is missing');
     const manifest=xml(files.get('solution.xml')!).SolutionManifest,custom=xml(files.get('customizations.xml')!);
     if(!manifest||!custom)throw new Error('Invalid solution roots');
-    for(const [section,value] of Object.entries(custom))if(!section.startsWith('@_')&&!['Entities','Workflows','CanvasApps','connectionreferences','Languages'].includes(section)&&value!==''&&value!==undefined)issue(`Customization section ${section} requires additional semantic validation`);
+    for(const [section,value] of Object.entries(custom))if(!section.startsWith('@_')&&!['Entities','EntityRelationships','Workflows','CanvasApps','connectionreferences','Languages'].includes(section)&&value!==''&&value!==undefined)issue(`Customization section ${section} requires additional semantic validation`);
     const name=text(manifest.UniqueName),version=text(manifest.Version),managed=text(manifest.Managed);
     if(!/^[a-z_][a-z0-9_]*$/i.test(name)||!/^\d+\.\d+\.\d+\.\d+$/.test(version)||!['0','1'].includes(managed))throw new Error('Invalid solution identity');report.solution={name,version,managed:managed==='1'};
     const roots=new Set<string>();
@@ -90,13 +92,40 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
       report.components.push({type,id,name,behavior:component['@_behavior']});
       if(![1,29,300].includes(type))issue(`Component type ${type} requires an additional governance adapter`);
     }
-    for(const entity of array(custom.Entities?.Entity)) {
+    const entities=array(custom.Entities?.Entity);if(entities.length>100)throw new Error('Table schema inventory limit');
+    for(const entity of entities) {
       const name=logical(entity.Name),info=entity.EntityInfo?.entity;const root=report.components.find(component=>component.type===1&&component.name?.toLowerCase()===name);
       if(report.tables.some(table=>table.name===name)||info&&logical(info['@_Name'])!==name)throw new Error('Ambiguous table metadata identity');
       if(!root)issue(`Table ${name} is not a declared root component`);
       const attributes=array(info?.attributes?.attribute).map(attribute=>({name:logical(attribute.LogicalName),type:text(attribute.Type),required:text(attribute.RequiredLevel),metadataSha256:sha(JSON.stringify(attribute))}));
+      if(attributes.length>=5000)throw new Error('Attribute schema inventory limit');
       if(new Set(attributes.map(attribute=>attribute.name)).size!==attributes.length)throw new Error('Duplicate attribute');
-      report.tables.push({name,partial:root?.behavior!=='0',attributes});
+      const keys=array(info?.EntityKeys?.EntityKey).map(key=>{
+        const schemaName=text(key.Name);if(!/^[A-Za-z_][A-Za-z0-9_]{0,199}$/.test(schemaName))throw new Error('Invalid package key name');
+        const columns=array(key.EntityKeyAttributes?.AttributeName).map(logical);
+        if(!columns.length||columns.length>16||new Set(columns).size!==columns.length||columns.some(column=>!attributes.some(attribute=>attribute.name===column)))throw new Error('Invalid package key columns');
+        return {schemaName,attributes:columns,metadataSha256:sha(JSON.stringify(key))};
+      });
+      if(keys.length>10||new Set(keys.map(key=>key.schemaName.toLowerCase())).size!==keys.length)throw new Error('Ambiguous package keys');
+      report.tables.push({name,partial:root?.behavior!=='0',attributes,keys});
+    }
+    const relationships=array(custom.EntityRelationships?.EntityRelationship),relationshipNames=new Set<string>();if(relationships.length>10000)throw new Error('Relationship schema inventory limit');
+    for(const relationship of relationships){
+      const schemaName=text(relationship['@_Name']);if(!/^[A-Za-z_][A-Za-z0-9_]{0,199}$/.test(schemaName)||relationshipNames.has(schemaName.toLowerCase()))throw new Error('Ambiguous package relationship');relationshipNames.add(schemaName.toLowerCase());
+      const kind=text(relationship.EntityRelationshipType)==='OneToMany'?'one-to-many':text(relationship.EntityRelationshipType)==='ManyToMany'?'many-to-many':'unsupported';
+      const fact:PackageRelationship={schemaName,kind,complete:false,metadataSha256:sha(JSON.stringify(relationship)),cascade:{}};
+      try{
+        if(kind==='one-to-many'){
+          fact.referencedEntity=logical(relationship.ReferencedEntityName);fact.referencingEntity=logical(relationship.ReferencingEntityName);fact.referencingAttribute=logical(relationship.ReferencingAttributeName);
+          for(const action of ['Assign','Delete','Archive','Reparent','Share','Unshare','Merge','RollupView'])if(relationship[`Cascade${action}`]!==undefined){const value=text(relationship[`Cascade${action}`]);if(!['NoCascade','Cascade','Active','UserOwned','RemoveLink','Restrict'].includes(value))throw new Error('Unknown cascade behavior');fact.cascade[action]=value;}
+          fact.complete=!!fact.cascade.Delete;
+        }else if(kind==='many-to-many'){
+          fact.entity1=logical(relationship.FirstEntityName);fact.entity2=logical(relationship.SecondEntityName);fact.intersectEntity=logical(relationship.IntersectEntityName);fact.complete=true;
+        }
+      }catch{fact.complete=false;}
+      report.relationships.push(fact);
+      if(!fact.complete)issue(`Relationship ${schemaName} requires additional structure validation`);
+      issue(`Relationship ${schemaName} still requires navigation, hierarchy and effective security validation`);
     }
     const connections=new Map<string,string>();
     for(const reference of array(custom.connectionreferences?.connectionreference)) {

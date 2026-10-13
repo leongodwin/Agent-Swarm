@@ -453,4 +453,14 @@ Native read-only MyDevNet controls verified the actual Expense Report/Line Item 
 
 Declared structures extend validation coverage; optional or absent declarations do not establish complete schema governance. Independent package-derived schema inventory, undeclared structures, effective security and complete tenant DLP remain required before full release authorization. The final full suite passed 1,057 tests with one TODO across 92 files; build/typecheck passed. The coverage run before the additional reconciliation regression measured 4,860/8,031 backend branches (60.51%), still below the unchanged 90.01% gate. Copilot Studio remains paused.
 
+## Independent packaged schema comparison (2026-10-13)
+
+The ZIP inspector now records metadata-digest-bound alternate keys and one-to-many/many-to-many relationship facts from exported customization XML. Native field shapes were checked against the saved Expense export and Microsoft's bundled customization XSD; unsupported structures remain incomplete. Processing bounds cap tables, attributes, relationships and keys. Duplicate identities and key references to absent packaged columns deny integrity verification. Relationship navigation, hierarchy and effective-security gaps remain explicitly reported.
+
+Delivery compares supported source column types/required levels, key column sets, relationship endpoints and every packaged cascade action with approved contracts. Missing or conflicting supported declarations block before policy discovery. Relationship declarations must belong to a related approved table. Partial exports and unsupported semantics cannot be promoted to compliance; source constraints, referenced primary attributes, target indexes and effective security require further evidence. A synthetic packaged undeclared relationship was rejected at all six lifecycle stages, and fixing its declaration still left full governance unavailable.
+
+The saved MyDevNet-verified ZIP passed integrity inspection with 87 attributes across three Expense tables, a partial system-user component, and 22 supported relationship records; it contained no alternate keys. Its independently derived Expense Report/Line Item relationship and primary attribute also matched fresh MyDevNet metadata with stable WhoAmI user/organization readings. This verifies one source-to-target relationship, not a fresh tenant export/import, comprehensive target acceptance or business-policy approval. Canvas runtime/formula bindings, the plugin assembly and remaining opaque metadata continue to block comprehensive acceptance. No tenant changes occurred.
+
+Validation: 1,076 tests passed with one TODO across 93 files; build/typecheck passed. Backend branch coverage is 4,960/8,124 (61.05%), below the unchanged 90.01% gate, so the coverage command fails. Copilot Studio remains paused.
+
 References: https://geminicli.com/docs/hooks/reference/ and https://geminicli.com/docs/reference/configuration/ .

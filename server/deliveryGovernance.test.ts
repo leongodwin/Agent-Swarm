@@ -9,7 +9,7 @@ const manifest={schemaVersion:1,solutionUniqueName:'Expenses',solutionVersion:'1
 const request:LifecycleRequest={phase:'build',sourceCommit:'a'.repeat(40),environmentUrl:'https://test.crm4.dynamics.com',releaseId:'release-1',checkout:'unused',manifest};
 const observation=(policies:unknown[]=[])=>({schemaVersion:1,tenantId:guid,caller:'tester@company.test',observedAt:new Date().toISOString(),source:'Get-DlpPolicy module route',moduleVersion:'2.0.219',scope:'standard-policy-inventory',complete:true,pages:1,policies});
 const directories:string[]=[];afterEach(async()=>{await Promise.all(directories.splice(0).map(directory=>fs.rm(directory,{recursive:true,force:true})));});
-async function packaged() {
+async function packaged(customizationExtra='',rootExtra='') {
   const checkout=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-governed-package-'));directories.push(checkout);const evidenceDirectory=path.join(checkout,'evidence');
   const definition = {
     triggers: { tick: { type: 'Recurrence' } },
@@ -23,8 +23,8 @@ async function packaged() {
     mail: { api: { name: 'shared_office365' }, connection: { connectionReferenceLogicalName: 'exp_outlook' } },
   };
   const entries = {
-    'solution.xml': `<ImportExportXml><SolutionManifest><UniqueName>Expenses</UniqueName><Version>1.0.0.0</Version><Managed>0</Managed><RootComponents><RootComponent type="29" id="{${guid}}"/></RootComponents></SolutionManifest></ImportExportXml>`,
-    'customizations.xml': `<ImportExportXml><connectionreferences><connectionreference connectionreferencelogicalname="exp_dataverse"><connectorid>shared_commondataserviceforapps</connectorid></connectionreference><connectionreference connectionreferencelogicalname="exp_outlook"><connectorid>shared_office365</connectorid></connectionreference></connectionreferences><Workflows><Workflow WorkflowId="{${guid}}"><Category>5</Category><JsonFileName>/Workflows/flow.json</JsonFileName></Workflow></Workflows></ImportExportXml>`,
+    'solution.xml': `<ImportExportXml><SolutionManifest><UniqueName>Expenses</UniqueName><Version>1.0.0.0</Version><Managed>0</Managed><RootComponents><RootComponent type="29" id="{${guid}}"/>${rootExtra}</RootComponents></SolutionManifest></ImportExportXml>`,
+    'customizations.xml': `<ImportExportXml><connectionreferences><connectionreference connectionreferencelogicalname="exp_dataverse"><connectorid>shared_commondataserviceforapps</connectorid></connectionreference><connectionreference connectionreferencelogicalname="exp_outlook"><connectorid>shared_office365</connectorid></connectionreference></connectionreferences><Workflows><Workflow WorkflowId="{${guid}}"><Category>5</Category><JsonFileName>/Workflows/flow.json</JsonFileName></Workflow></Workflows>${customizationExtra}</ImportExportXml>`,
     'Workflows/flow.json': JSON.stringify({ properties: { connectionReferences, definition } }),
   };
   const archive=new ZipFile();const chunks:Buffer[]=[];const bytes=new Promise<Buffer>((resolve,reject)=>{archive.outputStream.on('data',chunk=>chunks.push(chunk));archive.outputStream.on('end',()=>resolve(Buffer.concat(chunks)));archive.outputStream.on('error',reject);});for(const [name,body] of Object.entries(entries))archive.addBuffer(Buffer.from(body),name,{compress:false});archive.end();const buffer=await bytes;await fs.writeFile(path.join(checkout,'release.zip'),buffer);
@@ -94,4 +94,17 @@ it('rejects package drift and omitted components/bindings while keeping unsuppor
   expect((await check({...input,manifest:{...input.manifest,targetComponents:input.manifest.targetComponents.filter(component=>component.key!=='flow')}})).status).toBe('blocked');
   const missing=await check({...input,manifest:{...input.manifest,targetComponents:input.manifest.targetComponents.filter(component=>component.key!=='outlook'),postDeployActions:input.manifest.postDeployActions.filter(action=>action.component!=='outlook')}});expect(missing.status).toBe('blocked');expect(missing.reasons[0]).toContain('exp_outlook');
   const ready=await check(input);expect(ready.status).toBe('unavailable');expect(ready.reasons[0]).toContain('Inspectable package resources');expect(ready.reasons[0]).toContain('unverified');
+});
+
+it('rejects independently packaged undeclared relationships at each stage before policy observation',async()=>{
+  const custom='<Entities><Entity><Name>exp_report</Name><EntityInfo><entity Name="exp_report"><attributes><attribute><LogicalName>exp_code</LogicalName><Type>nvarchar</Type><RequiredLevel>none</RequiredLevel></attribute></attributes></entity></EntityInfo></Entity></Entities><EntityRelationships><EntityRelationship Name="exp_Report_Line"><EntityRelationshipType>OneToMany</EntityRelationshipType><ReferencedEntityName>exp_report</ReferencedEntityName><ReferencingEntityName>exp_line</ReferencingEntityName><ReferencingAttributeName>exp_report</ReferencingAttributeName><CascadeDelete>Restrict</CascadeDelete></EntityRelationship></EntityRelationships>';
+  const input=await packaged(custom,'<RootComponent type="1" schemaName="exp_report" behavior="0"/>');
+  const declared={...input.manifest,targetComponents:[...input.manifest.targetComponents,{key:'report',kind:'dataverse-table',logicalName:'exp_report'}],postDeployActions:[...input.manifest.postDeployActions,{id:'schema',type:'schema-check',component:'report',columns:[{name:'exp_code',type:'String',required:'None'}]}]};
+  const observe=vi.fn(()=>observation());const check=createDeliveryGovernance({observation:observe});
+  for(const phase of ['build','test','import','post-deploy','verify','health'] as const){
+    const denied=await check({...input,manifest:declared,phase});expect(denied.status).toBe('blocked');expect(denied.reasons[0]).toContain('Package relationship');expect(denied.packageInventoryFile).toBeDefined();
+  }
+  expect(observe).not.toHaveBeenCalled();
+  const fixed=structuredClone(declared);Object.assign(fixed.postDeployActions[fixed.postDeployActions.length-1],{structure:{relationships:[{kind:'one-to-many',schemaName:'exp_Report_Line',referencedEntity:'exp_report',referencedAttribute:'exp_reportid',referencingEntity:'exp_line',referencingAttribute:'exp_report',cascade:{Delete:'Restrict'}}]}});
+  const result=await check({...input,manifest:fixed});expect(result.status).toBe('unavailable');expect(result.reasons.join(' ')).toContain('Supported packaged');
 });
