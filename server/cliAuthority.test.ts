@@ -2,19 +2,20 @@ import fs from 'node:fs/promises';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import type { AgentTerminal } from './terminal.ts';
 import type { SessionOptions } from './agentRunner.ts';
-const native = vi.hoisted(() => ({token: '', kill: vi.fn(),data:undefined as undefined|((data:string)=>void),exit:undefined as undefined|((code:number)=>void)}));
+const native = vi.hoisted(() => ({token: '', kill: vi.fn(),write:vi.fn(),args:[] as string[],data:undefined as undefined|((data:string)=>void),exit:undefined as undefined|((code:number)=>void)}));
 vi.mock('./config.ts', async importOriginal => {
   const real = await importOriginal<typeof import('./config.ts')>();
   const fs = await import('node:fs/promises'); const os = await import('node:os'); const path = await import('node:path');
   return {...real, HOME_DIR: await fs.mkdtemp(path.join(os.tmpdir(), 'cli-authority-'))};
 });
 vi.mock('./clis.ts', async importOriginal => ({...await importOriginal<typeof import('./clis.ts')>(), commandFor: () => ({file:'synthetic-cli',args:[]})}));
+vi.mock('./geminiBridge.ts',async original=>({...await original<typeof import('./geminiBridge.ts')>(),verifyGeminiProfile:vi.fn(async()=>null)}));
 vi.mock('./ptyClient.ts', () => ({
   terminalsAvailable: true, keeperHookUrl: () => 'http://127.0.0.1:1', keeperPid: () => 0,
   hooksReady: vi.fn(), leaveKeeper: vi.fn(), discardPty: vi.fn(), adoptPty: vi.fn(), startKeeper: vi.fn(),
   spawnPty: (_file: string, _args: string[], _options: unknown, meta: {token: string}) => {
-    native.token=meta.token;
-    return {pid:0,write:vi.fn(),resize:vi.fn(),kill:native.kill,setMeta:vi.fn(),onData:(handler:(data:string)=>void)=>{native.data=handler;},onExit:(handler:(code:number)=>void)=>{native.exit=handler;}};
+    native.token=meta.token;native.args=_args;
+    return {pid:0,write:native.write,resize:vi.fn(),kill:native.kill,setMeta:vi.fn(),onData:(handler:(data:string)=>void)=>{native.data=handler;},onExit:(handler:(code:number)=>void)=>{native.exit=handler;}};
   },
 }));
 import { HOME_DIR } from './config.ts';
@@ -22,6 +23,8 @@ import { handleHook, releaseClis, startCliSession,reconnectClis } from './cliRun
 import {startKeeper,discardPty,adoptPty} from './ptyClient.ts';
 import { setToolGovernanceGate } from './toolGovernance.ts';
 import {OPENCODE_PLUGIN_SOURCE} from './clis.ts';
+import {GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
+import crypto from 'node:crypto';
 
 afterEach(async () => { await releaseClis(false); vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs(); setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'})); });
 afterAll(async () => fs.rm(HOME_DIR,{recursive:true,force:true,maxRetries:10,retryDelay:100}));
@@ -79,6 +82,38 @@ it('carries an OpenCode pre-tool request through live session authority and deni
   const factory=new Function(`return (${OPENCODE_PLUGIN_SOURCE.replace('export default async function','async function')});`)();const plugin=await factory({});
   const denied=expect(plugin['tool.execute.before']({tool:'write',callID:'synthetic-tool',sessionID:'root'},{args:{filePath:'Workflows/expense.json',content:'shared_commondataserviceforapps'}})).rejects.toThrow('execution denied');
   for(let i=0;i<50&&!complete;i++)await Promise.resolve();expect(complete).toBeTypeOf('function');active=false;complete();await denied;handle.stop();
+});
+
+it.each([false,true])('withholds the Gemini task and input until an actual bridge acknowledgement: %s',async attested=>{
+  vi.useFakeTimers();setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic scan'}));
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=> 'Type your message',appCursor:false} as unknown as AgentTerminal;
+  const callback={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
+  native.write.mockClear();const handle=startCliSession({cwd:HOME_DIR,prompt:'Synthetic confidential task',systemAppend:'Synthetic office instructions',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'gemini',terminal:term,authorizeTool:()=>null},callback);
+  for(let i=0;i<20&&!(term.bind as any).mock.calls.length;i++)await Promise.resolve();
+  const input=(term.bind as any).mock.calls[0][0];
+  expect(native.args.join(' ')).not.toContain('Synthetic confidential task');
+  // The startup callback must deny an old bridge and an unacknowledged pre-tool request.
+  expect(JSON.stringify(await handleHook(native.token,{hook_event_name:'SessionStart',session_id:'synthetic-session'}))).toContain('deny');
+  if(attested){
+    const sha=crypto.createHash('sha256').update(GEMINI_HOOK_SOURCE).digest('hex');
+    await handleHook(native.token,{hook_event_name:'SessionStart',session_id:'synthetic-session',bridgeSha256:sha});
+    await vi.advanceTimersByTimeAsync(1200);expect(native.write.mock.calls.flat().join(' ')).toContain('Synthetic confidential task');expect(callback.sessionId).toHaveBeenCalledWith('synthetic-session');expect(callback.finished).not.toHaveBeenCalled();
+  }else{
+    input.write('Unverified typed task');handle.send('Unverified follow-up');await vi.advanceTimersByTimeAsync(90000);
+    expect(native.write).not.toHaveBeenCalled();expect(callback.finished).toHaveBeenCalledOnce();expect(callback.finished.mock.calls[0][0]).toMatchObject({ok:false,errors:[expect.stringContaining('no task was sent')]});
+  }
+  handle.stop();
+});
+it('does not spawn Gemini when its required protected profile is unavailable',async()=>{
+  vi.mocked(verifyGeminiProfile).mockResolvedValueOnce('Synthetic protected profile is unavailable');native.write.mockClear();
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+  const finished=vi.fn();startCliSession({cwd:HOME_DIR,prompt:'Confidential synthetic task',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'gemini',terminal:term,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+  for(let i=0;i<30&&!finished.mock.calls.length;i++)await Promise.resolve();expect(finished).toHaveBeenCalledOnce();expect(term.bind).not.toHaveBeenCalled();expect(native.write).not.toHaveBeenCalled();expect(finished.mock.calls[0][0]).toMatchObject({ok:false,errors:['Synthetic protected profile is unavailable']});
+});
+it('does not treat a long-lived zero exit as proof of successful Codex work',async()=>{
+  vi.useFakeTimers();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;const finished=vi.fn();
+  startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+  await vi.advanceTimersByTimeAsync(21000);native.exit!(0);expect(finished).toHaveBeenCalledOnce();expect(finished.mock.calls[0][0]).toMatchObject({ok:false,text:'',errors:[expect.stringContaining('before finishing')]});
 });
 
 it('rejects a disallowed CLI before spawning a terminal process',()=>{

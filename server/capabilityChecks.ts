@@ -1,3 +1,5 @@
+import {verifyGeminiProfile} from './geminiBridge.ts';
+import {commandFor} from './clis.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -242,6 +244,7 @@ export class CapabilityService {
       })));
       try { await probe({ id: 'github-auth', category: 'authentication', remedy: 'Sign in with gh auth login', probe: { kind: 'github-auth' } }); checks.push({ id: 'github-auth', category: 'authentication', passed: true, detail: 'GitHub authentication verified', remedy: '' }); }
       catch { checks.push({ id: 'github-auth', category: 'authentication', passed: false, detail: 'GitHub authentication unavailable', remedy: 'Sign in with gh auth login and refresh readiness.' }); }
+      if(cli==='gemini'){const blocker=await verifyGeminiProfile(commandFor('gemini')).catch(()=> 'Gemini protected profile validation is unavailable');checks.push({id:'gemini-governance',category:'cli',passed:blocker===null,detail:blocker??'Native protected-profile security validation passed; session attestation is still required',remedy:blocker?'Provision the reviewed administrator-owned Gemini governance artifacts':''});}
       const worker = ['codex', 'gemini', 'opencode', 'git', 'node'].includes(cli) ? cli : 'git';
       try { await probe({ id: 'worker-cli', category: 'cli', remedy: 'Install the selected worker CLI', probe: { kind: 'cli', executable: worker as 'git', minimumVersion: '0.0.1' } }); checks.push({ id: 'worker-cli', category: 'cli', passed: true, detail: 'Worker CLI responds', remedy: '' }); }
       catch { checks.push({ id: 'worker-cli', category: 'cli', passed: false, detail: 'Worker CLI is unavailable', remedy: 'Install the selected worker CLI and refresh readiness.' }); }

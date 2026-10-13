@@ -1,3 +1,4 @@
+import {geminiSettings,GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
 import {runtimeModelError} from '../shared/runtimePolicy.ts';
 import { playwrightMcp } from './browserTools.ts';
 import crypto from 'node:crypto';
@@ -7,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { HOME_DIR } from './config.ts';
-import { cliLabel, CODEX_HOOK_SOURCE, codexThread, commandFor, hookReviewKey, interruptions, isCli, launchArgs, NOTIFY_SOURCE, OPENCODE_PLUGIN_SOURCE, STATUSLINE_SOURCE, trustKey } from './clis.ts';
+import { codexHookCommand,cliLabel, CODEX_HOOK_SOURCE, codexThread, commandFor, hookReviewKey, interruptions, isCli, launchArgs, NOTIFY_SOURCE, OPENCODE_PLUGIN_SOURCE, STATUSLINE_SOURCE, trustKey } from './clis.ts';
 import { adoptPty, discardPty, hooksReady, keeperHookUrl, keeperPid, leaveKeeper, spawnPty, startKeeper, terminalsAvailable, type Pty } from './ptyClient.ts';
 import {
   clip,
@@ -118,6 +119,7 @@ function writeHelpers() {
   fs.writeFileSync(path.join(BIN_DIR, 'notify.cjs'), NOTIFY_SOURCE);
   fs.writeFileSync(path.join(BIN_DIR, 'codex-hook.cjs'), CODEX_HOOK_SOURCE);
   fs.writeFileSync(path.join(BIN_DIR, 'opencode-plugin.mjs'), OPENCODE_PLUGIN_SOURCE);
+  fs.writeFileSync(path.join(BIN_DIR,'gemini-hook.cjs'),GEMINI_HOOK_SOURCE);
   helpersWritten = true;
 }
 
@@ -170,6 +172,7 @@ function quietly(fn: () => void) {
  * outlives an office restart, held by the terminal keeper.
  */
 interface LiveCli {
+  governanceReady?:boolean;
   agentId: string;
   cli: AgentCli;
   term: AgentTerminal;
@@ -219,6 +222,7 @@ function endLive(live: LiveCli): Promise<void> {
 /** What the keeper holds with a CLI's terminal, so the office can pick it up again after a restart. */
 interface CliMeta {
   governanceSha256?:string;
+  governanceReady?:boolean;
   agentId: string;
   cli: AgentCli;
   token: string;
@@ -229,7 +233,8 @@ interface CliMeta {
 }
 
 const openCodeGovernanceSha=crypto.createHash('sha256').update(OPENCODE_PLUGIN_SOURCE).digest('hex');
-const metaOf = (l: LiveCli): CliMeta => ({ agentId: l.agentId, cli: l.cli, token: l.token, dir: l.dir, resumeId: l.resumeId, busy: !!l.session,...(l.cli==='opencode'?{governanceSha256:openCodeGovernanceSha}:{}) });
+const geminiGovernanceSha=crypto.createHash('sha256').update(GEMINI_HOOK_SOURCE).digest('hex');
+const metaOf = (l: LiveCli): CliMeta => ({ agentId: l.agentId, cli: l.cli, token: l.token, dir: l.dir, resumeId: l.resumeId, busy: !!l.session,...(l.cli==='opencode'?{governanceSha256:openCodeGovernanceSha}:l.cli==='gemini'?{governanceSha256:geminiGovernanceSha,governanceReady:l.governanceReady===true}:{}) });
 const remember = (l: LiveCli) => l.proc?.setMeta(metaOf(l));
 
 /** A CLI is running in its terminal: its output, its keys and its hooks are connected. */
@@ -237,7 +242,7 @@ function wire(l: LiveCli, office?: OfficeTools) {
   const p = l.proc!;
   lives.set(l.term, l);
   routes.set(l.token, { hook: (b) => (l.session ? l.session.hook(b) : idleHook(l, b)), office });
-  l.term.bind({ write: (d) => quietly(() => p.write(d)), resize: (c, r) => quietly(() => p.resize(c, r)) });
+  l.term.bind({ write: (d) => {if(l.cli!=='gemini'||l.governanceReady)quietly(() => p.write(d));}, resize: (c, r) => quietly(() => p.resize(c, r)) });
   p.onData((data) => {
     if (lives.get(l.term) === l) {
       l.term.write(data);
@@ -287,12 +292,12 @@ export async function reconnectClis(terminalFor: (agentId: string) => AgentTermi
     const meta = (h.meta ?? {}) as Partial<CliMeta>;
     const term = meta.agentId ? terminalFor(meta.agentId) : null;
     // Copilot runs one-shot with its result in the terminal output, which a restart loses: resume its session instead.
-    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || meta.cli==='opencode'&&meta.governanceSha256!==openCodeGovernanceSha || !meta.token || !meta.dir || !meta.agentId) {
+    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || meta.cli==='opencode'&&meta.governanceSha256!==openCodeGovernanceSha || meta.cli==='gemini'&&(meta.governanceSha256!==geminiGovernanceSha||meta.governanceReady!==true) || !meta.token || !meta.dir || !meta.agentId) {
       discardPty(h);
       if (meta.cli === 'codex' && meta.resumeId) void codexThread('archive', meta.resumeId, h.exit === null ? new Promise((r) => setTimeout(r, 5000)) : undefined);
       continue;
     }
-    const l: LiveCli = { agentId: meta.agentId, cli: meta.cli, term, proc: adoptPty(h), token: meta.token, dir: meta.dir, resumeId: meta.resumeId ?? null, statusLine: '🏢 cubefarm', output: '', shots: new Set(), session: null };
+    const l: LiveCli = { governanceReady:meta.governanceReady,agentId: meta.agentId, cli: meta.cli, term, proc: adoptPty(h), token: meta.token, dir: meta.dir, resumeId: meta.resumeId ?? null, statusLine: '🏢 cubefarm', output: '', shots: new Set(), session: null };
     wire(l);
     waitAtPrompt(l);
     // Resizing makes the CLI draw its whole screen again, over whatever the saved copy of the terminal missed.
@@ -408,6 +413,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   let screenTimer: NodeJS.Timeout | undefined;
   let shotTimer: NodeJS.Timeout | undefined;
   let capacityTimer: NodeJS.Timeout | undefined;
+  let geminiStartupTimer:NodeJS.Timeout|undefined;
+  let geminiPromptSent=false;
   const nudged = new Set<string>();
   let trustKeys = 0; // keys pressed on a folder-trust question (a few at most)
   let trustedAt = 0;
@@ -433,7 +440,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const finish = (r: Omit<SessionResult, 'costUsd' | 'turns'>, keep = false, preserveRecovery = false) => {
     if (done) return;
     done = true;
-    for (const t of [finishTimer, bootTimer]) clearTimeout(t);
+    for (const t of [finishTimer, bootTimer,geminiStartupTimer]) clearTimeout(t);
     clearInterval(screenTimer);
     clearInterval(shotTimer);
     clearInterval(capacityTimer);
@@ -531,6 +538,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const hook = async (b: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const event = String(b.hook_event_name ?? '');
     const sub = typeof b.agent_id === 'string' && b.agent_id !== ''; // a subagent's call: kept off the log
+    if(cli==='gemini'&&b.bridgeSha256!==geminiGovernanceSha)return hookDecision({status:'unavailable',reason:'Gemini governance bridge is unverified'});
+    if (cli==='gemini'&&!sub&&typeof b.session_id==='string'&&b.session_id!==kept){kept=b.session_id;cb.sessionId(kept);}
     if (cli === 'claude' && !sub && b.session_id !== kept) {
       const id = resumableSession(b, fs.existsSync);
       if (id) {
@@ -538,6 +547,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
         cb.sessionId(id);
       }
     }
+    if(cli==='gemini'&&event==='SessionStart'){if(b.bridgeSha256!==geminiGovernanceSha)return hookDecision({status:'unavailable',reason:'Gemini bridge version is unverified'});if(live){live.governanceReady=true;remember(live);}return {};}
+    if(cli==='gemini'&&!live?.governanceReady&&event==='PreToolUse')return hookDecision({status:'unavailable',reason:'Gemini governance startup is unverified'});
     switch (event) {
       case 'PreToolUse': {
         const name = String(b.tool_name ?? '');
@@ -677,7 +688,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     }
     const screen = term.screen();
     const isOpenCodeLimit = cli === 'opencode' && /Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen);
-    const ok = exitCode === 0 && (lastText !== '' || (cli !== 'claude' && Date.now() - started > 20_000)) && !isOpenCodeLimit;
+    const ok = exitCode === 0 && lastText !== '' && !isOpenCodeLimit;
     finish({
       ok,
       text: lastText,
@@ -689,7 +700,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const handle: SessionHandle = {
     send(text) {
       const proc = live?.proc;
-      if (done || !proc) return;
+      if (done || !proc || cli==='gemini'&&!live?.governanceReady) return;
       busy();
       turnError = null;
       officePrompts.push(text.trim());
@@ -758,7 +769,10 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     if (browser) servers.playwright = browser;
     if (opts.office) servers.office = { type: 'http', url: `${officeUrl}/api/mcp/${token}` };
     files = { settings: path.join(dir, 'settings.json'), mcp: Object.keys(servers).length ? path.join(dir, 'mcp.json') : null, system: path.join(dir, 'instructions.md') };
-    fs.writeFileSync(files.settings, JSON.stringify(settings, null, 2));
+    const geminiServers:Record<string,unknown>={};
+    if(browser)geminiServers.playwright={command:browser.command,args:browser.args};
+    if(opts.office)geminiServers.office={httpUrl:`${officeUrl}/api/mcp/${token}`};
+    fs.writeFileSync(files.settings, JSON.stringify(cli==='gemini'?geminiSettings(`${codexHookCommand(process.execPath,path.join(BIN_DIR,'gemini-hook.cjs'))}`,geminiServers):settings, null, 2));
     if (files.mcp) fs.writeFileSync(files.mcp, JSON.stringify({ mcpServers: servers }, null, 2));
     fs.writeFileSync(files.system, opts.systemAppend);
     if (prompt.length > INLINE_PROMPT_MAX) {
@@ -828,22 +842,25 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     wire(l, opts.office);
     shotTimer = setInterval(collectShots, 2000);
     monitorCapacity();
+    if(cli==='gemini'){log([{kind:'system',text:'Gemini task withheld while verifying the governance bridge and terminal readiness.'}]);cb.tool('Runtime readiness');}
+    if(cli==='gemini')geminiStartupTimer=setTimeout(()=>{if(!geminiPromptSent)finish({ok:false,text:'',errors:['Gemini governance startup was not verified; no task was sent. Provision trusted system hook settings and check CLI authentication.']});},90000);
 
     // Starting up: answer the folder-trust question for the office's own worktrees (the answer that trusts it), and
     // say so when a CLI is waiting on something only the manager can do (signing in),
-    // and continuously monitor for OpenCode free tier limit modals so the office can fall back to GitHub Copilot.
+    // and continuously monitor for OpenCode free tier limit modals so the office can fall back to Codex.
     screenTimer = setInterval(() => {
-      if (done || (cli !== 'opencode' && Date.now() - started > BOOT_MS * 2)) return clearInterval(screenTimer);
+      if (done || (cli !== 'opencode' && cli !== 'gemini' && Date.now() - started > BOOT_MS * 2)) return clearInterval(screenTimer);
       const screen = term.screen();
+      if(cli==='gemini'&&live?.governanceReady&&!geminiPromptSent&&/Type your message|Type a message|Send a message/i.test(screen)){geminiPromptSent=true;clearTimeout(geminiStartupTimer);handle.send(`${opts.systemAppend}\n\n${prompt}`);}
       if (cli === 'opencode' && /Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen)) {
         clearInterval(screenTimer);
-        log([{ kind: 'error', text: `⚠ OpenCode free tier limit reached: ${label}. Triggering fallback to GitHub Copilot.` }]);
+        log([{ kind: 'error', text: `⚠ OpenCode free tier limit reached: ${label}. Triggering fallback to Codex.` }]);
         quietly(() => p.write('\x1b'));
         setTimeout(() => {
           finish({
             ok: false,
             text: '',
-            errors: ['OpenCode free limit reached: Subscribe to OpenCode Go for reliable access or fallback to GitHub Copilot.'],
+            errors: ['OpenCode free limit reached: Subscribe to OpenCode Go for reliable access or fallback to Codex.'],
             opencodeLimit: true,
           });
         }, 300);
@@ -879,6 +896,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   };
   // Codex won't resume a thread the office archived (see codexThread): it's unarchived first.
   if (cli === 'codex' && opts.resumeSessionId) void codexThread('unarchive', opts.resumeSessionId).then(begin);
+  else if(cli==='gemini')void verifyGeminiProfile(cmd,opts.browserTesting).then(blocker=>{if(done)return;if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}begin();},()=>finish({ok:false,text:'',errors:['Gemini protected-profile validation failed; execution denied']}));
   else begin();
 
   return handle;

@@ -1,3 +1,4 @@
+import {geminiProfilePath} from './geminiBridge.ts';
 import {allowedRuntime,runtimeModelError} from '../shared/runtimePolicy.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -146,7 +147,10 @@ export function codexHookCommand(node: string, script: string, win = WIN): strin
 export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
   const error=runtimeModelError(id,ctx.model);if(error)throw new Error(error);
   switch (id) {
-    case 'gemini': return {args:[...(ctx.model?['--model',ctx.model]:[]),...(ctx.resumeId?['--resume',ctx.resumeId]:[]),'--prompt-interactive',`${ctx.systemAppend}\n\n${ctx.prompt}`],env:{}};
+    case 'gemini': {
+      const profile=geminiProfilePath(!!ctx.browser);
+      return {args:[...(ctx.model?['--model',ctx.model]:[]),...(ctx.resumeId?['--resume',ctx.resumeId]:[])],env:{GEMINI_CLI_SYSTEM_SETTINGS_PATH:profile,CUBEFARM_HOOK_URL:ctx.notify.url,...(ctx.officeUrl?{CUBEFARM_OFFICE_URL:ctx.officeUrl}:{}),CUBEFARM_BROWSER_OUTPUT:path.join(path.dirname(ctx.files.settings),'browser')}};
+    }
     case 'codex': {
       const toml = (s: string) => JSON.stringify(s); // a JSON string is a valid TOML basic string
       const args = [
