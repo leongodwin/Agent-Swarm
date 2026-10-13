@@ -30,7 +30,7 @@ afterEach(async () => {
 afterAll(async () => fs.rm(HOME_DIR, { recursive: true, force: true }));
 const tenantId='11111111-1111-4111-8111-111111111111';
 const environment='https://synthetic.crm4.dynamics.com';
-async function office(withEvidence=false) {
+async function office(withEvidence=false,requestHandoff?:()=>void) {
   await fs.writeFile(STATE_FILE, JSON.stringify({ version: 2, settings: { runtime: 'sdk', ceoHeartbeatMin: 0, autoUpdate: false },
     repos: [{ id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,color:'#000',description:'',url:'',autoAssign:false,autoMerge:false,browserTesting:false,addedAt:1 }] }));
   const tenancy = {status:'connected', user:'synthetic@example.com', environments:[{name:'Synthetic',url:environment,active:true}], isReal:true};
@@ -57,7 +57,7 @@ async function office(withEvidence=false) {
   const reader=vi.fn<StartPolicyReader>(()=>({pid:123,refresh(){},stop(){}}));
   const tenantDlp=new TenantDlpService(path.join(HOME_DIR,'governance'),reader);await tenantDlp.init();cleanup.push(()=>tenantDlp.close());
   const canvasOwnership=new CanvasOwnership(path.join(HOME_DIR,'leases'));cleanup.push(()=>canvasOwnership.close());
-  const {app,closeAdmission}=createOfficeHttpApp({backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher'});
+  const {app,closeAdmission}=createOfficeHttpApp({backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff});
   const server=http.createServer(app);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
   const url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -186,4 +186,15 @@ it('downloads exact registered evidence bytes and refuses unregistered or escapi
   expect(response.headers.get('content-disposition')).toContain('attachment;');
   expect((await request('/api/delivery/runs/synthetic-run/evidence?file=unregistered.txt')).status).toBe(404);
   expect((await request('/api/delivery/runs/synthetic-run/evidence?file=../outside.txt')).status).toBe(404);
+});
+it('requires a current process and quiescent authenticated office for terminal-preserving handoff',async()=>{
+  const handoff=vi.fn();const {request,swarm,url}=await office(false,handoff);
+  expect((await fetch(url+'/api/office/prepare-handoff',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedPid:process.pid})})).status).toBe(401);
+  expect((await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid+1})).status).toBe(409);
+  expect((await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid,command:'arbitrary'})).status).toBe(400);
+  expect(handoff).not.toHaveBeenCalled();
+  const state=swarm.snapshot();const snapshot=vi.spyOn(swarm,'snapshot');
+  snapshot.mockReturnValue({...state,agents:state.agents.map(agent=>({...agent,status:'working'}))});
+  expect((await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid})).status).toBe(409);expect(handoff).not.toHaveBeenCalled();snapshot.mockRestore();
+  const response=await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid});expect(response.status).toBe(202);expect(await response.json()).toMatchObject({accepted:true,preserveTerminals:true});expect(handoff).toHaveBeenCalledOnce();
 });

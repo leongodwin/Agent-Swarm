@@ -27,6 +27,7 @@ export interface OfficeHttpServices {
   delivery: DeliveryService; toolGovernance: ToolGovernanceService; tenantDlp: TenantDlpService;
   canvasOwnership: CanvasOwnership; homeDir: string; runtimeStartedAt: string;
   policyReaderMode: 'launcher' | 'direct';
+  requestHandoff?:()=>void;
 }
 
 /** Construct the production HTTP app without listeners, timers or process hooks.
@@ -86,6 +87,14 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.get('/api/capabilities', route(() => capabilities.view()));
   app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
   app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, demo: backend.demo, policyReaderMode, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+  app.post('/api/office/prepare-handoff',route((req,res)=>{
+    const {expectedPid}=parseBody(z.object({expectedPid:z.number().int().positive()}).strict(),req.body);
+    if(expectedPid!==process.pid)throw new HttpError(409,'Office process changed; inspect the current runtime before handoff');
+    if(backend.demo||!services.requestHandoff)throw new HttpError(409,'This office does not support launcher handoff');
+    if(delivery.view().running||swarm.snapshot().agents.some(agent=>['working','preparing'].includes(agent.status)))throw new HttpError(409,'Wait for active agent and delivery work before handoff');
+    res.status(202).json({accepted:true,pid:process.pid,preserveTerminals:true});
+    services.requestHandoff();
+  }));
   app.get('/api/governance/tools', route(() => toolGovernance.view()));
   app.get('/api/governance/tenant', route(() => tenantDlp.view()));
   app.post('/api/governance/tenant/refresh', route(async (req) => {

@@ -133,7 +133,7 @@ if (officeShutdown.closed) await shutdown('stop');
 delivery.onChange = () => { if (swarm.snapshot().repos.length) swarm.requestReview(); };
 capabilities.onChange = delivery.onChange;
 
-const {app,browserAuth,closeAdmission}=createOfficeHttpApp({backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode});
+const {app,browserAuth,closeAdmission}=createOfficeHttpApp({backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,requestHandoff:()=>{void shutdown('restart');}});
 closeHttpAdmission=closeAdmission;
 deliveryTimer = setInterval(() => { void delivery.tick(swarm.snapshot().repos).catch((err) => console.warn('delivery scheduler:', err.message)); }, 30_000);
 deliveryTimer.unref();
