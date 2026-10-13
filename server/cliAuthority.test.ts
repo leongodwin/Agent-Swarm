@@ -18,10 +18,12 @@ vi.mock('./ptyClient.ts', () => ({
   },
 }));
 import { HOME_DIR } from './config.ts';
-import { handleHook, releaseClis, startCliSession } from './cliRunner.ts';
+import { handleHook, releaseClis, startCliSession,reconnectClis } from './cliRunner.ts';
+import {startKeeper,discardPty,adoptPty} from './ptyClient.ts';
 import { setToolGovernanceGate } from './toolGovernance.ts';
+import {OPENCODE_PLUGIN_SOURCE} from './clis.ts';
 
-afterEach(async () => { await releaseClis(false); vi.useRealTimers(); setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'})); });
+afterEach(async () => { await releaseClis(false); vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs(); setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'})); });
 afterAll(async () => fs.rm(HOME_DIR,{recursive:true,force:true,maxRetries:10,retryDelay:100}));
 function session(authorize: () => string | null) {
   vi.useFakeTimers();
@@ -29,6 +31,12 @@ function session(authorize: () => string | null) {
   return startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-worker',cli:'codex',terminal:term,keepAlive:true,authorizeTool:authorize} satisfies SessionOptions,
     {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
 }
+it.each([undefined,'old-plugin-hash'])('discards an OpenCode process retained without the current governance bridge: %s',async governanceSha256=>{
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+  const held={id:'synthetic-held',exit:null,meta:{agentId:'synthetic-worker',cli:'opencode',token:'synthetic-token',dir:HOME_DIR,resumeId:'synthetic-checkpoint',busy:false,governanceSha256}};
+  vi.mocked(startKeeper).mockResolvedValue([held as any]);vi.mocked(discardPty).mockClear();vi.mocked(adoptPty).mockClear();
+  expect(await reconnectClis(()=>term)).toEqual([]);expect(discardPty).toHaveBeenCalledExactlyOnceWith(held);expect(adoptPty).not.toHaveBeenCalled();
+});
 it.each([false,true])('reports capacity failure for a %s retained Codex task and keeps developer work resumable',async reattach=>{
   vi.useFakeTimers();
   let screen='';
@@ -58,6 +66,19 @@ it('denies an actual CLI hook when task authority is revoked during asynchronous
   active=false;finish();
   expect(await pending).toMatchObject({hookSpecificOutput:{permissionDecision:'deny'}});
   handle.stop();
+});
+
+it('carries an OpenCode pre-tool request through live session authority and denies cancellation before returning a grant',async()=>{
+  let active=true,complete!:()=>void;
+  setToolGovernanceGate(()=>new Promise(resolve=>{complete=()=>resolve({status:'allowed',reason:'Synthetic scan'});}));
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+  const handle=startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'openai/gpt-synthetic',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'opencode',terminal:term,authorizeTool:()=>active?null:'Task cancelled'},
+    {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
+  vi.stubEnv('CUBEFARM_NOTIFY_URL','http://127.0.0.1:4499/api/hooks/synthetic');
+  vi.stubGlobal('fetch',vi.fn(async(_url,request)=>({ok:true,json:()=>handleHook(native.token,JSON.parse(request.body))})));
+  const factory=new Function(`return (${OPENCODE_PLUGIN_SOURCE.replace('export default async function','async function')});`)();const plugin=await factory({});
+  const denied=expect(plugin['tool.execute.before']({tool:'write',callID:'synthetic-tool',sessionID:'root'},{args:{filePath:'Workflows/expense.json',content:'shared_commondataserviceforapps'}})).rejects.toThrow('execution denied');
+  for(let i=0;i<50&&!complete;i++)await Promise.resolve();expect(complete).toBeTypeOf('function');active=false;complete();await denied;handle.stop();
 });
 
 it('rejects a disallowed CLI before spawning a terminal process',()=>{

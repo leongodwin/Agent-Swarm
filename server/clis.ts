@@ -336,11 +336,35 @@ process.stdin.on('end', async () => {
 `;
 
 /** OpenCode plugin: reports its session and when it goes idle (a turn is complete). No imports: loaded from a file. */
-export const OPENCODE_PLUGIN_SOURCE = String.raw`// cubefarm: tells the office when OpenCode's session goes idle.
+export const OPENCODE_PLUGIN_SOURCE = String.raw`// cubefarm: checks authority before tools and reports outcomes.
 export default async function CubefarmPlugin({ client } = {}) {
   const url = process.env.CUBEFARM_NOTIFY_URL;
-  if (!url) return {};
+  let endpoint;
+  try {
+    endpoint = new URL(url);
+    if (endpoint.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) throw new Error();
+  } catch { throw new Error('Office governance endpoint is unavailable; OpenCode execution denied'); }
   let root;
+  const names = {read:'Read',glob:'Glob',grep:'Grep',write:'Write',edit:'Edit',multiedit:'MultiEdit',bash:'Bash',apply_patch:'apply_patch'};
+  const normalize = (name,args) => {
+    const fields = {...args};
+    if ('filePath' in fields) fields.file_path = fields.filePath;
+    if ('newString' in fields) fields.new_string = fields.newString;
+    if ('patchText' in fields) {fields.patch = fields.patchText;fields.command = fields.patchText;}
+    if (Array.isArray(fields.edits)) fields.edits = fields.edits.map(edit=>({...edit,new_string:edit.new_string??edit.newString}));
+    return {name:names[name]??(name.startsWith('office_')?'mcp__office__'+name.slice(7):name.startsWith('playwright_')?'mcp__playwright__'+name.slice(11):name),fields};
+  };
+  const authorize = async (input,output) => {
+    const {name,fields} = normalize(input.tool,output.args);
+    const body = JSON.stringify({hook_event_name:'PreToolUse',tool_name:name,tool_input:fields,tool_use_id:input.callID,session_id:input.sessionID});
+    if (Buffer.byteLength(body)>1024*1024) throw new Error('Tool request exceeds the governance inspection limit');
+    try {
+      const response=await fetch(endpoint,{method:'POST',headers:{'content-type':'application/json'},body,signal:AbortSignal.timeout(15000)});
+      if(!response.ok)throw new Error();
+      const answer=await response.json();
+      if(answer?.hookSpecificOutput?.permissionDecision!=='allow')throw new Error();
+    } catch { throw new Error('Office tool authority or governance was denied or unavailable; execution denied'); }
+  };
   const post = (body) =>
     fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) }).catch(() => {});
   const lastReply = async (id) => {
@@ -353,6 +377,11 @@ export default async function CubefarmPlugin({ client } = {}) {
     }
   };
   return {
+    'tool.execute.before': authorize,
+    'tool.execute.after': async (input,output) => {
+      const {name}=normalize(input.tool,input.args??{});
+      await post({hook_event_name:'PostToolUse',tool_name:name,tool_use_id:input.callID,session_id:input.sessionID,tool_response:{content:[{type:'text',text:String(output.output??'').slice(0,16000)}]}});
+    },
     event: async ({ event }) => {
       const props = event?.properties ?? {};
       if (event?.type === 'session.created' && !props.info?.parentID && !root) root = props.info?.id;

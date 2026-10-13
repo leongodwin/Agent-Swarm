@@ -218,6 +218,7 @@ function endLive(live: LiveCli): Promise<void> {
 
 /** What the keeper holds with a CLI's terminal, so the office can pick it up again after a restart. */
 interface CliMeta {
+  governanceSha256?:string;
   agentId: string;
   cli: AgentCli;
   token: string;
@@ -227,7 +228,8 @@ interface CliMeta {
   busy: boolean;
 }
 
-const metaOf = (l: LiveCli): CliMeta => ({ agentId: l.agentId, cli: l.cli, token: l.token, dir: l.dir, resumeId: l.resumeId, busy: !!l.session });
+const openCodeGovernanceSha=crypto.createHash('sha256').update(OPENCODE_PLUGIN_SOURCE).digest('hex');
+const metaOf = (l: LiveCli): CliMeta => ({ agentId: l.agentId, cli: l.cli, token: l.token, dir: l.dir, resumeId: l.resumeId, busy: !!l.session,...(l.cli==='opencode'?{governanceSha256:openCodeGovernanceSha}:{}) });
 const remember = (l: LiveCli) => l.proc?.setMeta(metaOf(l));
 
 /** A CLI is running in its terminal: its output, its keys and its hooks are connected. */
@@ -285,7 +287,7 @@ export async function reconnectClis(terminalFor: (agentId: string) => AgentTermi
     const meta = (h.meta ?? {}) as Partial<CliMeta>;
     const term = meta.agentId ? terminalFor(meta.agentId) : null;
     // Copilot runs one-shot with its result in the terminal output, which a restart loses: resume its session instead.
-    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || !meta.token || !meta.dir || !meta.agentId) {
+    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || meta.cli==='opencode'&&meta.governanceSha256!==openCodeGovernanceSha || !meta.token || !meta.dir || !meta.agentId) {
       discardPty(h);
       if (meta.cli === 'codex' && meta.resumeId) void codexThread('archive', meta.resumeId, h.exit === null ? new Promise((r) => setTimeout(r, 5000)) : undefined);
       continue;
