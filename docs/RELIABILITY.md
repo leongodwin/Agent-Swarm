@@ -1,5 +1,15 @@
 # Reliability priorities 5–8
 
+## Authentication admission and discovery freshness
+
+Tenancy shutdown now closes admission before cancelling authentication jobs. New login/selection requests are denied, pending jobs remain cancelled despite late callbacks, and a native launch handle returned after synchronous shutdown is immediately asked to stop. Discovery completing after closure returns disconnected state. Stop failures are reported without reopening admission. An already-issued native profile-selection command cannot be physically undone by this barrier, and native stop acknowledgement remains separate evidence.
+
+Profile mutations are serialized: selection and login cannot overlap. Selection rechecks discovery generation and service lifetime before dispatch and before claiming completion. Expired discovery now awaits a shared fresh read instead of immediately returning the old connected cache. Failed or superseded observations are stale, not authoritative; clock rollback does not extend cache reuse. PAC profile discovery still does not verify token validity, platform licensing, effective permissions or full tenant controls.
+
+The tenancy/security panel now separates discovered profiles from verified tenant access. It identifies unknown tenant metadata and unverified Conditional Access/DLP, labels identity/role/isolation content as review guidance, and counts configured versus selected profiles. The previous automatic service-principal, role-isolation and non-production guarantees were removed. Local artifact scanning is identified as a limited safeguard, not complete tenant governance or release approval. Other scanner/classification semantics still require full provider verification.
+
+Verification: 695 tests passed, one existing TODO, build/typecheck and isolated API browser regression passed. Whole-backend branches reached 3,929/7,226 (54.37%), failing the unchanged 90.01% gate. The live non-demo panel was visually inspected; PAC discovery returned three configured profiles with one selected. No login, profile selection, tenant write or real agent message was initiated. Copilot Studio remains paused. Evidence: `.swarm-reliability/tenancy-admission-coverage-2026-10-13.txt`, `tenancy-admission-coverage-exit-2026-10-13.txt`, `tenancy-admission-api-e2e-2026-10-13.txt`, `tenancy-admission-live-runtime-2026-10-13.json` and `tenancy-admission-live-ui-2026-10-13.png`.
+
 ## Schema observation identity and metadata query compatibility
 
 Pre-import migration checks now resolve exactly one approved table, validate/canonicalize its logical name, and require the returned table identity to match. Missing identities, another table, duplicate matches and collection/attribute continuation markers are denied. Base column inventory also rejects reused metadata IDs across different column names, case-insensitively. This complements existing type/requiredness/declared-constraint comparisons; it does not establish complete table, relationship, privilege or field-security coverage.

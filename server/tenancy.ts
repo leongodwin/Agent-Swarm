@@ -90,22 +90,31 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
   let checkedAt = 0;
   let generation = 0;
   let refreshing: Promise<TenancyInfo> | null = null;
+  let closed=false,selecting=false;
   const jobs = new Map<string, { value: TenancyLogin; stop: () => void; timer?: NodeJS.Timeout }>();
   const demoInfo: TenancyInfo = { tenantName: 'Demo tenant', tenantDomain: 'example.com', tenantId: '', user: 'manager@example.com',
     environments: [{ index: 1, name: 'Demo sandbox', url: 'https://demo.example.com', user: 'manager@example.com', active: true }], isReal: false, status: 'demo' };
   const invalidate = () => { cache = null; checkedAt = 0; generation++; refreshing = null; };
+  const assertOpen=()=>{if(closed)throw new HttpError(503,'Tenancy service is closed');};
+  const assertProfileIdle=()=>{if(selecting||[...jobs.values()].some(job=>job.value.status==='pending'))throw new HttpError(409,'An authentication profile change is already pending');};
   const info = async (): Promise<TenancyInfo> => {
+    if(closed)return disconnected();
     if (demo) return structuredClone(demoInfo);
-    if (cache && Date.now() - checkedAt < 20_000) return structuredClone(cache);
+    if(selecting||[...jobs.values()].some(job=>job.value.status==='pending'))return cache?{...structuredClone(cache),status:'stale',isReal:false}:disconnected();
+    const age=Date.now()-checkedAt;
+    if (cache && age>=0&&age < 20_000) return structuredClone(cache);
     if (!refreshing) {
       const current = generation;
-      const request = runner.run('pac', ['auth', 'list']).then(parsePacProfiles).catch(() => cache ? { ...cache, status: 'stale' as const } : disconnected());
+      const previous=cache?structuredClone(cache):null;
+      const request = Promise.resolve().then(()=>runner.run('pac', ['auth', 'list'])).then(parsePacProfiles).catch(() => previous ? { ...previous, status: 'stale' as const,isReal:false } : disconnected());
       refreshing = request.then((result) => {
+        if(closed)return disconnected();
+        if(generation!==current)return {...structuredClone(result),status:'stale',isReal:false};
         if (generation === current) { cache = result; checkedAt = Date.now(); refreshing = null; }
         return structuredClone(result);
       });
     }
-    return cache ? structuredClone(cache) : refreshing;
+    return structuredClone(await refreshing);
   };
   const lookup = (id: string) => {
     const job = jobs.get(id);
@@ -115,19 +124,27 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
   return {
     info,
     async select(index) {
+      assertOpen();assertProfileIdle();
       if (!Number.isInteger(index) || index < 1) throw new HttpError(400, 'Profile index must be a positive integer');
-      if (!(await info()).environments.some((env) => env.index === index)) throw new HttpError(404, 'Authentication profile not found');
-      if (!demo) await runner.run('pac', ['auth', 'select', '--index', String(index)]);
-      invalidate();
-      return { ok: true, message: `${demo ? 'Demo: ' : ''}Selected profile [${index}]` };
+      const current=generation,observed=await info();assertOpen();assertProfileIdle();
+      if(generation!==current||observed.status==='stale')throw new HttpError(409,'Authentication discovery changed or is stale; refresh before selecting');
+      if (!observed.environments.some((env) => env.index === index)) throw new HttpError(404, 'Authentication profile not found');
+      selecting=true;invalidate();
+      try {
+        if (!demo) await runner.run('pac', ['auth', 'select', '--index', String(index)]);
+        assertOpen();invalidate();
+        return { ok: true, message: `${demo ? 'Demo: ' : ''}Selected profile [${index}]` };
+      } finally {selecting=false;}
     },
     login(input) {
+      assertOpen();assertProfileIdle();
       if ([...jobs.values()].some((job) => job.value.status === 'pending')) throw new HttpError(409, 'An authentication request is already pending');
       if (jobs.size >= 20) jobs.delete(jobs.keys().next().value!);
       const value: TenancyLogin = { id: crypto.randomUUID(), status: demo ? 'completed' : 'pending', message: demo ? 'Demo authentication completed; no credentials changed' : 'Waiting for PAC authentication instructions', ok: demo };
       const job: { value: TenancyLogin; stop: () => void; timer?: NodeJS.Timeout } = { value, stop: () => {} };
       jobs.set(value.id, job);
       if (demo) return { ...value };
+      invalidate();
       const args = ['auth', 'create'];
       if (input.name) args.push('--name', input.name);
       if (input.environmentUrl) args.push('--environment', input.environmentUrl);
@@ -149,11 +166,12 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
           value.message = error ? (/53003|conditional access|blocked.*device.code/i.test(transcript) ? 'Conditional Access blocked this sign-in. Use interactive sign-in; ask your administrator to inspect the failed policy if it persists.' : 'PAC authentication failed. Check the profile and credentials.') : 'Authentication profile created successfully';
           if (!error) invalidate();
         });
+        if(closed||value.status==='cancelled'||value.status==='expired')job.stop();
         if (value.status === 'pending') {
           job.timer = setTimeout(() => { value.status = 'expired'; value.ok = false; value.message = 'Authentication expired. Start a new request.'; job.stop(); }, 10 * 60_000);
           job.timer.unref();
         }
-      } catch { value.status = 'failed'; value.message = 'PAC could not start. Check the CLI installation.'; }
+      } catch { if(value.status==='pending'){value.status = 'failed'; value.message = 'PAC could not start. Check the CLI installation.';} }
       return { ...value };
     },
     loginStatus: (id) => ({ ...lookup(id).value }),
@@ -161,7 +179,14 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       const job = lookup(id);
       if (job.value.status === 'pending') { job.value.status = 'cancelled'; job.value.message = 'Authentication cancelled'; clearTimeout(job.timer); job.stop(); }
     },
-    close() { for (const job of jobs.values()) { clearTimeout(job.timer); if (job.value.status === 'pending') { job.value.status = 'cancelled'; job.stop(); } } },
+    close() {
+      if(closed)return;closed=true;invalidate();let failed=false;
+      for (const job of jobs.values()) {
+        clearTimeout(job.timer);
+        if(job.value.status==='pending') {job.value.status='cancelled';job.value.ok=false;job.value.message='Authentication cancelled because the office is closing';try {job.stop();}catch {failed=true;}}
+      }
+      if(failed)throw new Error('Tenancy authentication cleanup failed');
+    },
   };
 }
 export function activeEnvironment(info: TenancyInfo) {

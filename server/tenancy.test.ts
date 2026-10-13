@@ -13,7 +13,7 @@ function runner() {
   let output: (text: string) => void = () => {};
   let ended: (error?: string) => void = () => {};
   const stop = vi.fn();
-  const run = vi.fn(async () => profiles);
+  const run = vi.fn<TenancyRunner['run']>(async () => profiles);
   const start = vi.fn((_args: string[], write: typeof output, finish: typeof ended) => { output = write; ended = finish; return stop; });
   return { run, start, stop, output: (text: string) => output(text), ended: (error?: string) => ended(error) };
 }
@@ -76,5 +76,50 @@ describe('Tenancy service', () => {
     expect(() => parseBody(loginSchema, { interactive: false, clientSecret: 'secret' })).toThrow('requires tenant');
     expect(() => parseBody(selectSchema, { index: 1.5 })).toThrow();
     await expect(make(runner()).select(2)).rejects.toThrow('not found');
+  });
+  it('awaits expired discovery and exposes failed refreshes as stale rather than connected',async()=>{
+    vi.useFakeTimers();const r=runner(),service=make(r);await service.info();vi.advanceTimersByTime(20001);
+    let reject!:(error:Error)=>void;r.run.mockImplementation(()=>new Promise((_resolve,fail)=>{reject=fail;}));
+    let finished=false;const first=service.info().then(value=>{finished=true;return value;}),second=service.info();await Promise.resolve();
+    expect(finished).toBe(false);expect(r.run).toHaveBeenCalledTimes(2);reject(new Error('provider offline'));
+    expect(await first).toMatchObject({status:'stale',isReal:false});expect(await second).toMatchObject({status:'stale',isReal:false});
+    await expect(service.select(1)).rejects.toThrow('stale');
+  });
+  it('invalidates discovery across an authentication change without caching the old account',async()=>{
+    const r=runner();let resolve!:(text:string)=>void;r.run.mockImplementationOnce(()=>new Promise(done=>{resolve=done;}));const service=make(r);
+    const old=service.info();await Promise.resolve();const job=service.login({interactive:true});expect((await service.info()).status).toBe('disconnected');
+    r.ended();resolve(profiles);expect(await old).toMatchObject({status:'stale',isReal:false});expect(service.loginStatus(job.id).status).toBe('completed');
+    r.run.mockResolvedValue('[1] * UNIVERSAL New https://new.crm.dynamics.com/ new@example.com Public User');
+    expect(await service.info()).toMatchObject({status:'connected',user:'new@example.com'});
+  });
+  it('closes login and selection admission and ignores late completion/discovery after shutdown',async()=>{
+    vi.useFakeTimers();const r=runner(),service=make(r);const job=service.login({interactive:true});service.close();service.close();r.ended();
+    expect(service.loginStatus(job.id)).toMatchObject({status:'cancelled',ok:false});expect(r.stop).toHaveBeenCalledOnce();
+    expect(()=>service.login({interactive:true})).toThrow('closed');await expect(service.select(1)).rejects.toThrow('closed');
+    expect(await service.info()).toMatchObject({status:'disconnected',isReal:false,environments:[]});vi.advanceTimersByTime(600001);expect(r.stop).toHaveBeenCalledOnce();
+    let resolve!:(text:string)=>void;const pending=runner();pending.run.mockImplementation(()=>new Promise(done=>{resolve=done;}));const other=make(pending);
+    const discovery=other.info();await Promise.resolve();other.close();resolve(profiles);expect(await discovery).toMatchObject({status:'disconnected',isReal:false});
+  });
+  it('cannot start profile selection if shutdown occurs during prerequisite discovery',async()=>{
+    const r=runner();let resolve!:(text:string)=>void;r.run.mockImplementation(()=>new Promise(done=>{resolve=done;}));const service=make(r);
+    const selection=service.select(1);const denied=expect(selection).rejects.toThrow('closed');await Promise.resolve();service.close();resolve(profiles);await denied;
+    expect(r.run).toHaveBeenCalledExactlyOnceWith('pac',['auth','list']);
+  });
+  it('serializes native profile changes and never reports success for a selection finishing after closure',async()=>{
+    const r=runner(),service=make(r);await service.info();let resolve!:(text:string)=>void;
+    r.run.mockImplementation((_name,args)=>args.includes('select')?new Promise(done=>{resolve=done;}):Promise.resolve(profiles));
+    const selection=service.select(1);const denied=expect(selection).rejects.toThrow('closed');await Promise.resolve();
+    expect(()=>service.login({interactive:true})).toThrow('already pending');await expect(service.select(1)).rejects.toThrow('already pending');
+    expect((await service.info()).status).toBe('disconnected');service.close();resolve('selected');await denied;
+    expect(r.run.mock.calls.filter(([,args])=>args.includes('select'))).toHaveLength(1);expect(r.start).not.toHaveBeenCalled();
+  });
+  it('stops a late launch handle when shutdown happens synchronously inside native startup',()=>{
+    const r=runner();let service:ReturnType<typeof createTenancyService>;r.start.mockImplementation(()=>{service.close();return r.stop;});service=make(r);
+    const job=service.login({interactive:true});expect(job).toMatchObject({status:'cancelled',ok:false});expect(r.stop).toHaveBeenCalledOnce();
+  });
+  it('does not reuse cached discovery across clock rollback and retains admission closure on cleanup failure',async()=>{
+    vi.useFakeTimers();const r=runner(),service=make(r);await service.info();vi.setSystemTime(Date.now()-1000);await service.info();expect(r.run).toHaveBeenCalledTimes(2);
+    r.stop.mockImplementation(()=>{throw new Error('private cleanup detail');});const job=service.login({interactive:true});expect(()=>service.close()).toThrow('cleanup failed');
+    expect(service.loginStatus(job.id).status).toBe('cancelled');expect(()=>service.login({interactive:true})).toThrow('closed');
   });
 });

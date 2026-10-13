@@ -166,7 +166,7 @@ export function DlpSecurityModal() {
           <span style={{ fontSize: 24 }}>🛡️</span>
           <span>Microsoft Entra ID & Power Platform DLP Policy Kiosk</span>
           <span style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, background: '#0284c7', color: '#fff', fontWeight: 700 }}>
-            ZERO-TRUST GUARDRAIL
+            PROFILE & SAFEGUARD REVIEW
           </span>
         </div>
       }
@@ -179,18 +179,18 @@ export function DlpSecurityModal() {
         <div style={{ background: '#061325', padding: '12px 18px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #0369a1' }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc' }}>
-              Tenant Security Perimeter: <span style={{ color: '#38bdf8' }}>{tenancy.tenantName} ({tenancy.tenantDomain})</span>
+              Tenant metadata: <span style={{ color: '#38bdf8' }}>{tenancy.tenantName || tenancy.tenantDomain || 'Not independently verified'}</span>
             </div>
             <div style={{ fontSize: 11, color: '#94a3b8' }}>
-              Authenticated User: <span style={{ color: '#cbd5e1' }}>{tenancy.user}</span> · {tenancy.isReal ? 'Verified live Microsoft tenancy' : 'Simulated tenant'}
+              Profile user: <span style={{ color: '#cbd5e1' }}>{tenancy.user || 'Not discovered'}</span> · {tenancy.status==='demo'?'Demo tenant':tenancy.status==='connected'?'PAC profile discovered; tenant access unverified':tenancy.status==='stale'?'Profile discovery stale; refresh required':'No verified active profile'}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <span style={{ fontSize: 11, background: '#064e3b', color: '#34d399', border: '1px solid #059669', padding: '3px 8px', borderRadius: 6, fontWeight: 700 }}>
-              ● ENTRA CONDITIONAL ACCESS
+              ENTRA CONTROLS UNVERIFIED
             </span>
             <span style={{ fontSize: 11, background: '#1e1b4b', color: '#a5b4fc', border: '1px solid #4338ca', padding: '3px 8px', borderRadius: 6, fontWeight: 700 }}>
-              ● DLP POLICY GATE ACTIVE
+              FULL TENANT DLP UNVERIFIED
             </span>
           </div>
         </div>
@@ -248,9 +248,9 @@ export function DlpSecurityModal() {
         {activeTab === 'scanner' && (
           <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: 16, flex: 1 }}>
             <div style={{ background: '#0f172a', padding: 16, borderRadius: 10, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ fontSize: 12, color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase' }}>Automated Governance Audit</div>
+              <div style={{ fontSize: 12, color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase' }}>Local artifact safeguards</div>
               <p style={{ margin: 0, fontSize: 12, color: '#94a3b8', lineHeight: 1.45 }}>
-                Scans all unpacked Power Automate Cloud Flows (<code>Workflows/*.json</code>) and Copilot Studio Topics (<code>BotComponents/*.yaml</code>) for restricted connectors before merging into production.
+                Inspects supported checkout files for local connector restrictions. This scan does not establish effective tenant DLP, schema compliance or release approval. See Operations & audit for recorded evidence.
               </p>
 
               <button
@@ -448,27 +448,27 @@ export function DlpSecurityModal() {
         {/* Tab 3: Entra ID Service Principals */}
         {activeTab === 'entra' && (
           <div style={{ background: '#0f172a', padding: 18, borderRadius: 10, border: '1px solid #1e293b', flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#38bdf8' }}>Microsoft Entra ID Zero-Trust Architecture</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#38bdf8' }}>Identity and access review guidance</div>
             <p style={{ margin: 0, fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>
-              Each autonomous coding agent operates through dedicated Azure App Registrations and Application Users mapped to Dataverse Security Roles.
+              CLI profiles describe configured identities and targets. This panel has not verified dedicated agent identities, Conditional Access, effective roles or tenant isolation.
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
               <div style={{ background: '#090e1a', padding: 12, borderRadius: 8, border: '1px solid #1e293b' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#f8fafc', marginBottom: 4 }}>1. Agent Service Principals</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#f8fafc', marginBottom: 4 }}>1. Agent identities</div>
                 <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
-                  Authentication via Client ID / Secret or Managed Identity. No interactive user credentials stored on disk.
+                  Review the authenticated account or application identity used by each approved runtime. Native tools manage their own credential caches.
                 </div>
               </div>
               <div style={{ background: '#090e1a', padding: 12, borderRadius: 8, border: '1px solid #1e293b' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#f8fafc', marginBottom: 4 }}>2. Least-Privileged Security Roles</div>
                 <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
-                  Copilot agents have read-only access to knowledge tables; automation agents hold scoped workflow triggers.
+                  Verify effective Dataverse permissions with representative accounts before accepting role isolation.
                 </div>
               </div>
               <div style={{ background: '#090e1a', padding: 12, borderRadius: 8, border: '1px solid #1e293b' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#f8fafc', marginBottom: 4 }}>3. PAC CLI Auth Profiles</div>
                 <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
-                  <code>pac auth create</code> binds developer CLI sessions to isolated non-production environments.
+                  Profiles can point to different environments. Confirm the approved organization and user binding before deployment.
                 </div>
               </div>
             </div>
@@ -477,7 +477,7 @@ export function DlpSecurityModal() {
             <div style={{ marginTop: 6, background: '#090e1a', padding: 14, borderRadius: 8, border: '1px solid #1e293b' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>
-                  Live Power Platform Tenancy Profiles ({tenancy.environments.length} Active Endpoints)
+                  Discovered PAC profiles ({tenancy.environments.length}; {tenancy.environments.filter(environment=>environment.active).length} selected)
                 </div>
                 <button
                   onClick={() => setShowLoginModal(true)}
