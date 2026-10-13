@@ -20,6 +20,7 @@ import { ToolGovernanceService } from './toolGovernance.ts';
 import { TenantDlpService, type StartPolicyReader } from './tenantDlp.ts';
 import { CanvasOwnership } from './canvasOwnership.ts';
 import { createOfficeHttpApp } from './officeHttp.ts';
+import { OfficeMaintenance } from './officeMaintenance.ts';
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -45,7 +46,8 @@ async function office(withEvidence=false,requestHandoff?:()=>void) {
     previews:{hasDefault:vi.fn(async()=>false),start:vi.fn(()=>{throw new Error('Unexpected preview');})},
     office:{head:vi.fn(async()=>null),takeLastUpdate:vi.fn(async()=>null),isOwnFolder:()=>false},
   };
-  const swarm=new Swarm(external as unknown as Backend);cleanup.push(()=>swarm.shutdown());await swarm.init();
+  const maintenance=new OfficeMaintenance(path.join(HOME_DIR,'maintenance.json'));await maintenance.init();cleanup.push(()=>maintenance.close());
+  const swarm=new Swarm(external as unknown as Backend);if(maintenance.draining)swarm.setDraining(true);cleanup.push(()=>swarm.shutdown());await swarm.init();
   const features=new FeatureStore(path.join(HOME_DIR,'features.json'),false);await features.init();
   const capabilities=new CapabilityService(HOME_DIR,false,async()=>{throw new Error('Synthetic provider unavailable');});await capabilities.init();cleanup.push(()=>capabilities.close());
   if(withEvidence){
@@ -53,17 +55,18 @@ async function office(withEvidence=false,requestHandoff?:()=>void) {
     await fs.writeFile(path.join(HOME_DIR,'delivery.json'),JSON.stringify({policy:null,releases:[],blockers:[],revision:0,runs:[{id:'synthetic-run',repoId:'synthetic/repo',head:'synthetic-commit',environmentUrl:environment,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:['proof.txt'],log:[]}]}));
   }
   const delivery=new DeliveryService(HOME_DIR,false);await delivery.init();cleanup.push(()=>delivery.close());
+  if(maintenance.draining)delivery.setDraining(true);
   const toolGovernance=new ToolGovernanceService(path.join(HOME_DIR,'governance'),()=>true);await toolGovernance.init();
   const reader=vi.fn<StartPolicyReader>(()=>({pid:123,refresh(){},stop(){}}));
   const tenantDlp=new TenantDlpService(path.join(HOME_DIR,'governance'),reader);await tenantDlp.init();cleanup.push(()=>tenantDlp.close());
   const canvasOwnership=new CanvasOwnership(path.join(HOME_DIR,'leases'));cleanup.push(()=>canvasOwnership.close());
-  const {app,closeAdmission}=createOfficeHttpApp({backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff});
+  const {app,closeAdmission}=createOfficeHttpApp({backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,changeDrain:(value,apply)=>maintenance.change(value,apply)});
   const server=http.createServer(app);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
   const url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const session=await fetch(`${url}/api/session`);const cookie=session.headers.get('set-cookie')!.split(';')[0];
   const request=(resource:string,method='GET',body?:unknown,headers:Record<string,string>={})=>fetch(url+resource,{method,headers:{Cookie:cookie,...(body===undefined?{}:{'Content-Type':'application/json'}),...headers},body:body===undefined?undefined:JSON.stringify(body)});
-  return {url,cookie,request,swarm,external,tenancy,delivery,features,capabilities,reader,closeAdmission};
+  return {url,cookie,request,swarm,external,tenancy,delivery,features,capabilities,reader,closeAdmission,maintenance};
 }
 
 it('uses the production session boundary and reports actual initialized services',async()=>{
@@ -203,9 +206,21 @@ it('authenticates and pins reversible drain without changing target policy or of
   expect((await fetch(url+'/api/office/drain',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedPid:process.pid,draining:true})})).status).toBe(401);
   expect((await request('/api/office/drain','POST',{expectedPid:process.pid+1,draining:true})).status).toBe(409);
   expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:'yes'})).status).toBe(400);
+  await expect(fs.access(path.join(HOME_DIR,'maintenance.json'))).rejects.toThrow();
   expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true})).status).toBe(200);
   expect(await (await request('/api/runtime')).json()).toMatchObject({draining:true});
+  expect(JSON.parse(await fs.readFile(path.join(HOME_DIR,'maintenance.json'),'utf8'))).toEqual({version:1,draining:true});
   expect((await request('/api/repos/synthetic%2Frepo/delivery/run','POST',{})).status).toBe(409);
   expect(swarm.isDraining).toBe(true);expect(delivery.isDraining).toBe(true);expect(swarm.snapshot().settings).toEqual(settings);expect(delivery.view().policy).toEqual(policy);
   expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:false})).status).toBe(200);expect(swarm.isDraining).toBe(false);expect(delivery.isDraining).toBe(false);
+  expect(JSON.parse(await fs.readFile(path.join(HOME_DIR,'maintenance.json'),'utf8')).draining).toBe(false);
+});
+
+it('restores maintenance before office admission and fails a resume when storage is unavailable',async()=>{
+  await fs.writeFile(path.join(HOME_DIR,'maintenance.json'),JSON.stringify({version:1,draining:true}));
+  const {request,swarm,delivery,maintenance}=await office();
+  expect(await (await request('/api/runtime')).json()).toMatchObject({draining:true});expect(swarm.isDraining).toBe(true);expect(delivery.isDraining).toBe(true);
+  vi.spyOn(maintenance,'change').mockRejectedValueOnce(new Error('synthetic storage failure'));
+  expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:false})).status).toBe(500);
+  expect(swarm.isDraining).toBe(true);expect(delivery.isDraining).toBe(true);expect(JSON.parse(await fs.readFile(path.join(HOME_DIR,'maintenance.json'),'utf8')).draining).toBe(true);
 });

@@ -28,6 +28,7 @@ export interface OfficeHttpServices {
   canvasOwnership: CanvasOwnership; homeDir: string; runtimeStartedAt: string;
   policyReaderMode: 'launcher' | 'direct';
   requestHandoff?:()=>void;
+  changeDrain?:(value:boolean,apply:()=>void)=>Promise<void>;
 }
 
 /** Construct the production HTTP app without listeners, timers or process hooks.
@@ -87,11 +88,12 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.get('/api/capabilities', route(() => capabilities.view()));
   app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
   app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, demo: backend.demo, policyReaderMode, draining:swarm.isDraining||delivery.isDraining, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
-  app.post('/api/office/drain',route(req=>{
+  app.post('/api/office/drain',route(async req=>{
     const {expectedPid,draining}=parseBody(z.object({expectedPid:z.number().int().positive(),draining:z.boolean()}).strict(),req.body);
     if(expectedPid!==process.pid)throw new HttpError(409,'Office process changed; inspect the current runtime before drain');
     if(backend.demo)throw new HttpError(409,'Demo cannot drain a working office');
-    delivery.setDraining(draining);swarm.setDraining(draining);
+    const apply=()=>{requireOpen();delivery.setDraining(draining);swarm.setDraining(draining);};
+    if(services.changeDrain)await services.changeDrain(draining,apply);else apply();
     return {pid:process.pid,draining};
   }));
   app.post('/api/office/prepare-handoff',route((req,res)=>{

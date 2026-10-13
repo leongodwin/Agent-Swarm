@@ -22,16 +22,21 @@ import { TenantDlpService, policyReaderMode } from './tenantDlp.ts';
 import { createDeliveryGovernance } from './deliveryGovernance.ts';
 import { OfficeShutdown } from './officeShutdown.ts';
 import { parseBody } from './requestSchemas.ts';
+import { OfficeMaintenance } from './officeMaintenance.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
 const runtimeStartedAt = new Date().toISOString();
+const maintenance=new OfficeMaintenance(path.join(HOME_DIR,backend.demo?'demo-maintenance.json':'maintenance.json'));
+await maintenance.init();
 const canvasOwnership = new CanvasOwnership(RESOURCE_LEASE_ROOT);
 const swarm = new Swarm(backend);
+if(maintenance.draining)swarm.setDraining(true);
 swarm.taskPaused = (title) => !!delivery.view().policy?.copilotPaused && /\bcopilot\b|\bpva\b/i.test(title);
 const features = new FeatureStore(path.join(HOME_DIR, backend.demo ? 'demo-features.json' : 'features.json'), backend.demo, process.env.TEAMS_INCOMING_WEBHOOK_URL);
 await features.init();
 const delivery = new DeliveryService(HOME_DIR, backend.demo, undefined, RESOURCE_LEASE_ROOT);
 await delivery.init();
+if(maintenance.draining)delivery.setDraining(true);
 const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'), () => !!delivery.view().policy?.copilotPaused);
 await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
@@ -98,6 +103,7 @@ let deliveryTimer: NodeJS.Timeout | undefined;
 let closeHttpAdmission: (() => void) | undefined;
 const officeShutdown = new OfficeShutdown([
   { name: 'HTTP admission', close: () => closeHttpAdmission?.() },
+  { name: 'maintenance', close: () => maintenance.close() },
   { name: 'swarm', close: restart => swarm.shutdown(restart) },
   { name: 'tenancy', close: () => backend.tenancy.close() },
   { name: 'scheduler', close: () => clearInterval(deliveryTimer) },
@@ -133,7 +139,7 @@ if (officeShutdown.closed) await shutdown('stop');
 delivery.onChange = () => { if (swarm.snapshot().repos.length) swarm.requestReview(); };
 capabilities.onChange = delivery.onChange;
 
-const {app,browserAuth,closeAdmission}=createOfficeHttpApp({backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,requestHandoff:()=>{void shutdown('restart');}});
+const {app,browserAuth,closeAdmission}=createOfficeHttpApp({backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,changeDrain:(value,apply)=>maintenance.change(value,apply),requestHandoff:()=>{void shutdown('restart');}});
 closeHttpAdmission=closeAdmission;
 deliveryTimer = setInterval(() => { void delivery.tick(swarm.snapshot().repos).catch((err) => console.warn('delivery scheduler:', err.message)); }, 30_000);
 deliveryTimer.unref();
