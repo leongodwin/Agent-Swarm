@@ -112,6 +112,7 @@ export const api = {
   rejectRequest: (id: string, note?: string) => call('POST', `/api/requests/${id}/reject`, { note }),
   generateProposal: <T = unknown>(body: unknown) => call<T>('POST', '/api/proposals/generate', body),
   generateHld: <T = unknown>(body: unknown) => call<T>('POST', '/api/hld/generate', body),
+  latestHld:<T=unknown>(repoId:string)=>call<T>('GET',`/api/hld/latest?repoId=${encodeURIComponent(repoId)}`),
   solutionArchitecture: (repoId: string) => call<ParsedSolution>('GET', `/api/repos/${encodeURIComponent(repoId)}/solution-architecture`),
   flowRuns: (repoId: string) => call<FlowRun[]>('GET', `/api/repos/${encodeURIComponent(repoId)}/flow-runs`),
   resubmitFlowRun: (repoId: string, runId: string) => call<{ ok: boolean; resubmitted: FlowRun }>('POST', `/api/repos/${encodeURIComponent(repoId)}/flow-runs/${encodeURIComponent(runId)}/resubmit`),

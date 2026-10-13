@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Panel } from './Overlays';
 import { useStore } from '../store';
 import { api } from '../api';
 import { generateHldContent, type HldResult, type HldComponent } from '../../../shared/hld';
+import type {HldArtifact} from '../../../shared/hldArtifact';
 const views = [['overview','Requirements & gaps'],['plan','Implementation plan'],['diagrams','Diagram scope'],['document','Full document']] as const;
 
 export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
   const repos = useStore(state => state.repos);
-  const repo = repos.find(item => item.id === repoId) ?? repos[0];
+  const repo = repoId?repos.find(item => item.id === repoId):repos[0];
   const pushToast = useStore(state => state.pushToast);
   const [activeTab,setActiveTab] = useState<'overview'|'plan'|'diagrams'|'document'>('overview');
-  const [saving,setSaving] = useState(false);
+  const [saving,setSaving] = useState<'save'|'load'|null>(null);
+  const [loaded,setLoaded]=useState<{repoId:string;input:HldArtifact['input']}|null>(null);
+  const scope=useRef(repo?.id),epoch=useRef(0),currentInput=useRef('');scope.current=repo?.id;
   const [components,setComponents] = useState<HldComponent[]>([]);
   const [title,setTitle] = useState('');
   const [platform,setPlatform] = useState('');
@@ -18,11 +21,12 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
   const [deliverables,setDeliverables] = useState('');
   const declaredDeliverables = deliverables.split('\n').map(item=>item.trim()).filter(Boolean);
   const deliverableError = declaredDeliverables.length>100 ? 'Use at most 100 deliverables.' : declaredDeliverables.some(item=>item.length>500) ? 'Each deliverable must be 500 characters or fewer.' : '';
-  useEffect(() => {setComponents([]);setTitle('');setPlatform('');setDetails('');setDeliverables('');},[repo?.id]);
-  const input = useMemo(() => ({solutionName:repo?.fullName || 'Untitled solution',
-    problemContext:repo?.mission || 'Requirements have not been supplied. Record the project mission before architecture synthesis.',
-    tenantName:repo?.targetTenancy?.tenantName, components}), [repo,components]);
+  useEffect(() => {epoch.current++;setLoaded(null);setSaved(null);setSaving(null);setComponents([]);setTitle('');setPlatform('');setDetails('');setDeliverables('');},[repo?.id]);
+  const input = useMemo(() => {const stored=loaded?.repoId===repo?.id?loaded?.input:undefined;return {solutionName:stored?.solutionName??repo?.fullName??'Untitled solution',
+    problemContext:stored?stored.problemContext:repo?.mission||'Requirements have not been supplied. Record the project mission before architecture synthesis.',
+    tenantName:stored?stored.tenantName:repo?.targetTenancy?.tenantName, components};}, [repo,components,loaded]);
   const inputKey = JSON.stringify(input);
+  currentInput.current=inputKey;
   const addComponent = () => {
     if (!title.trim() || !platform.trim() || components.length >= 100 || deliverableError) return;
     setComponents(current => [...current,{title:title.trim(),badge:platform.trim(),role:'Owner not assigned',
@@ -34,14 +38,28 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
   const draft = saved?.key===inputKey ? saved.result : generated;
   const save = async () => {
     if (!repo || saving) return;
-    setSaving(true);
+    const ticket=++epoch.current,id=repo.id;setSaving('save');
     try {
       const result = await api.generateHld<HldResult>({...input,repoId:repo.id});
+      if(ticket!==epoch.current||scope.current!==id)return;
       if (!result.savedFilePath) throw new Error('The server did not confirm a saved draft');
       setSaved({key:inputKey,result});
       pushToast('success',`Draft saved to ${result.savedFilePath}`);
-    } catch (error) {pushToast('error',error instanceof Error ? error.message : 'Could not save draft');}
-    finally {setSaving(false);}
+    } catch (error) {if(ticket===epoch.current&&scope.current===id)pushToast('error',error instanceof Error ? error.message : 'Could not save draft');}
+    finally {if(ticket===epoch.current&&scope.current===id)setSaving(null);}
+  };
+  const load=async()=>{
+    if(!repo||saving)return;const ticket=++epoch.current,id=repo.id,key=inputKey;setSaving('load');
+    try{
+      const {artifact}=await api.latestHld<{artifact:HldArtifact|null}>(id);
+      if(ticket!==epoch.current||scope.current!==id)return;
+      if(currentInput.current!==key)throw new Error('Requirements changed while loading; retry to load the saved snapshot');
+      if(!artifact){pushToast('info','No structured saved draft is available');return;}
+      setLoaded({repoId:id,input:artifact.input});setComponents(artifact.input.components);
+      setSaved({key:JSON.stringify(artifact.input),result:{...artifact.result,artifactSha256:artifact.sha256}});
+      pushToast('success',`Loaded saved draft ${artifact.result.docId}`);
+    }catch(error){if(ticket===epoch.current&&scope.current===id)pushToast('error',error instanceof Error?error.message:'Could not load draft');}
+    finally{if(ticket===epoch.current&&scope.current===id)setSaving(null);}
   };
   const copy = async () => {
     try {await navigator.clipboard.writeText(draft.markdownContent);pushToast('success','Architecture draft copied');}
@@ -51,9 +69,11 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
     <div className="row" style={{flexWrap:'wrap',gap:8}}>
       <strong>{draft.solutionName}</strong><span className="chip">Draft · unreviewed</span><span className="chip">{draft.missingEvidence.length} evidence gaps</span><span className="spacer"/>
       <button className="btn btn-small" onClick={() => void copy()}>Copy Markdown</button>
-      <button className="btn btn-small" disabled={!repo || saving} onClick={() => void save()}>{saving?'Saving…':'Save draft to repository'}</button>
+      <button className="btn btn-small" disabled={!repo || !!saving} onClick={() => void load()}>{saving==='load'?'Loading…':'Load saved draft'}</button>
+      <button className="btn btn-small" disabled={!repo || !!saving} onClick={() => void save()}>{saving==='save'?'Saving…':'Save draft to repository'}</button>
     </div>
     <p className="muted small">Requirements template. Model synthesis, architecture approval and tenant verification are pending.</p>
+    {loaded?.repoId===repo?.id&&<p className="muted small">Showing stored requirements. <button className="btn btn-small" disabled={!!saving} onClick={()=>{setLoaded(null);setSaved(null);}}>Use current project brief</button></p>}
     <div className="row" role="tablist" aria-label="Architecture draft views" style={{flexWrap:'wrap',gap:8}} onKeyDown={event=>{
       const current=views.findIndex(([id])=>id===activeTab);
       const next=event.key==='ArrowRight'?(current+1)%views.length:event.key==='ArrowLeft'?(current+views.length-1)%views.length:event.key==='Home'?0:event.key==='End'?views.length-1:null;

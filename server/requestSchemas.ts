@@ -1,11 +1,10 @@
 import { z } from 'zod';
 import { HttpError } from './httpError.ts';
 import {proposalInputSchema} from '../shared/proposals.ts';
+import {hldInputSchema} from '../shared/hldArtifact.ts';
 const text = z.string().trim().min(1).max(8000);
-const strings = z.array(z.string().trim().min(1).max(500)).max(100);
 export const proposalSchema = proposalInputSchema;
-export const hldSchema = z.object({ solutionName: text, problemContext: text, tenantName: text.optional(),
-  repoId: text.optional(), components: z.array(z.object({ role: text, title: text, badge: text, details: text, deliverables: strings }).strict()).max(100) }).strict();
+export const hldSchema = hldInputSchema.extend({repoId:text.optional()}).strict();
 export const loginSchema = z.object({ name: z.string().trim().min(1).max(30).optional(),
   environmentUrl: z.url().refine((url) => new URL(url).protocol === 'https:', 'Environment must use HTTPS').optional(),
   tenantId: z.string().trim().min(1).max(253).regex(/^[a-zA-Z0-9.-]+$/).optional(),

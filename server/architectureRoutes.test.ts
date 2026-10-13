@@ -26,9 +26,15 @@ it('authenticates the non-demo route, resolves checkout ownership and confirms t
     expect((await post({...input,repoId:'scoped/missing'})).status).toBe(409);
     const response=await post(input);expect(response.status).toBe(200);const result=await response.json();
     expect(result).toMatchObject({status:'draft',generationMethod:'requirements-template'});
-    expect(result.savedFilePath).toBe(path.join(await fs.realpath(root),'docs','architecture','HLD.md'));
+    expect(result.savedFilePath).toBe(path.join(await fs.realpath(root),'docs','architecture','drafts',`${result.docId}.md`));
     const saved=await fs.readFile(result.savedFilePath,'utf8');expect(saved).toBe(result.markdownContent);expect(saved).toContain('Expense.msapp');
     expect(saved).not.toContain('Approved for Implementation');
+    expect(result.artifactSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect((await fetch(`${url}/api/hld/latest?repoId=scoped%2Frepo`)).status).toBe(401);
+    const latest=await fetch(`${url}/api/hld/latest?repoId=scoped%2Frepo`,{headers:{Cookie:cookie}});expect(latest.status).toBe(200);
+    const artifact=(await latest.json()).artifact;expect(artifact.sha256).toBe(result.artifactSha256);expect(artifact.repoId).toBe('scoped/repo');expect(artifact.input.components).toEqual(input.components);expect(artifact.result.implementationPlan).toEqual(result.implementationPlan);
+    expect((await fetch(`${url}/api/hld/latest?repoId=other%2Frepo`,{headers:{Cookie:cookie}})).status).toBe(404);
+    expect((await fetch(`${url}/api/hld/latest?repoId=scoped%2Frepo&repoPath=outside`,{headers:{Cookie:cookie}})).status).toBe(400);
     const preview=await post({...input,repoId:undefined});expect(preview.status).toBe(200);expect((await preview.json()).savedFilePath).toBeUndefined();
   } finally {server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await fs.rm(root,{recursive:true,force:true,maxRetries:5});}
 });

@@ -27,6 +27,7 @@ export interface HldResult {
   missingEvidence: string[];
   implementationPlan: {id: string; title: string; deliverables: string[]; acceptance: string[]}[];
   savedFilePath?: string;
+  artifactSha256?:string;
   markdownContent: string;
   mermaidDiagrams: {
     topology: string;
