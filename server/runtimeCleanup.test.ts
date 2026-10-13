@@ -1,6 +1,8 @@
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
 import {RuntimeCleanupStore} from './runtimeCleanup.ts';
+import {fork} from 'node:child_process';
+import {once} from 'node:events';
 const roots:string[]=[];afterEach(()=>{for(const root of roots.splice(0))fs.rmSync(root,{recursive:true,force:true});});
 const fixture=()=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'swarm-runtime-cleanup-'));roots.push(root);return path.join(root,'cleanup.json');};
 const record={id:'owned-token',agentId:'worker',cli:'codex',pid:123,keeperInstance:'11111111-1111-4111-8111-111111111111',requestedAt:Date.now(),state:'stopping' as const};
@@ -22,3 +24,128 @@ it('retains capacity if writing a native confirmation fails',()=>{
   const file=fixture(),store=new RuntimeCleanupStore(file);store.begin(record);fs.unlinkSync(file);fs.mkdirSync(file);store.confirmed(record.id);
   expect(store.view().records).toHaveLength(1);expect(store.view().unavailableReason).toContain('could not be saved');
 });
+it('merges independent writers and refreshes foreign quarantine before admission',()=>{
+  const file=fixture(),a=new RuntimeCleanupStore(file),b=new RuntimeCleanupStore(file);
+  a.begin(record);b.begin({...record,id:'second-root',pid:456});
+  expect(a.view().records.map(row=>row.id).sort()).toEqual(['owned-token','second-root']);
+  expect(b.view().records).toHaveLength(2);
+  a.confirmed(record.id);
+  expect(b.view().records.map(row=>row.id)).toEqual(['second-root']);
+  b.unverified('second-root');b.confirmed('second-root');
+  expect(new RuntimeCleanupStore(file).view()).toEqual({records:[]});
+});
+it.each(['confirmation','refresh','begin'])('preserves a changed root identity on stale %s',action=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file);store.begin(record);
+  const changed={...record,pid:789,requestedAt:record.requestedAt+1};
+  fs.writeFileSync(file,JSON.stringify({schemaVersion:1,records:[changed]}));
+  if(action==='confirmation')store.confirmed(record.id);
+  else if(action==='begin')store.begin(record);
+  else store.view();
+  expect(store.view().unavailableReason).toContain('quarantined');
+  expect(JSON.parse(fs.readFileSync(file,'utf8')).records).toEqual([changed]);
+});
+it('does not resurrect stale records already confirmed by another writer',()=>{
+  const file=fixture(),a=new RuntimeCleanupStore(file);a.begin(record);
+  const b=new RuntimeCleanupStore(file);b.confirmed(record.id);
+  a.begin({...record,id:'next-root'});
+  expect(new RuntimeCleanupStore(file).view().records.map(row=>row.id)).toEqual(['next-root']);
+});
+it('ignores a stale loss-of-verification update after another writer confirms exit',()=>{
+  const file=fixture(),a=new RuntimeCleanupStore(file);a.begin(record);
+  new RuntimeCleanupStore(file).confirmed(record.id);a.unverified(record.id);
+  expect(a.view()).toEqual({records:[]});expect(new RuntimeCleanupStore(file).view()).toEqual({records:[]});
+});
+it('quarantines a repeated stale registration rather than resurrecting its acknowledged root',()=>{
+  const file=fixture(),a=new RuntimeCleanupStore(file);a.begin(record);
+  new RuntimeCleanupStore(file).confirmed(record.id);a.begin(record);
+  expect(a.view().unavailableReason).toContain('quarantined');
+  expect(new RuntimeCleanupStore(file).view()).toEqual({records:[]});
+});
+it('rejects registering a different root under an already observed token',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file);store.begin(record);
+  store.begin({...record,pid:456});
+  expect(store.view().unavailableReason).toContain('identity conflict');
+  expect(JSON.parse(fs.readFileSync(file,'utf8')).records).toEqual([record]);
+});
+it('retains local evidence and removes the temporary snapshot when its durable flush fails',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file);
+  const flush=vi.spyOn(fs,'fsyncSync').mockImplementationOnce(()=>{throw new Error('Synthetic I/O failure');});
+  try{store.begin(record);}finally{flush.mockRestore();}
+  expect(store.view().unavailableReason).toContain('could not be saved');expect(store.view().records).toEqual([record]);
+  expect(fs.readdirSync(path.dirname(file))).toEqual([]);
+});
+it('keeps admission quarantined if lock ownership changes after snapshot replacement',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file);store.begin(record);
+  const rename=fs.renameSync;
+  const changed=JSON.stringify({pid:process.pid,token:'22222222-2222-4222-8222-222222222222'});
+  const spy=vi.spyOn(fs,'renameSync').mockImplementation((from,to)=>{rename(from,to);fs.writeFileSync(file+'.lock',changed);});
+  try{store.confirmed(record.id);}finally{spy.mockRestore();}
+  expect(store.view().unavailableReason).toContain('ownership is unverified');
+  expect(fs.readFileSync(file+'.lock','utf8')).toBe(changed);
+});
+it('never treats an inaccessible PID as a dead writer',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file);
+  const lock=JSON.stringify({pid:process.pid,token:'11111111-1111-4111-8111-111111111111'});fs.writeFileSync(file+'.lock',lock);
+  const spy=vi.spyOn(process,'kill').mockImplementation(()=>{throw Object.assign(new Error('Synthetic access denied'),{code:'EPERM'});});
+  try{expect(store.view().unavailableReason).toContain('writer');}finally{spy.mockRestore();}
+  expect(fs.readFileSync(file+'.lock','utf8')).toBe(lock);
+});
+it.each(['live','incomplete','corrupt','oversized'])('retains local quarantine and preserves the %s writer lock',kind=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file);
+  const content=kind==='live'?JSON.stringify({pid:process.pid,token:'11111111-1111-4111-8111-111111111111'}):kind==='incomplete'?'':kind==='corrupt'?'invalid': ' '.repeat(4097);
+  fs.writeFileSync(file+'.lock',content);store.begin(record);store.confirmed(record.id);
+  expect(store.view().unavailableReason).toContain('quarantined');expect(store.view().records).toHaveLength(1);
+  expect(fs.readFileSync(file+'.lock','utf8')).toBe(content);expect(fs.existsSync(file)).toBe(false);
+});
+it('temporarily blocks a reader while a live writer has not published its records',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file);
+  fs.writeFileSync(file+'.lock',JSON.stringify({pid:process.pid,token:'11111111-1111-4111-8111-111111111111'}));
+  expect(store.view().unavailableReason).toContain('writer');
+  fs.writeFileSync(file,JSON.stringify({schemaVersion:1,records:[record]}));fs.unlinkSync(file+'.lock');
+  expect(store.view()).toEqual({records:[{...record,state:'unverified'}]});
+});
+it.each(['missing','oversized','duplicate','non-file'])('quarantines %s evidence without silently clearing known roots',kind=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file);store.begin(record);
+  if(kind==='missing')fs.unlinkSync(file);
+  if(kind==='oversized')fs.writeFileSync(file,' '.repeat(1024*1024+1));
+  if(kind==='duplicate')fs.writeFileSync(file,JSON.stringify({schemaVersion:1,records:[record,record]}));
+  if(kind==='non-file'){fs.unlinkSync(file);fs.mkdirSync(file);}
+  expect(store.view().unavailableReason).toContain('quarantined');expect(store.view().records).toHaveLength(1);
+});
+it('serializes two native processes initialized against the same empty journal',async()=>{
+  const file=fixture(),script=path.join(path.dirname(file),'writer.mjs');
+  const module=new URL('./runtimeCleanup.ts',import.meta.url).href;
+  fs.writeFileSync(script,`import {RuntimeCleanupStore} from ${JSON.stringify(module)};
+    const [file,prefix]=process.argv.slice(2);const store=new RuntimeCleanupStore(file);
+    process.send('ready');process.once('message',()=>{
+      for(let i=0;i<20;i++)store.begin({id:prefix+'-'+i,agentId:prefix,cli:'codex',pid:process.pid,keeperInstance:null,requestedAt:i,state:'stopping'});
+      store.confirmed(prefix+'-0');const view=store.view();
+      if(view.unavailableReason){console.error(view.unavailableReason);process.exitCode=1;}
+      process.disconnect();
+    });`);
+  const children=['a','b'].map(prefix=>fork(script,[file,prefix],{execArgv:['--import','tsx'],stdio:['ignore','ignore','pipe','ipc']}));
+  const exits=children.map(async child=>{let stderr='';child.stderr?.on('data',chunk=>{stderr+=chunk;});const [code]=await once(child,'exit');return {code,stderr};});
+  try{
+    await Promise.all(children.map(child=>once(child,'message')));
+    for(const child of children)child.send('start');
+    expect(await Promise.all(exits)).toEqual([{code:0,stderr:''},{code:0,stderr:''}]);
+    const view=new RuntimeCleanupStore(file).view();expect(view.unavailableReason).toBeUndefined();
+    expect(view.records.map(row=>row.id).sort()).toEqual(['a','b'].flatMap(prefix=>Array.from({length:19},(_,i)=>prefix+'-'+(i+1))).sort());
+    expect(fs.existsSync(file+'.lock')).toBe(false);
+  }finally{for(const child of children)if(child.exitCode===null)child.kill();await Promise.allSettled(exits);}
+},15000);
+it('recovers a complete interrupted local-writer lock only after its native process exits',async()=>{
+  const file=fixture(),script=path.join(path.dirname(file),'dead-writer.mjs');
+  fs.writeFileSync(script,'process.send("ready");process.disconnect();');
+  const child=fork(script,[],{execArgv:[],stdio:['ignore','ignore','ignore','ipc']});const exit=once(child,'exit');
+  await once(child,'message');const pid=child.pid!;await exit;
+  const lock=JSON.stringify({pid,token:'11111111-1111-4111-8111-111111111111'});
+  fs.writeFileSync(file+'.lock',lock);
+  const store=new RuntimeCleanupStore(file);expect(store.view()).toEqual({records:[]});
+  store.begin(record);expect(store.view().unavailableReason).toBeUndefined();
+  expect(new RuntimeCleanupStore(file).view().records).toEqual([{...record,state:'unverified'}]);
+  expect(fs.existsSync(file+'.lock')).toBe(false);
+  fs.writeFileSync(file+'.lock',lock);fs.mkdirSync(file+'.lock.reaping');
+  expect(store.view().unavailableReason).toContain('writer');
+  expect(fs.readFileSync(file+'.lock','utf8')).toBe(lock);expect(fs.existsSync(file+'.lock.reaping')).toBe(true);
+},10000);

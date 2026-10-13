@@ -41,7 +41,7 @@ async function session(authorize: () => string | null) {
 }
 it.each([undefined,'old-plugin-hash','stopping'])('retires an unsafe retained OpenCode terminal: %s',async state=>{
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
-  const held={id:'synthetic-held',pid:0,exit:null,meta:{agentId:'synthetic-worker',cli:'opencode',token:'synthetic-token',dir:HOME_DIR,resumeId:'synthetic-checkpoint',busy:false,governanceSha256:state==='stopping'?crypto.createHash('sha256').update(OPENCODE_PLUGIN_SOURCE).digest('hex'):state,stopping:state==='stopping'}};
+  const held={id:'synthetic-held',pid:0,exit:null,meta:{agentId:'synthetic-worker',cli:'opencode',token:crypto.randomUUID(),dir:HOME_DIR,resumeId:'synthetic-checkpoint',busy:false,governanceSha256:state==='stopping'?crypto.createHash('sha256').update(OPENCODE_PLUGIN_SOURCE).digest('hex'):state,stopping:state==='stopping'}};
   vi.mocked(startKeeper).mockResolvedValue([held as any]);vi.mocked(discardPty).mockClear();vi.mocked(adoptPty).mockClear();
   let exited=false;const listeners:((code:number)=>void)[]=[];const kill=vi.fn(()=>{exited=true;listeners.forEach(callback=>callback(0));});
   vi.mocked(adoptPty).mockReturnValueOnce({pid:0,get verifiedExit(){return exited;},write:vi.fn(),resize:vi.fn(),setMeta:vi.fn(),kill,onData:vi.fn(),onExit:callback=>{listeners.push(callback);}});
