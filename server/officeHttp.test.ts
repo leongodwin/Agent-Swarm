@@ -50,7 +50,7 @@ async function office(withEvidence=false) {
   const capabilities=new CapabilityService(HOME_DIR,false,async()=>{throw new Error('Synthetic provider unavailable');});await capabilities.init();cleanup.push(()=>capabilities.close());
   if(withEvidence){
     const root=path.join(HOME_DIR,'delivery-runs','synthetic-run','evidence');await fs.mkdir(root,{recursive:true});await fs.writeFile(path.join(root,'proof.txt'),'synthetic evidence bytes');
-    await fs.writeFile(path.join(HOME_DIR,'delivery.json'),JSON.stringify({policy:null,releases:[],blockers:[],revision:0,runs:[{id:'synthetic-run',repoId:'synthetic/repo',head:'synthetic-commit',environmentUrl:environment,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:['proof.txt','../outside.txt'],log:[]}]}));
+    await fs.writeFile(path.join(HOME_DIR,'delivery.json'),JSON.stringify({policy:null,releases:[],blockers:[],revision:0,runs:[{id:'synthetic-run',repoId:'synthetic/repo',head:'synthetic-commit',environmentUrl:environment,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:['proof.txt'],log:[]}]}));
   }
   const delivery=new DeliveryService(HOME_DIR,false);await delivery.init();cleanup.push(()=>delivery.close());
   const toolGovernance=new ToolGovernanceService(path.join(HOME_DIR,'governance'),()=>true);await toolGovernance.init();
@@ -185,5 +185,5 @@ it('downloads exact registered evidence bytes and refuses unregistered or escapi
   expect(response.status).toBe(200);expect(await response.text()).toBe('synthetic evidence bytes');
   expect(response.headers.get('content-disposition')).toContain('attachment;');
   expect((await request('/api/delivery/runs/synthetic-run/evidence?file=unregistered.txt')).status).toBe(404);
-  expect((await request('/api/delivery/runs/synthetic-run/evidence?file=../outside.txt')).status).toBe(500);
+  expect((await request('/api/delivery/runs/synthetic-run/evidence?file=../outside.txt')).status).toBe(404);
 });

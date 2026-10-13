@@ -87,6 +87,84 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   const release = await service.createRelease(repo, plan); await service.approveRelease(release.id, 'sherlock', release.planHash);
   return { service, repo, calls, root, deps, release };
 }
+const storedRun={id:'synthetic-run',repoId:'synthetic/repo',head:'historical-commit',environmentUrl:target,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:[],log:[]};
+const storedBase={policy:null,runs:[],releases:[],blockers:[],revision:0};
+const badStates: [string,string][]=[
+  ['broken JSON','{'],['null','null'],['array','[]'],['missing policy','{"runs":[]}'],
+  ['future version',JSON.stringify({...storedBase,schemaVersion:2})],
+  ['negative revision',JSON.stringify({...storedBase,revision:-1})],
+  ['extra control',JSON.stringify({...storedBase,autoApprove:true})],
+  ['string enabled',JSON.stringify({...storedBase,policy:{enabled:'false',environmentUrl:target,approvedAt:new Date().toISOString()}})],
+  ['credential-bearing target',JSON.stringify({...storedBase,policy:{enabled:true,environmentUrl:'https://user:secret@target.crm4.dynamics.com',approvedAt:new Date().toISOString()}})],
+  ['unknown phase',JSON.stringify({...storedBase,runs:[{...storedRun,phase:'trusted'}]})],
+  ['escaping run directory',JSON.stringify({...storedBase,runs:[{...storedRun,id:'../../outside'}]})],
+  ['escaping evidence',JSON.stringify({...storedBase,runs:[{...storedRun,evidence:['../outside.txt']}]})],
+  ['duplicate runs',JSON.stringify({...storedBase,runs:[storedRun,storedRun]})],
+  ['duplicate evidence',JSON.stringify({...storedBase,runs:[{...storedRun,evidence:['proof.txt','proof.txt']}]})],
+  ['missing predecessor',JSON.stringify({...storedBase,runs:[{...storedRun,previousRunId:'missing'}]})],
+  ['self predecessor',JSON.stringify({...storedBase,runs:[{...storedRun,previousRunId:storedRun.id}]})],
+  ['orphan release',JSON.stringify({...storedBase,runs:[{...storedRun,releaseId:'missing'}]})],
+  ['duplicate operations',JSON.stringify({...storedBase,runs:[{...storedRun,operations:Array(2).fill({id:'typed:activate',kind:'post-deploy',status:'verified',commandSha256:'a'.repeat(64),startedAt:new Date().toISOString()})}]})],
+];
+it.each(badStates)('preserves %s delivery state and rejects later writes after failed startup',async(_name,raw)=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'delivery-invalid-'));directories.push(root);
+  const file=path.join(root,'delivery.json');await fs.writeFile(file,raw);
+  const execute=vi.fn<DeliveryDependencies['run']>(async()=>{throw new Error('Unexpected external execution');});
+  const service=new DeliveryService(root,false,{run:execute});services.push(service);
+  await expect(service.init()).rejects.toThrow('preserve and repair');
+  expect(()=>service.view()).toThrow('unavailable');await expect(service.configure(target,true)).rejects.toThrow('not ready');
+  await service.close();expect(await fs.readFile(file,'utf8')).toBe(raw);expect(execute).not.toHaveBeenCalled();
+  expect(await fs.stat(path.join(root,'delivery.lock')).then(()=>true,()=>false)).toBe(false);
+  await fs.writeFile(file,JSON.stringify(storedBase));const repaired=new DeliveryService(root,false,{run:execute});services.push(repaired);await repaired.init();expect(repaired.view().runs).toEqual([]);
+});
+it('preserves an oversized delivery file without loading or resetting it',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'delivery-oversized-'));directories.push(root);
+  const file=path.join(root,'delivery.json');const handle=await fs.open(file,'w');await handle.truncate(16*1024*1024+1);await handle.close();
+  const service=new DeliveryService(root,false);services.push(service);await expect(service.init()).rejects.toThrow('preserve and repair');await service.close();
+  expect((await fs.stat(file)).size).toBe(16*1024*1024+1);
+});
+it('migrates unversioned empty state without losing the selected target or Copilot pause',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'delivery-legacy-'));directories.push(root);
+  const policy={enabled:false,environmentUrl:target,approvedAt:new Date().toISOString(),copilotPaused:true};const file=path.join(root,'delivery.json');
+  await fs.writeFile(file,JSON.stringify({policy,runs:[]}));const service=new DeliveryService(root,false);services.push(service);await service.init();
+  expect(service.view().policy).toEqual(policy);expect(JSON.parse(await fs.readFile(file,'utf8'))).toMatchObject({schemaVersion:1,policy,runs:[],releases:[],blockers:[],revision:0});
+});
+it.each(['target','plan','approval','run mapping','completion'] as const)('rejects a corrupted saved %s without altering its release hash or file',async corruption=>{
+  const {service,root,deps,repo}=await fixture();await service.start(repo);await service.waitForIdle();await service.close();
+  const file=path.join(root,'delivery.json');const saved=JSON.parse(await fs.readFile(file,'utf8'));
+  if(corruption==='target')saved.releases[0].environmentUrl='https://other.crm4.dynamics.com';
+  if(corruption==='plan')saved.releases[0].plan.name='Changed release';
+  if(corruption==='approval')saved.releases[0].approvedBy=saved.releases[0].plan.owner;
+  if(corruption==='run mapping')saved.runs[0].head='b'.repeat(40);
+  if(corruption==='completion')saved.runs[0].phase='complete';
+  const raw=JSON.stringify(saved);await fs.writeFile(file,raw);const restored=new DeliveryService(root,false,deps);services.push(restored);
+  await expect(restored.init()).rejects.toThrow('preserve and repair');await restored.close();expect(await fs.readFile(file,'utf8')).toBe(raw);
+});
+it('rejects delivery writes before initialization and cannot restart a closed service',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'delivery-admission-'));directories.push(root);const service=new DeliveryService(root,false);services.push(service);
+  await expect(service.configure(target,true)).rejects.toThrow('not ready');expect(()=>service.view()).toThrow('unavailable');await service.close();await expect(service.init()).rejects.toThrow('already started or stopped');
+  expect(await fs.stat(path.join(root,'delivery.json')).then(()=>true,()=>false)).toBe(false);
+});
+it('waits for an initializing lease write before shutdown cleanup without resetting persisted state',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'delivery-startup-close-'));directories.push(root);
+  const file=path.join(root,'delivery.json');const raw=JSON.stringify(storedBase);await fs.writeFile(file,raw);
+  const service=new DeliveryService(root,false);services.push(service);
+  let entered!:()=>void,release!:()=>void;
+  const started=new Promise<void>(resolve=>{entered=resolve;});const hold=new Promise<void>(resolve=>{release=resolve;});
+  const original=fs.open.bind(fs);let intercepted=false;
+  const spy=vi.spyOn(fs,'open').mockImplementation(async(...args:any[])=>{
+    const handle=await (original as any)(...args);
+    if(!intercepted&&String(args[0])===path.join(root,'delivery.lock')&&args[1]==='wx'){intercepted=true;entered();await hold;}
+    return handle;
+  });
+  let closing:Promise<void>|undefined;
+  try {
+    const pending=service.init();const rejected=expect(pending).rejects.toThrow('preserve and repair');await started;
+    let finished=false;closing=service.close().then(()=>{finished=true;});await Promise.resolve();expect(finished).toBe(false);
+    release();await rejected;await closing;
+    expect(await fs.readFile(file,'utf8')).toBe(raw);expect(await fs.stat(path.join(root,'delivery.lock')).then(()=>true,()=>false)).toBe(false);
+  } finally {release();spy.mockRestore();await closing;}
+});
 const validReview = (hash: string) => ({ evidenceHash: hash, scores: [4, 4, 4, 4, 4], notes: 'Inspected desktop/mobile hierarchy, accessibility, task clarity and recovery evidence.', recoveryReviewed: true });
 describe('Real solution delivery', () => {
   it('blocks an unconfigured governance provider before executing project build commands',async()=>{
@@ -197,7 +275,7 @@ describe('Real solution delivery', () => {
     expect(service.view().runs[0].phase).toBe('blocked'); if (failure === 'test') expect(calls.some((c) => c.includes('solution import'))).toBe(false);
   });
   it('refuses demo execution while unrelated backlog does not block a scoped release', async () => {
-    const { service, repo, root, deps } = await fixture(); await expect(new DeliveryService(root, true, deps).configure(target, true)).rejects.toThrow('Demo');
+    const { service, repo, root, deps } = await fixture();const demo=new DeliveryService(root,true,deps);await demo.init();await expect(demo.configure(target, true)).rejects.toThrow('Demo');
     await service.start({ ...repo, issues: [{ number: 999 }], pulls: [{ state: 'OPEN', number: 999 }] } as RepoView); await service.waitForIdle(); expect(service.view().runs[0].phase).toBe('reviewing');
   });
   it('rejects foreign evidence paths and wrong installed versions', async () => {

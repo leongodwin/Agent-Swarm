@@ -1,5 +1,5 @@
-import fs from 'node:fs/promises';
 import { z } from 'zod';
+import { readBoundedJson } from './boundedJson.ts';
 
 const record = z.record(z.string(), z.unknown());
 const identified = record.refine(value => typeof value.id === 'string' && value.id.length > 0, 'Missing persisted identity');
@@ -29,21 +29,16 @@ const schema = z.object({
 
 /** Only a missing file is a first run. Never overwrite unreadable or newer office state. */
 export async function readOfficeState(file: string): Promise<z.infer<typeof schema> | null> {
-  let found = false;
   try {
-    const stat = await fs.stat(file);
-    found = true;
-    if (!stat.isFile() || stat.size > 16 * 1024 * 1024) throw new Error('Invalid or oversized state file');
-    const raw = await fs.readFile(file, 'utf8');
-    if (Buffer.byteLength(raw) > 16 * 1024 * 1024) throw new Error('State grew beyond the size limit');
-    const value = schema.parse(JSON.parse(raw));
+    const raw = await readBoundedJson(file);
+    if (raw === undefined) return null;
+    const value = schema.parse(raw);
     for (const entries of [value.repos, value.agents]) {
       const ids = entries?.map(entry => entry.id) ?? [];
       if (new Set(ids).size !== ids.length) throw new Error('Duplicate persisted identities');
     }
     return value;
   } catch (error) {
-    if (!found && (error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw new Error(`Cannot load office state at ${file}; preserve and repair it before restarting`, {cause: error});
   }
 }

@@ -5,10 +5,12 @@ import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { z } from 'zod';
 import { atomicWrite, SerialWriter } from './atomicFile.ts';
+import { readBoundedJson } from './boundedJson.ts';
+import { validateDeliveryState, type DeliveryStoredState } from './deliveryState.ts';
 import { resolveTenancyCommand } from './tenancy.ts';
 import { HttpError } from './httpError.ts';
 import type { RepoView } from '../shared/types.ts';
-import type { DeliveryPolicy, DeliveryRun, DeliveryView, DeliveryRelease, DeliveryBlocker } from '../shared/delivery.ts';
+import type { DeliveryRun, DeliveryView, DeliveryRelease } from '../shared/delivery.ts';
 
 import { releasePlanSchema, acceptanceScope } from './releasePlan.ts';
 import { verifyIndependently } from './independentVerification.ts';
@@ -124,7 +126,7 @@ export function installedSolution(output: string, name: string, version: string)
 
 /** One real release at a time. An interrupted/failed release never resumes deployment automatically. */
 export class DeliveryService {
-  private state: { policy: DeliveryPolicy | null; runs: DeliveryRun[]; releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number } = { policy: null, runs: [], releases: [], blockers: [], revision: 0 };
+  private state: DeliveryStoredState = { schemaVersion: 1, policy: null, runs: [], releases: [], blockers: [], revision: 0 };
   onChange: () => void = () => {};
   checkCapabilities: (repoId: string, cwd: string, environment: string, force: boolean) => Promise<{ status: string; configHash?: string; checks: { id: string; category: string; passed: boolean; remedy: string }[] }> = async () => { throw new Error('Configure capability checks before delivery'); };
   checkGovernance?: LifecycleCheck;
@@ -132,17 +134,27 @@ export class DeliveryService {
   private writer = new SerialWriter();
   private active: AbortController | null = null;
   private closed = false;
+  private stateFailed = false;
+  private ready = false;
+  private initializing: Promise<void> | null = null;
   private preparing: Promise<void> | null = null;
   private pending: Promise<void> | null = null;
   constructor(private root: string, private demo: boolean, private deps = deliveryCommands, private resourceLeaseRoot = path.join(root, 'resource-leases')) {}
-  async init() {
-    if (this.demo) return;
-    await fs.mkdir(this.root, { recursive: true });
-    await this.acquire();
+  init(): Promise<void> {
+    if (this.closed || this.ready || this.initializing) return Promise.reject(new HttpError(409, 'Delivery lifecycle already started or stopped'));
+    this.initializing = this.initialize().finally(() => { this.initializing = null; });
+    return this.initializing;
+  }
+  private async initialize() {
+    if (this.demo) { this.ready = true; return; }
     try {
-      try { this.state = JSON.parse(await fs.readFile(path.join(this.root, 'delivery.json'), 'utf8')); }
-      catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; }
-      this.state.releases ??= []; this.state.blockers ??= []; this.state.revision ??= 0;
+      await fs.mkdir(this.root, { recursive: true });
+      if (this.closed) throw new Error('Delivery startup cancelled');
+      await this.acquire();
+      if (this.closed) throw new Error('Delivery startup cancelled');
+      const saved = await readBoundedJson(path.join(this.root, 'delivery.json'));
+      if (this.closed) throw new Error('Delivery startup cancelled');
+      if (saved !== undefined) this.state = validateDeliveryState(saved);
       // Derive scope without rewriting immutable plans or their approved hashes.
       for (const run of this.state.runs) {
         const release = this.state.releases.find((r) => r.id === run.releaseId);
@@ -152,15 +164,24 @@ export class DeliveryService {
         this.state.revision++; run.phase = 'blocked'; run.recoveryRequired = true; run.error = 'Office restarted during delivery. Resume checks the persisted checkpoint; ambiguous imports require investigation.'; run.endedAt = new Date().toISOString();
       }
       await this.save();
-    } catch (err) { await this.releaseLease(); throw err; }
+      if (this.closed) throw new Error('Delivery startup cancelled');
+      this.ready = true;
+    } catch (err) {
+      this.stateFailed = true; this.closed = true;
+      await this.releaseLease();
+      if (err instanceof HttpError) throw err;
+      throw new Error('Cannot load delivery state; preserve and repair it before restarting', {cause:err});
+    }
   }
   private save() { return this.writer.write(() => atomicWrite(path.join(this.root, 'delivery.json'), JSON.stringify(this.state, null, 2))); }
+  private requireReady() { if (this.closed || !this.ready) throw new HttpError(409, 'Delivery service is not ready or is closed'); }
   view(repoId?: string): DeliveryView {
+    if (this.stateFailed || !this.ready) throw new HttpError(409, 'Delivery state is unavailable; preserve and repair it before restarting');
     return structuredClone({ ...this.state, running: !!this.active, releases: this.state.releases.filter((r) => !repoId || r.repoId === repoId), blockers: this.state.blockers.filter((r) => !repoId || r.repoId === repoId), runs: this.state.runs.filter((r) => !repoId || r.repoId === repoId).map((r) => ({ ...r, evidenceDirectory: path.join(this.root, 'delivery-runs', r.id, 'evidence') })),
       message: this.demo ? 'Real delivery is disabled in demo mode.' : !this.state.policy?.enabled ? 'Choose the development environment to enable real delivery.' : 'A scoped, QA-approved release pins the commit, target and acceptance tests. Missing evidence blocks completion.' });
   }
   async configure(environmentUrl: string, enabled: boolean) {
-    if (this.closed) throw new HttpError(409, 'Delivery service is closed');
+    this.requireReady();
     if (this.demo) throw new HttpError(409, 'Demo cannot configure real deployments');
     if (this.active) throw new HttpError(409, 'Wait for the active delivery to finish before changing its target');
     https.parse(environmentUrl);
@@ -171,7 +192,8 @@ export class DeliveryService {
   }
   private async changed() { this.state.revision++; await this.save(); try { this.onChange(); } catch (err) { console.warn('Delivery notification failed:', err); } }
   async pauseCopilot(paused: boolean) {
-    if (this.active || this.closed || this.demo || !this.state.policy) throw new HttpError(409, 'Configure delivery and wait for the active run before changing platform scope');
+    this.requireReady();
+    if (this.active || this.demo || !this.state.policy) throw new HttpError(409, 'Configure delivery and wait for the active run before changing platform scope');
     this.state.policy.copilotPaused = paused; await this.changed(); return this.view();
   }
   private async blocker(repoId: string, error: unknown, release?: DeliveryRelease) {
@@ -184,10 +206,12 @@ export class DeliveryService {
     await this.changed();
   }
   async createRelease(repo: RepoView, input: unknown) {
-    if (this.closed || this.demo || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Enable real delivery and wait for the active run');
+    this.requireReady();
+    if (this.demo || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Enable real delivery and wait for the active run');
     const plan = releasePlanSchema.parse(input);
     const controller = new AbortController();
     await this.deps.run({ executable: 'git', args: ['fetch', 'origin', repo.defaultBranch] }, repo.checkoutPath, {}, controller.signal);
+    this.requireReady();
     const head = (await this.deps.run({ executable: 'git', args: ['rev-parse', `origin/${repo.defaultBranch}`] }, repo.checkoutPath, {}, controller.signal)).trim();
     if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error('Cannot pin release commit');
     if (this.closed || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Delivery state changed during release preparation; retry');
@@ -201,7 +225,8 @@ export class DeliveryService {
     this.state.releases.unshift(release); await this.changed(); return structuredClone(release);
   }
   async approveRelease(id: string, reviewer: string, hash: string) {
-    if (this.closed || this.demo) throw new HttpError(409, 'Delivery approval unavailable');
+    this.requireReady();
+    if (this.demo) throw new HttpError(409, 'Delivery approval unavailable');
     const release = this.state.releases.find((r) => r.id === id);
     if (!release || release.plan.qaOwner !== reviewer || release.plan.owner === reviewer || release.planHash !== hash) throw new HttpError(403, 'Only the assigned independent QA agent can approve this exact release hash');
     if (!release.approvedAt) { release.approvedAt = new Date().toISOString(); release.approvedBy = reviewer; await this.changed(); }
@@ -228,7 +253,7 @@ export class DeliveryService {
     this.lease = null;
   }
   async start(repo: RepoView, retry = false, releaseId?: string) {
-    if (this.closed) throw new HttpError(409, 'Delivery service is closed');
+    this.requireReady();
     if (this.demo) throw new HttpError(409, 'Demo never runs delivery commands');
     if (!this.state.policy?.enabled) throw new HttpError(409, 'Real delivery is not enabled');
     if (this.active) throw new HttpError(409, 'A delivery is already running');
@@ -269,7 +294,7 @@ export class DeliveryService {
     finally { prepared(); this.preparing = null; }
   }
   async tick(repos: RepoView[]) {
-    if (this.active || this.demo || !this.state.policy?.enabled) return;
+    if (this.closed || !this.ready || this.active || this.demo || !this.state.policy?.enabled) return;
     for (const repo of repos) {
       const latest = this.state.runs.find((r) => r.repoId === repo.id && r.environmentUrl === this.state.policy?.environmentUrl);
       if (latest?.phase === 'complete' && latest.health && Date.parse(latest.health.nextCheckAt) <= Date.now()) { await this.monitor(repo, latest.id); return; }
@@ -289,7 +314,8 @@ export class DeliveryService {
     return hash.digest('hex');
   }
   async approveVisual(id: string, reviewer: string, input: unknown) {
-    if (this.closed || this.demo || this.active) throw new HttpError(409, 'Wait for the active delivery to finish');
+    this.requireReady();
+    if (this.demo || this.active) throw new HttpError(409, 'Wait for the active delivery to finish');
     const run = this.state.runs.find((r) => r.id === id); const release = this.state.releases.find((r) => r.id === run?.releaseId);
     if (!run || !release || run.phase !== 'reviewing' || release.plan.qaOwner !== reviewer || reviewer === release.plan.owner) throw new HttpError(403, 'Only the assigned QA reviewer may approve the captured release evidence');
     const review = z.object({ evidenceHash: z.string(), scores: release.plan.verification.api ? z.array(z.number()).length(0) : z.array(z.number().int().min(4).max(5)).length(5), notes: z.string().min(40).max(4000), recoveryReviewed: z.literal(true) }).strict().parse(input);
@@ -298,7 +324,7 @@ export class DeliveryService {
     run.phase = 'complete'; run.endedAt = new Date().toISOString(); await this.changed(); return this.view(run.repoId);
   }
   async monitor(repo: RepoView, id: string) {
-    if (this.demo || this.closed || this.active || !this.state.policy?.enabled) return;
+    if (this.demo || this.closed || !this.ready || this.active || !this.state.policy?.enabled) return;
     const run = this.state.runs.find((r) => r.id === id); const release = this.state.releases.find((r) => r.id === run?.releaseId);
     if (!run || run.repoId !== repo.id || !release || run.phase !== 'complete' || run.environmentUrl !== this.state.policy.environmentUrl) return;
     const controller = new AbortController(); this.active = controller;
@@ -321,7 +347,7 @@ export class DeliveryService {
     })().finally(() => { this.active = null; this.pending = null; });
     await this.pending;
   }
-  async close() { this.closed = true; this.active?.abort(); await this.preparing; await this.pending; await this.writer.drain(); await this.releaseLease(); }
+  async close() { this.closed = true; this.active?.abort(); await this.initializing?.catch(() => {}); await this.preparing; await this.pending; await this.writer.drain(); await this.releaseLease(); }
   async waitForIdle() { await this.pending; }
   private async governance(run:DeliveryRun,manifest:unknown,phase:GovernancePhase) {
     const releaseId=run.releaseId;
