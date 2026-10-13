@@ -309,9 +309,11 @@ function useCompany() {
     }
     if (ceo) {
       report.push({
-        icon: '🧠',
+        icon: info.blockedReason ? '⚠️' : '🧠',
         text:
-          ceo.status === 'working'
+          info.blockedReason
+            ? `${ceo.name}: ${info.blockedReason}`
+            : ceo.status === 'working'
             ? `${ceo.name} is ${(info.job?.label ?? 'working').replace(/^\w/, (c) => c.toLowerCase())}.`
             : info.nextReviewAt
               ? `${ceo.name} reviews the company next at ${clock(info.nextReviewAt)}.`

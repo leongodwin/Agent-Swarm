@@ -303,17 +303,12 @@ function CeoTab() {
             <span className="spacer" />
             <input
               className="inline"
-              list="models-ceo"
               defaultValue={ceo.model}
-              title="The CEO's model"
+              title="The CEO's GitHub Copilot CLI model override; leave empty to use its default"
+              placeholder="CLI default"
               style={{ maxWidth: 150 }}
               onBlur={(e) => e.target.value !== ceo.model && void attempt(() => api.updateAgent(ceo.id, { model: e.target.value }))}
             />
-            <datalist id="models-ceo">
-              {MODELS.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
             <select value={ceo.effort} title="The CEO's effort" onChange={(e) => void attempt(() => api.updateAgent(ceo.id, { effort: e.target.value }))} style={{ width: 'auto' }}>
               {EFFORTS.map((x) => (
                 <option key={x} value={x}>
@@ -323,7 +318,7 @@ function CeoTab() {
             </select>
           </div>
           <div className="small">
-            <b>Now:</b> {working ? info.job?.label : 'free'}
+            <b>Now:</b> {working ? info.job?.label : info.blockedReason ? 'blocked' : 'free'}
             {info.queue.length > 0 && (
               <>
                 {' '}
@@ -331,9 +326,10 @@ function CeoTab() {
               </>
             )}
           </div>
-          <div className="muted small">
+          {info.blockedReason && <div role="alert" className="term-error small">{info.blockedReason}</div>}
+          {!info.blockedReason && <div className="muted small">
             {info.nextReviewAt ? `Next company review around ${new Date(info.nextReviewAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (skipped if nothing changed).` : 'Periodic reviews are off (Settings).'}
-          </div>
+          </div>}
           {ceo.terminal ? (
             <LiveTerminal agentId={ceo.id} className="ceo-term" />
           ) : (
