@@ -150,6 +150,8 @@ interface CeoState {
   job: CeoJob | null; // the job the CEO is on right now
   lastReviewAt: number | null;
   lastFingerprint: string | null; // company state at the last review; unchanged means the next review is skipped
+  blockedReason: string | null;
+  retryAt: number | null;
 }
 
 interface Persisted {
@@ -296,6 +298,7 @@ export class Swarm {
   capabilityFingerprint = () => '';
   capabilityStatus = () => '{}';
   capabilityPreflight: (repoId: string, cli: string) => Promise<string | null> = async () => { throw new Error('Capability service is not configured'); };
+  ceoPreflight: (repoIds: string[]) => Promise<string | null> = async () => { throw new Error('CEO readiness is not configured'); };
   taskPaused: (title: string) => boolean = () => false;
   deliveryRevision = () => 0;
   requestDeliveryReview: (id: string) => Promise<string> = async () => { throw new Error('Delivery unavailable'); };
@@ -326,7 +329,7 @@ export class Swarm {
     agents: [],
     qa: [],
     requests: [],
-    ceo: { queue: [], job: null, lastReviewAt: null, lastFingerprint: null },
+    ceo: { queue: [], job: null, lastReviewAt: null, lastFingerprint: null, blockedReason: null, retryAt: null },
     messages: [],
     phoneReadAt: 0,
   };
@@ -360,6 +363,7 @@ export class Swarm {
   private saveTimer: NodeJS.Timeout | null = null;
   private stateLoaded = false;
   private closed = false;
+  private lifecycleStop = new AbortController();
   private shutdownWork: Promise<void> | null = null;
   private lifecycleTimers = new Set<NodeJS.Timeout>();
   private stateWriter = new SerialWriter();
@@ -1156,6 +1160,7 @@ export class Swarm {
   shutdown(restart = false): Promise<void> {
     if (this.shutdownWork) return this.shutdownWork;
     this.closed = true;
+    this.lifecycleStop.abort();
     for (const timer of this.lifecycleTimers) clearTimeout(timer);
     this.lifecycleTimers.clear();
     if (this.saveTimer) clearTimeout(this.saveTimer);
@@ -1455,6 +1460,10 @@ export class Swarm {
     if (!BUSY.includes(a.status)) return;
     a.status = 'stopped';
     a.lastError = 'Stopped by manager';
+    if (a.role === 'ceo' && !this.agentRt.get(id)?.session) {
+      Object.assign(this.state.ceo, {job: null, blockedReason: null, retryAt: null});
+      this.emitCeo();
+    }
     this.appendLog(a, [{ kind: 'manager', text: '■ Manager stopped this session.' }]);
     this.agentRt.get(id)?.session?.stop();
     this.emitAgent(a);
@@ -1535,7 +1544,7 @@ export class Swarm {
   private sessionRuntime(a: PersistedAgent, resume?: string): { terminal?: AgentTerminal; cli?: AgentCli; label?: string; resumeSessionId?: string } {
     if (resume && !isCli(a.sessionCli)) resume = undefined; // legacy IDs do not establish a runtime owner
     const inTerminal = a.role === 'ceo' || (this.state.settings.runtime === 'terminal' && this.backend.terminals);
-    let cli: AgentCli = a.cli || this.state.settings.defaultCli;
+    let cli: AgentCli = a.role === 'ceo' ? 'copilot' : a.cli || this.state.settings.defaultCli;
     if (resume && a.sessionCli && a.sessionCli !== cli) {
       if (a.role === 'ceo') resume = undefined;
       else if (inTerminal) cli = a.sessionCli;
@@ -2847,6 +2856,8 @@ export class Swarm {
       job: c.job ? view(c.job) : null,
       lastReviewAt: c.lastReviewAt,
       nextReviewAt: min > 0 && c.lastReviewAt ? c.lastReviewAt + min * 60_000 : null,
+      blockedReason: c.blockedReason,
+      retryAt: c.retryAt,
     };
   }
 
@@ -2856,6 +2867,7 @@ export class Swarm {
 
   /** Queue a job for the CEO: one onboarding or plan per floor, one review, and chat messages merge into one reply. */
   private enqueueCeo(job: CeoJob) {
+    this.state.ceo.retryAt = null; // new operator/capability information permits an immediate retry
     const q = this.state.ceo.queue;
     if (job.kind === 'plan' && q.some((j) => j.kind === 'onboard' && j.repoId === job.repoId)) return; // onboarding plans from the brief too
     const same = q.findIndex((j) => j.kind === job.kind && (job.kind === 'review' || job.kind === 'chat' || j.repoId === job.repoId));
@@ -2871,6 +2883,7 @@ export class Swarm {
     if (this.closed) return;
     const a = this.state.agents.find((x) => x.id === CEO_ID);
     const c = this.state.ceo;
+    if (c.retryAt && Date.now() < c.retryAt) return;
     if (!a || BUSY.includes(a.status) || c.job || c.queue.length === 0) return;
     if (this.slotsFull()) return;
     const rank: Record<CeoJob['kind'], number> = { chat: 0, onboard: 1, plan: 1, review: 2 };
@@ -2899,30 +2912,47 @@ export class Swarm {
     const floor = this.ceoFloor(job.repoId);
     const label = jobLabel(job, floor);
     this.state.ceo.job = job;
-    Object.assign(a, { status: 'working' as AgentStatus, task: null, issueNumber: null, issueTitle: label, startedAt: Date.now(), endedAt: null, costUsd: 0, turns: 0, lastError: null });
+    Object.assign(a, { status: 'preparing' as AgentStatus, cli: 'copilot', task: null, issueNumber: null, issueTitle: label, startedAt: Date.now(), endedAt: null, costUsd: 0, turns: 0, lastError: null });
     this.appendLog(a, [
       { kind: 'system', text: '' },
       { kind: 'system', text: `━━━ ${label} ━━━` },
     ]);
     if (job.kind === 'chat') this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${job.text}` }]);
-    if (job.kind === 'review') {
-      this.state.ceo.lastReviewAt = Date.now();
-      this.state.ceo.lastFingerprint = this.fingerprint();
-    }
     this.ceoIssues = new IssueCap(MAX_ISSUES_PER_JOB);
     this.emitAgent(a);
     this.emitCeo();
     this.save();
-    await fs.mkdir(CEO_DIR, { recursive: true }).catch(() => undefined);
+    const scopeIds = job.repoId ? [job.repoId, ...this.repo(job.repoId).links] : this.state.repos.map(repo => repo.id);
+    const scope = () => JSON.stringify(this.state.repos.map(repo => [repo.id, repo.fullName, repo.localPath, repo.targetTenancy, repo.defaultBranch, repo.links, repo.mission, repo.summary, repo.qaBrief]));
+    const checkedScope = scope();
+    let blocker: string | null = null;
+    if (!this.backend.demo) {
+      if (!this.backend.terminals) blocker = 'CEO terminal runtime is unavailable; install the supported terminal runtime and refresh readiness';
+      else {
+        blocker = await this.checkCeoReadiness(scopeIds);
+      }
+    }
     if (this.closed) return;
-    if (a.status !== 'working') {
+    if (this.state.ceo.job !== job) return;
+    if (a.status !== 'preparing') {
       // stopped before the session started
       this.state.ceo.job = null;
       this.emitCeo();
+      this.save();
       return;
     }
+    if (checkedScope !== scope()) blocker = 'CEO project scope changed during readiness verification; retry with the current projects';
+    if (blocker) return this.deferCeoJob(a, job, blocker);
+    try { await fs.mkdir(CEO_DIR, {recursive: true}); }
+    catch { return this.deferCeoJob(a, job, 'CEO workspace is unavailable; repair its folder access before retrying'); }
+    if (this.closed) return;
+    if (this.state.ceo.job !== job) return;
+    if (a.status !== 'preparing') { this.state.ceo.job = null; this.emitCeo(); this.save(); return; }
+    if (checkedScope !== scope()) return this.deferCeoJob(a, job, 'CEO project scope changed while preparing its workspace; retry with the current projects');
+    a.status = 'working'; this.emitAgent(a); this.emitCeo();
     const s = this.state.settings;
     // A chat carries on from the CEO's last session, so "why did you propose that?" has an answer.
+    try {
     const how = this.sessionRuntime(a, job.kind === 'chat' ? (a.sessionId ?? undefined) : undefined);
     rt.session = this.backend.startSession(
       {
@@ -2940,7 +2970,7 @@ export class Swarm {
         model: a.model || CEO_MODEL,
         effort: a.effort || CEO_EFFORT,
         browserTesting: false,
-        additionalDirectories: this.state.repos.filter((r) => this.repoRt.get(r.id)?.cloneStatus === 'ready').map((r) => this.backend.mainDir(r.fullName)),
+        additionalDirectories: this.state.repos.filter((r) => scopeIds.includes(r.id) && this.repoRt.get(r.id)?.cloneStatus === 'ready').map((r) => this.backend.mainDir(r.fullName)),
         role: 'ceo',
         office: this.officeTools(),
         ...how,
@@ -2960,12 +2990,50 @@ export class Swarm {
         },
         browserUrl: () => undefined,
         screenshot: () => undefined,
-        turn: (text) => this.postMessage('ceo', text),
+        turn: (text) => { if (!this.closed) this.postMessage('ceo', text); },
         limited: (at) => this.pauseForLimit(at),
         usageWarning: (info) => this.paceForWarning(info),
         finished: (result) => this.onCeoFinished(a, result),
       },
     );
+    Object.assign(this.state.ceo, {blockedReason: null, retryAt: null});
+    if (job.kind === 'review') {
+      this.state.ceo.lastReviewAt = Date.now();
+      this.state.ceo.lastFingerprint = this.fingerprint();
+    }
+    this.emitCeo(); this.save();
+    } catch { this.deferCeoJob(a, job, 'CEO session could not start; check CLI authentication and runtime configuration'); }
+  }
+
+  private deferCeoJob(a: PersistedAgent, job: CeoJob, reason: string) {
+    if (this.closed || this.state.ceo.job !== job) return;
+    reason = reason.slice(0, 2000);
+    const c = this.state.ceo;
+    const changed = c.blockedReason !== reason;
+    Object.assign(c, {job: null, blockedReason: reason.slice(0, 2000), retryAt: Date.now() + 60_000});
+    c.queue.unshift(job);
+    Object.assign(a, {status: 'error', endedAt: Date.now(), lastError: c.blockedReason});
+    this.appendLog(a, [{kind: 'error', text: `CEO dispatch blocked: ${c.blockedReason}. Job retained for retry.`}]);
+    if (changed) this.postMessage('office', `CEO dispatch blocked: ${c.blockedReason}. The queued job is retained.`);
+    this.emitAgent(a); this.emitCeo(); this.save();
+  }
+
+  private checkCeoReadiness(scopeIds: string[]): Promise<string | null> {
+    return new Promise(resolve => {
+      let settled = false;
+      const signal = this.lifecycleStop.signal;
+      const finish = (result: string | null) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); signal.removeEventListener('abort', aborted); resolve(result);
+      };
+      const aborted = () => finish('CEO readiness cancelled by office shutdown');
+      const timer = setTimeout(() => finish('CEO readiness expired after 90 seconds; refresh capabilities before retrying'), 90_000);
+      timer.unref(); signal.addEventListener('abort', aborted, {once: true});
+      if (signal.aborted) {aborted(); return;}
+      Promise.resolve().then(() => this.ceoPreflight([...scopeIds])).then(decision => {
+        finish(decision === null ? null : typeof decision === 'string' && decision.trim() ? decision : 'CEO readiness returned no usable decision');
+      }, () => finish('CEO readiness is unavailable; refresh authentication and project capabilities'));
+    });
   }
 
   private onCeoFinished(a: PersistedAgent, result: SessionResult) {

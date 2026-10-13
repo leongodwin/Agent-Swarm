@@ -1,12 +1,20 @@
 # Reliability priorities 5–8
 
+## CEO dispatch admission
+
+The CEO reserves a preparing slot before readiness checks. Non-demo dispatch requires native terminal support, a configured CEO readiness provider and a usable ready decision. The office provider checks GitHub authentication and the fixed Copilot CLI, then checks the job's project scope (including declared linked projects). Additional reference directories are limited to that checked scope. Project paths, targets, links or requirements changing during verification invalidate admission.
+
+Readiness expires after 90 seconds. Blocked, unavailable, expired, workspace-failed or session-start-failed jobs return to the durable queue with a reason and a 60-second retry cooldown. Identical blockers do not repeatedly notify the manager; fresh operator/capability information permits an immediate retry. CEO state exposes `blockedReason` and `retryAt`, and an office phone notice carries the remediation. A cancelled preparing job is removed immediately; late results cannot dispatch it over a replacement. Shutdown retains an unfinished preparing job for restart recovery.
+
+The tests exercise the actual Swarm with synthetic readiness and session backends, including real terminal-emulator persistence. They do not verify a native Copilot process, its authenticated account/licence, retained-process reconnect or actual office-tool negotiation. CLI response plus GitHub authentication is prerequisite evidence, not full Copilot authentication or tenant governance. Full policy/schema admission and native execution certification remain open. Evidence: `.swarm-reliability/ceo-admission-coverage-2026-10-13.txt`, `ceo-admission-coverage-exit-2026-10-13.txt` and `ceo-admission-api-e2e-2026-10-13.txt`.
+
 ## Repair checkpoint ownership
 
 QA records persist the developer session ID and its owning CLI together. Handoff, requeue and repair completion update the pair as one state change; an agent's newer unrelated session cannot change the runtime owner of an earlier repair checkpoint. Repair preparation copies the selected checkpoint into the active task before readiness checks, so blocked dispatch retains the intended checkpoint.
 
 A checkpoint resumes only for its original developer and a compatible runtime. SDK repairs can resume Claude checkpoints; terminal repairs use the recorded CLI. Unknown legacy CLI provenance, incompatible SDK checkpoints and developer takeovers start a fresh session with the current PR and QA instructions. Unknown agent-level CLI provenance is also no longer inferred as Claude. This may create a fresh session for legacy offices, while preserving the repository work and avoiding an incorrectly routed resume.
 
-Actual Swarm regressions exercise handoff, a newer unrelated agent session, blocked readiness, migration, compatible repair dispatch and checkpoint replacement on completion. The terminal-path test includes real emulator persistence with a synthetic backend, not a native CLI process. Native reconnect/retention, CEO admission and authoritative full policy/schema enforcement remain separate requirements. Evidence: `.swarm-reliability/repair-checkpoint-coverage-2026-10-13.txt`, `repair-checkpoint-coverage-exit-2026-10-13.txt` and `repair-checkpoint-api-e2e-2026-10-13.txt`.
+Actual Swarm regressions exercise handoff, a newer unrelated agent session, blocked readiness, migration, compatible repair dispatch and checkpoint replacement on completion. The terminal-path test includes real emulator persistence with a synthetic backend, not a native CLI process. Native reconnect/retention, live CEO admission and authoritative full policy/schema enforcement remain separate requirements. Evidence: `.swarm-reliability/repair-checkpoint-coverage-2026-10-13.txt`, `repair-checkpoint-coverage-exit-2026-10-13.txt` and `repair-checkpoint-api-e2e-2026-10-13.txt`.
 
 ## Follow-up and release-review readiness
 
@@ -16,7 +24,7 @@ Worker follow-up prompts to active sessions and resumed worker sessions now chec
 
 Release reviews reserve their assigned QA agent, run the same capability check, and revalidate the agent/session before dispatch. Failed readiness can be retried without resetting the reviewer; a live session or reserved reviewer still blocks concurrent review. Fix sessions preflight the runtime selected by their recorded repair checkpoint and dispatch context.
 
-These changes cover capability admission, not comprehensive policy/schema approval. Retained CLI processes, directly typed native execution, CEO dispatch, and full governance across all runtime paths remain unverified or incomplete. Existing authenticated policy inventory does not authorize these paths. Evidence: `.swarm-reliability/session-admission-coverage-2026-10-13.txt`, `session-admission-coverage-exit-2026-10-13.txt`, and `session-admission-api-e2e-2026-10-13.txt`.
+These changes cover capability admission, not comprehensive policy/schema approval. Retained CLI processes, directly typed native execution, live CEO dispatch, and full governance across all runtime paths remain unverified or incomplete. Existing authenticated policy inventory does not authorize these paths. Evidence: `.swarm-reliability/session-admission-coverage-2026-10-13.txt`, `session-admission-coverage-exit-2026-10-13.txt`, and `session-admission-api-e2e-2026-10-13.txt`.
 
 ## QA evidence and merge admission
 

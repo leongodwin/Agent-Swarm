@@ -310,6 +310,8 @@ export interface PhoneMessage {
 export type CeoJobKind = 'onboard' | 'plan' | 'review' | 'chat';
 
 export interface CeoInfo {
+  blockedReason?: string | null;
+  retryAt?: number | null;
   queue: { kind: CeoJobKind; label: string }[]; // jobs waiting for the CEO
   job: { kind: CeoJobKind; label: string } | null; // what the CEO is doing now
   lastReviewAt: number | null;

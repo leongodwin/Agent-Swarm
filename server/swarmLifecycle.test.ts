@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Backend } from './backend.ts';
 import type { SessionCallbacks } from './agentRunner.ts';
 import type { PullInfo } from '../shared/types.ts';
+import {CEO_ID} from '../shared/types.ts';
 
 vi.mock('./config.ts', async importOriginal => {
   const real = await importOriginal<typeof import('./config.ts')>();
@@ -45,6 +46,7 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
 }
 beforeEach(() => vi.useFakeTimers());
 afterEach(async () => {
+  vi.useRealTimers(); // allow real terminal-emulator flushes during cleanup
   await Promise.all(offices.splice(0).map(swarm => swarm.shutdown().catch(() => {})));
   vi.useRealTimers();
   for (const entry of await fs.readdir(HOME_DIR)) await fs.rm(path.join(HOME_DIR, entry), {recursive: true, force: true});
@@ -413,4 +415,89 @@ it('starts fresh rather than giving a Codex checkpoint to the SDK', async () => 
   expect((fake.startSession.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBeUndefined();
   await swarm.shutdown(true); const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
   expect(saved.qa[0]).toMatchObject({devSessionId: null, devSessionCli: null});
+});
+
+it('blocks CEO work without native terminal readiness and retains the queued job', async () => {
+  const {swarm, fake} = await office(); const preflight = vi.fn(async () => null); swarm.ceoPreflight = preflight;
+  swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(150);
+  expect(preflight).not.toHaveBeenCalled(); expect(fake.startSession).not.toHaveBeenCalled();
+  expect(swarm.snapshot().ceo).toMatchObject({job: null, blockedReason: expect.stringContaining('terminal runtime'), queue: [{kind: 'chat'}]});
+  expect(swarm.snapshot().ceo.retryAt).toBeGreaterThan(Date.now());
+});
+
+it.each(['missing', 'empty', 'blocked'])('blocks %s CEO readiness without dropping the job or spamming retries', async mode => {
+  const {swarm, fake} = await office(true, fake => {fake.terminals = true;});
+  if (mode !== 'missing') swarm.ceoPreflight = vi.fn(async () => mode === 'empty' ? '' : 'Synthetic project access unavailable');
+  swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(150);
+  const messages = swarm.snapshot().messages.length;
+  await vi.advanceTimersByTimeAsync(16000);
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(swarm.snapshot().ceo.queue).toHaveLength(1);
+  expect(swarm.snapshot().messages).toHaveLength(messages);
+  await swarm.shutdown(true); const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  expect(saved.ceo).toMatchObject({job: null, blockedReason: expect.any(String), retryAt: expect.any(Number)});
+  expect(saved.ceo.queue[0].text).toBe('Synthetic company question');
+});
+
+it('reserves the CEO during checks and starts a ready job using the fixed Copilot runtime', async () => {
+  const {swarm, fake} = await office(true, fake => {fake.terminals = true;}); let checked!: (value: string | null) => void;
+  const preflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;})); swarm.ceoPreflight = preflight;
+  swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(150);
+  expect(swarm.snapshot().agents.find(a => a.id === CEO_ID)?.status).toBe('preparing');
+  expect(preflight).toHaveBeenCalledExactlyOnceWith(['synthetic/repo']); expect(fake.startSession).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1000); expect(preflight).toHaveBeenCalledOnce(); checked(null);
+  await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
+  expect(fake.startSession.mock.calls[0][0]).toMatchObject({role: 'ceo', cli: 'copilot', additionalDirectories: [HOME_DIR]});
+  expect(swarm.snapshot().ceo.blockedReason).toBeNull();
+  const callbacks = fake.startSession.mock.calls[0][1]; callbacks.turn?.('Synthetic answer');
+  callbacks.finished({ok: true, text: 'Synthetic answer', costUsd: 0, turns: 1, errors: []});
+  expect(swarm.snapshot().ceo.job).toBeNull();
+});
+
+it('retains startup failures and retries immediately when fresh operator information arrives', async () => {
+  const {swarm, fake} = await office(true, fake => {fake.terminals = true;}); swarm.ceoPreflight = async () => null;
+  fake.startSession.mockImplementationOnce(() => {throw new Error('Synthetic CLI start failed');});
+  swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(() => expect(swarm.snapshot().ceo.blockedReason).toContain('could not start'));
+  expect(swarm.snapshot().ceo.queue).toHaveLength(1);
+  swarm.messageCeo('Additional synthetic context'); await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledTimes(2));
+  expect(swarm.snapshot().ceo.blockedReason).toBeNull();
+});
+
+it('cannot start an older cancelled CEO preflight while its replacement is preparing', async () => {
+  const {swarm, fake} = await office(true, fake => {fake.terminals = true;}); const checks: ((value: string | null) => void)[] = [];
+  swarm.ceoPreflight = () => new Promise(resolve => {checks.push(resolve);});
+  swarm.messageCeo('Old synthetic request'); await vi.advanceTimersByTimeAsync(150); swarm.stopAgent(CEO_ID);
+  swarm.messageCeo('New synthetic request'); await vi.advanceTimersByTimeAsync(150);
+  expect(checks).toHaveLength(2); checks[0](null); for (let i = 0; i < 10; i++) await Promise.resolve();
+  expect(fake.startSession).not.toHaveBeenCalled(); checks[1](null);
+  await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
+  expect((fake.startSession.mock.calls[0][0] as {prompt: string}).prompt).toContain('New synthetic request');
+  expect((fake.startSession.mock.calls[0][0] as {prompt: string}).prompt).not.toContain('Old synthetic request');
+});
+
+it('blocks CEO dispatch if project requirements change during readiness verification', async () => {
+  const {swarm, fake} = await office(true, fake => {fake.terminals = true;}); let checked!: (value: string | null) => void;
+  swarm.ceoPreflight = () => new Promise(resolve => {checked = resolve;});
+  swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(150);
+  swarm.updateRepo('synthetic/repo', {mission: 'Changed synthetic requirements'}); checked(null);
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(swarm.snapshot().ceo.blockedReason).toContain('scope changed');
+});
+
+it('preserves a pending CEO job on shutdown without launching after its check completes', async () => {
+  const {swarm, fake} = await office(true, fake => {fake.terminals = true;}); let checked!: (value: string | null) => void;
+  swarm.ceoPreflight = () => new Promise(resolve => {checked = resolve;});
+  swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(150); await swarm.shutdown(true); checked(null);
+  for (let i = 0; i < 20; i++) await Promise.resolve(); expect(fake.startSession).not.toHaveBeenCalled();
+  const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8')); expect(saved.ceo.job.text).toBe('Synthetic company question');
+});
+
+it('expires stalled CEO readiness and ignores its eventual result', async () => {
+  const {swarm, fake} = await office(true, fake => {fake.terminals = true;}); let checked!: (value: string | null) => void;
+  const preflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;})); swarm.ceoPreflight = preflight;
+  swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(90150);
+  expect(swarm.snapshot().ceo.blockedReason).toContain('expired after 90 seconds');
+  expect(swarm.snapshot().ceo.queue).toHaveLength(1); expect(preflight).toHaveBeenCalledOnce();
+  checked(null); for (let i = 0; i < 20; i++) await Promise.resolve(); expect(fake.startSession).not.toHaveBeenCalled();
 });

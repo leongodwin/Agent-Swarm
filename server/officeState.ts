@@ -23,7 +23,7 @@ const schema = z.object({
   qa: z.array(record).optional(),
   requests: z.array(record).optional(),
   messages: z.array(record).optional(),
-  ceo: z.object({queue: z.array(record).optional(), job: record.nullable().optional()}).passthrough().optional(),
+  ceo: z.object({queue: z.array(record).optional(), job: record.nullable().optional(), blockedReason: z.string().max(2000).nullable().optional(), retryAt: z.number().finite().nonnegative().nullable().optional()}).passthrough().optional(),
   phoneReadAt: z.number().finite().nonnegative().optional(),
 }).passthrough();
 

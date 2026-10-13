@@ -64,6 +64,15 @@ swarm.capabilityPreflight = async (repoId, cli) => {
   return capabilityBlocker(result);
 };
 delivery.checkCapabilities = (repoId, cwd, environment, force) => capabilities.check(repoId, cwd, environment, 'git', force);
+swarm.ceoPreflight = async (repoIds) => {
+  const host = capabilityBlocker(await capabilities.check('__office__', HOME_DIR, undefined, 'copilot'));
+  if (host) return `Office runtime: ${host}`;
+  const results = await Promise.all(repoIds.map(async id => {
+    const blocker = await swarm.capabilityPreflight(id, 'copilot');
+    return blocker ? `${id}: ${blocker}` : null;
+  }));
+  return results.filter(Boolean).join('; ') || null;
+};
 swarm.deliveryStatus = () => JSON.stringify({ ...delivery.view(), projects: swarm.snapshot().repos.map((repo) => ({ repo: repo.fullName, manifest: fs.existsSync(path.join(repo.checkoutPath, 'cubefarm.delivery.json')) ? 'present in checkout; release validates committed copy' : 'missing: plan real build, test, deployment and live verification scripts' })) });
 // Sessions the office picks back up while it starts need the address their CLIs call back on before it listens.
 if (PORT) setOfficeUrl(`http://127.0.0.1:${PORT}`);
