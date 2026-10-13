@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { releasePlanSchema } from './releasePlan.ts';
+import { releasePlanSchema,acceptanceScope } from './releasePlan.ts';
 import {architectureReviewSchema} from './architectureGate.ts';
-import type { DeliveryPolicy, DeliveryRun, DeliveryRelease, DeliveryBlocker } from '../shared/delivery.ts';
+import type { DeliveryPolicy, DeliveryRun, DeliveryRelease, DeliveryBlocker,DeliveryAttemptHistory } from '../shared/delivery.ts';
+import {attemptHistorySchema} from './deliveryAttempts.ts';
 
-export interface DeliveryStoredState { schemaVersion: 1; policy: DeliveryPolicy | null; runs: DeliveryRun[]; releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number }
+export interface DeliveryStoredState { attemptHistory?:DeliveryAttemptHistory;schemaVersion: 1; policy: DeliveryPolicy | null; runs: DeliveryRun[]; releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number }
 const text = z.string().min(1).max(4000);
 const identity = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/).refine(value => !/^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i.test(value));
 const repo = z.string().min(1).max(240).refine(value => !/[\x00-\x1f]/.test(value));
@@ -19,6 +20,7 @@ const release = z.object({id:identity,repoId:repo,head:commit,environmentUrl:htt
   skillLock:z.array(z.object({id:text,sha256:hash,version:z.string().max(200).optional(),file:z.string().min(1).max(4096)}).strict()).max(1000).optional(),
 }).strict();
 const run = z.object({id:identity,repoId:repo,head:z.string().min(1).max(128),environmentUrl:https,phase:z.enum(['disabled','waiting','building','testing','deploying','verifying','reviewing','complete','blocked']),
+  currentAttemptId:z.uuid().optional(),
   startedAt:when,endedAt:when.optional(),error:z.string().max(4000).optional(),solution:z.string().max(200).optional(),version:z.string().max(200).optional(),
   appUrls:z.array(https).max(100),evidence:z.array(relative).max(10000),log:z.array(z.string().max(8000)).max(10000),
   releaseId:identity.optional(),previousRunId:identity.optional(),checkpoint:z.enum(['prepared','import-started','imported','post-started','deployed']).optional(),recoveryRequired:z.boolean().optional(),evidenceHash:hash.optional(),
@@ -29,6 +31,7 @@ const run = z.object({id:identity,repoId:repo,head:z.string().min(1).max(128),en
   health:z.object({status:z.enum(['pending','healthy','degraded']),checkedAt:when.optional(),nextCheckAt:when,error:z.string().max(4000).optional(),capabilityHash:z.string().min(1).max(256).optional(),governanceEvidence:relative.optional()}).strict().optional(),
 }).strict();
 const schema = z.object({schemaVersion:z.literal(1).optional(),policy:z.object({enabled:z.boolean(),environmentUrl:https,approvedAt:when,copilotPaused:z.boolean().optional()}).strict().nullable(),
+  attemptHistory:attemptHistorySchema.optional(),
   runs:z.array(run).max(10000),releases:z.array(release).max(10000).optional(),blockers:z.array(z.object({repoId:repo,releaseId:identity.optional(),owner:text,error:z.string().max(4000),recovery:text,at:when}).strict()).max(10000).optional(),revision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 }).strict();
 
@@ -60,5 +63,19 @@ export function validateDeliveryState(input: unknown): DeliveryStoredState {
     if (contract && item.phase==='complete' && !item.visualReview) throw new Error('Completed scoped delivery lacks independent evidence review');
   }
   for (const item of state.blockers) if (item.releaseId && !state.releases.some(release=>release.id===item.releaseId && release.repoId===item.repoId)) throw new Error('Blocker refers to a different or missing release');
+  const history=state.attemptHistory;
+  if(history){
+    if(new Set(history.attempts.map(row=>row.id)).size!==history.attempts.length||new Set(history.legacyRunIds).size!==history.legacyRunIds.length)throw new Error('Duplicate delivery attempt identities');
+    if(history.legacyRunIds.some(id=>!state.runs.some(run=>run.id===id)))throw new Error('Legacy attempt history refers to a missing run');
+    for(const row of history.attempts){
+      const release=state.releases.find(item=>item.id===row.releaseId),linked=row.runId?state.runs.find(item=>item.id===row.runId):undefined;
+      if(!release?.approvedAt||release.repoId!==row.repoId||release.head!==row.head||release.environmentUrl!==row.environmentUrl||row.acceptanceProfile!==acceptanceScope(release.plan).profile||row.runId&&(!linked||linked.releaseId!==row.releaseId))throw new Error('Attempt differs from its approved release/run');
+      const terminal=['successful','failed','interrupted','superseded'].includes(row.status);
+      if(terminal!==!!row.endedAt||row.endedAt&&Date.parse(row.endedAt)<Date.parse(row.startedAt)||Date.parse(row.startedAt)<Date.parse(history.startedAt))throw new Error('Invalid attempt lifecycle timestamps');
+      if(row.status==='successful'&&(!linked||linked.phase!=='complete'||!linked.visualReview||!row.evidenceHash||row.evidenceHash!==linked.visualReview.evidenceHash))throw new Error('Successful attempt lacks independently reviewed release evidence');
+    }
+    for(const run of state.runs)if(!history.legacyRunIds.includes(run.id)&&!run.currentAttemptId)throw new Error('Recorded run lacks its current attempt identity');
+  }
+  for(const item of state.runs)if(item.currentAttemptId&&!history?.attempts.some(row=>row.id===item.currentAttemptId&&row.runId===item.id))throw new Error('Current attempt is missing or belongs to another run');
   return state;
 }

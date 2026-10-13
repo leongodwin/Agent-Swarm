@@ -12,7 +12,8 @@ import {connectOwnedFlowAdapter} from './ownedFlowAdapter.ts';
 import { resolveTenancyCommand } from './tenancy.ts';
 import { HttpError } from './httpError.ts';
 import type { RepoView } from '../shared/types.ts';
-import type { DeliveryRun, DeliveryView, DeliveryRelease } from '../shared/delivery.ts';
+import type { DeliveryRun, DeliveryView, DeliveryRelease,DeliveryAttempt } from '../shared/delivery.ts';
+import {deliveryAttemptSummary} from './deliveryAttempts.ts';
 
 import { releasePlanSchema, acceptanceScope } from './releasePlan.ts';
 import {architectureReviewSchema,verifyCommittedArchitecture,requireArchitectureReview} from './architectureGate.ts';
@@ -162,6 +163,8 @@ export class DeliveryService {
       const saved = await readBoundedJson(path.join(this.root, 'delivery.json'));
       if (this.closed) throw new Error('Delivery startup cancelled');
       if (saved !== undefined) this.state = validateDeliveryState(saved);
+      this.state.attemptHistory??={version:1,startedAt:new Date().toISOString(),legacyRunIds:this.state.runs.map(run=>run.id),attempts:[]};
+      for(const attempt of this.state.attemptHistory.attempts)if(['preparing','running'].includes(attempt.status)){attempt.status='interrupted';attempt.reason='restart';attempt.endedAt=new Date().toISOString();}
       // Derive scope without rewriting immutable plans or their approved hashes.
       for (const run of this.state.runs) {
         const release = this.state.releases.find((r) => r.id === run.releaseId);
@@ -197,7 +200,7 @@ export class DeliveryService {
     if(this.ownershipLost)throw new HttpError(409,'Delivery ownership lost; inspect the current owner before restarting');
     if (this.stateFailed || !this.ready) throw new HttpError(409, 'Delivery state is unavailable; preserve and repair it before restarting');
     return structuredClone({ ...this.state, running: !!this.active, releases: this.state.releases.filter((r) => !repoId || r.repoId === repoId), blockers: this.state.blockers.filter((r) => !repoId || r.repoId === repoId), runs: this.state.runs.filter((r) => !repoId || r.repoId === repoId).map((r) => ({ ...r, evidenceDirectory: path.join(this.root, 'delivery-runs', r.id, 'evidence') })),
-      message: this.demo ? 'Real delivery is disabled in demo mode.' : !this.state.policy?.enabled ? 'Choose the development environment to enable real delivery.' : 'A scoped, QA-approved release pins the commit, target and acceptance tests. Missing evidence blocks completion.' });
+      attemptHistory:deliveryAttemptSummary(this.state.attemptHistory,this.state.runs,repoId),message: this.demo ? 'Real delivery is disabled in demo mode.' : !this.state.policy?.enabled ? 'Choose the development environment to enable real delivery.' : 'A scoped, QA-approved release pins the commit, target and acceptance tests. Missing evidence blocks completion.' });
   }
   async configure(environmentUrl: string, enabled: boolean) {
     this.requireReady();
@@ -287,6 +290,7 @@ export class DeliveryService {
     if (this.active) throw new HttpError(409, 'A delivery is already running');
     const release = this.state.releases.find((r) => r.repoId === repo.id && (!releaseId || r.id === releaseId));
     const controller = new AbortController(); this.active = controller;
+    let attempt:DeliveryAttempt|undefined;
     let prepared!: () => void; this.preparing = new Promise<void>((resolve) => { prepared = resolve; });
     try {
       if (!release) throw new Error('Create a scoped release with required issues, components, acceptance criteria and an independent QA owner');
@@ -299,9 +303,14 @@ export class DeliveryService {
       }
       if (release.environmentUrl !== this.state.policy.environmentUrl) throw new Error('Release target differs from the approved environment; create a new release');
       if (repo.cloneStatus !== 'ready' || repo.syncError) throw new Error('Resolve repository sync errors before delivery');
-      await this.verifyArchitecture(repo,release,controller.signal);
       const prior = this.state.runs.find((r) => r.releaseId === release.id);
       if (prior && (prior.phase === 'complete' || !retry)) { this.active = null; return this.view(repo.id); }
+      const history=this.state.attemptHistory!;
+      if(history.attempts.length>=5000)throw new Error('Delivery attempt retention is full; preserve/export history before starting another attempt');
+      if(prior?.currentAttemptId){const previous=history.attempts.find(row=>row.id===prior.currentAttemptId);if(previous?.status==='reviewing'){previous.status='superseded';previous.reason='superseded';previous.endedAt=new Date().toISOString();}}
+      attempt={id:crypto.randomUUID(),releaseId:release.id,repoId:repo.id,head:release.head,environmentUrl:release.environmentUrl,startedAt:new Date().toISOString(),status:'preparing',acceptanceProfile:acceptanceScope(release.plan).profile};
+      history.attempts.push(attempt);await this.save();
+      await this.verifyArchitecture(repo,release,controller.signal);
       await this.requireCapabilities(repo, release);
       const git = (args: string[]) => this.command({ executable: 'git', args }, repo.checkoutPath, {}, controller.signal);
       for (const number of release.plan.requiredIssues) {
@@ -314,18 +323,25 @@ export class DeliveryService {
       deliveryManifest.parse(JSON.parse(await git(['show', `${release.head}:cubefarm.delivery.json`])));
       const run: DeliveryRun = prior ?? { id: crypto.randomUUID(), releaseId: release.id, repoId: repo.id, head: release.head, environmentUrl: release.environmentUrl, phase: 'waiting', startedAt: new Date().toISOString(), appUrls: [], evidence: [], log: [] };
       if (!prior) { run.previousRunId = this.state.runs.find((r) => r.repoId === repo.id && r.environmentUrl === run.environmentUrl && r.phase === 'complete')?.id; this.state.runs.unshift(run); }
+      attempt.runId=run.id;attempt.status='running';run.currentAttemptId=attempt.id;
       run.error = undefined; run.endedAt = undefined; run.phase = 'waiting';
       run.acceptance = acceptanceScope(release.plan);
       this.state.blockers = this.state.blockers.filter((b) => b.repoId !== repo.id);
       await this.changed();
-      this.pending = this.execute(repo, run, controller).catch(async(error) => {
+      const currentAttempt=attempt;
+      this.pending = this.execute(repo, run, controller).then(async()=>{
+        currentAttempt.status=run.phase==='reviewing'?'reviewing':'failed';
+        if(currentAttempt.status==='failed'){currentAttempt.reason='execution';currentAttempt.endedAt=new Date().toISOString();}
+        await this.save();
+      }).catch(async(error) => {
+        currentAttempt.status='failed';currentAttempt.reason='cleanup';currentAttempt.endedAt=new Date().toISOString();
         run.phase='blocked';run.recoveryRequired=true;run.error=`Delivery execution or cleanup failed; reconcile ownership and the persisted checkpoint before retrying: ${error.message}`;
         // A lost office owner cannot write. Otherwise retain the cleanup failure,
         // rather than misreporting every failed lease release as a persistence error.
         await this.save().catch(()=>{});console.warn(run.error);
       }).finally(async () => { this.active = null; this.pending = null; });
       return this.view(repo.id);
-    } catch (err) { this.active = null; await this.blocker(repo.id, err, release); throw err; }
+    } catch (err) { this.active = null;if(attempt){attempt.status='failed';attempt.reason='preflight';attempt.endedAt=new Date().toISOString();await this.save();}await this.blocker(repo.id, err, release); throw err; }
     finally { prepared(); this.preparing = null; }
   }
   async tick(repos: RepoView[]) {
@@ -361,9 +377,12 @@ export class DeliveryService {
     if (this.demo || this.active) throw new HttpError(409, 'Wait for the active delivery to finish');
     const run = this.state.runs.find((r) => r.id === id); const release = this.state.releases.find((r) => r.id === run?.releaseId);
     if (!run || !release || run.phase !== 'reviewing' || release.plan.qaOwner !== reviewer || reviewer === release.plan.owner) throw new HttpError(403, 'Only the assigned QA reviewer may approve the captured release evidence');
+    const attempt=run.currentAttemptId?this.state.attemptHistory?.attempts.find(row=>row.id===run.currentAttemptId):undefined;
+    if(run.currentAttemptId&&attempt?.status!=='reviewing')throw new HttpError(409,'Delivery attempt is not awaiting verified QA review; reconcile or rerun before approval');
     const review = z.object({ evidenceHash: z.string(), scores: release.plan.verification.api ? z.array(z.number()).length(0) : z.array(z.number().int().min(4).max(5)).length(5), notes: z.string().min(40).max(4000), recoveryReviewed: z.literal(true) }).strict().parse(input);
     if (review.evidenceHash !== run.evidenceHash || await this.evidenceHash(run) !== review.evidenceHash) throw new HttpError(409, 'Evidence changed; repeat verification and review');
     run.visualReview = { reviewer, reviewedAt: new Date().toISOString(), scores: review.scores, notes: review.notes, evidenceHash: review.evidenceHash };
+    if(attempt){attempt.status='successful';attempt.endedAt=new Date().toISOString();attempt.evidenceHash=review.evidenceHash;}
     run.phase = 'complete'; run.endedAt = new Date().toISOString(); await this.changed(); return this.view(run.repoId);
   }
   async monitor(repo: RepoView, id: string) {

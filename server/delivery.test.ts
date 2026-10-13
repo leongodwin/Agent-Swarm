@@ -9,6 +9,7 @@ import { DeliveryService, deliveryManifest, containedFile, installedSolution, pa
 import type { RepoView } from '../shared/types.ts';
 import { manifestDigest } from './lifecycleGovernance.ts';
 import {generateHldContent} from '../shared/hld.ts';
+import {validateDeliveryState} from './deliveryState.ts';
 
 const directories: string[] = [];
 it('recognizes PAC import failures printed to stdout even when its exit code is zero', () => {
@@ -100,6 +101,33 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   return { service, repo, calls, root, deps, release };
 }
 const storedRun={id:'synthetic-run',repoId:'synthetic/repo',head:'historical-commit',environmentUrl:target,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:[],log:[]};
+it.each(['changed-head','wrong-profile','duplicate-id','missing-end','unreviewed-success'])('rejects %s attempt history instead of trusting its success counts',async fault=>{
+  const {service,root,release}=await fixture();await service.close();const state=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));
+  const row={id:crypto.randomUUID(),releaseId:release.id,repoId:release.repoId,head:release.head,environmentUrl:release.environmentUrl,startedAt:state.attemptHistory.startedAt,endedAt:new Date().toISOString(),status:'failed',reason:'preflight',acceptanceProfile:'production'};
+  state.attemptHistory.attempts=[row];
+  if(fault==='changed-head')row.head='b'.repeat(40);if(fault==='wrong-profile')row.acceptanceProfile='functional-development';if(fault==='duplicate-id')state.attemptHistory.attempts.push({...row});if(fault==='missing-end')delete (row as {endedAt?:string}).endedAt;if(fault==='unreviewed-success')row.status='successful';
+  expect(()=>validateDeliveryState(state)).toThrow();
+});
+it('retains preflight failures without fabricating a dispatched run',async()=>{
+  const {service,repo,root}=await fixture();service.checkCapabilities=async()=>({status:'blocked',checks:[{id:'critical-flow',category:'workflow',passed:false,remedy:'Synthetic authentication repair'}]});
+  await expect(service.start(repo)).rejects.toThrow('preflight blocked');expect(service.view().runs).toEqual([]);
+  const state=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));expect(state.attemptHistory.attempts).toHaveLength(1);expect(state.attemptHistory.attempts[0]).toMatchObject({status:'failed',reason:'preflight'});expect(state.attemptHistory.attempts[0].runId).toBeUndefined();expect(service.view().attemptHistory?.recorded.unsuccessful).toBe(1);
+});
+it('preserves a failed attempt through successful re-verification and independent QA approval',async()=>{
+  const {service,repo,deps,root,calls}=await fixture('independent');await service.start(repo);await service.waitForIdle();
+  const first=service.view().runs[0].currentAttemptId;deps.verify=async(_plan,_cwd,evidence)=>{await fs.writeFile(path.join(evidence,'independent-verification.json'),'Synthetic verified rerun');return ['independent-verification.json'];};
+  await service.start(repo,true);await service.waitForIdle();const run=service.view().runs[0];expect(run.currentAttemptId).not.toBe(first);expect(service.view().attemptHistory?.recorded).toMatchObject({completed:1,successful:0,unsuccessful:1,awaitingReview:1});
+  await service.approveVisual(run.id,'sherlock',{evidenceHash:run.evidenceHash,scores:[4,4,4,4,4],notes:'Synthetic independent review of captured evidence and recovery procedures.',recoveryReviewed:true});
+  expect(service.view().attemptHistory).toMatchObject({completeWindow:false,successPercent:null,recorded:{completed:2,successful:1,unsuccessful:1,successPercent:50}});
+  const state=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));expect(state.attemptHistory.attempts.map((row:{status:string})=>row.status)).toEqual(['failed','successful']);expect(state.attemptHistory.attempts[0].id).toBe(first);expect(state.attemptHistory.attempts[1].evidenceHash).toBe(run.evidenceHash);expect(calls.filter(call=>call.includes('solution import'))).toHaveLength(1);
+});
+it('restores persisted preparing intent as interrupted without executing platform commands',async()=>{
+  const {service,repo,deps,root}=await fixture();let finish!:(value:never)=>void;
+  service.checkCapabilities=()=>new Promise(resolve=>{finish=resolve;});const pending=service.start(repo);
+  await vi.waitFor(()=>expect(finish).toBeDefined());const snapshot=await fs.readFile(path.join(root,'delivery.json'),'utf8');
+  const rejected=expect(pending).rejects.toThrow('preflight blocked');finish({status:'blocked',checks:[]} as never);await rejected;await service.close();await fs.writeFile(path.join(root,'delivery.json'),snapshot);
+  const restarted=new DeliveryService(root,false,deps);services.push(restarted);await restarted.init();expect(restarted.view().attemptHistory?.recent[0]).toMatchObject({status:'interrupted',reason:'restart'});expect(restarted.view().attemptHistory?.recorded.unsuccessful).toBe(1);
+});
 it.each(['governance','native-result'] as const)('fences a target lease displaced during %s without dispatching or accepting later native outcomes',async point=>{
   const {service,repo,root,deps,calls}=await fixture();
   const file=path.join(root,'resource-leases',crypto.createHash('sha256').update(`deployment:${target}`).digest('hex')+'.json');
