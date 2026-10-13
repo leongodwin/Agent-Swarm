@@ -32,7 +32,7 @@ afterEach(async () => {
 afterAll(async () => fs.rm(HOME_DIR, { recursive: true, force: true }));
 const tenantId='11111111-1111-4111-8111-111111111111';
 const environment='https://synthetic.crm4.dynamics.com';
-async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability']) {
+async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload']) {
   await fs.writeFile(STATE_FILE, JSON.stringify({ version: 2, settings: { runtime: 'sdk', ceoHeartbeatMin: 0, autoUpdate: false },
     repos: [{ id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,color:'#000',description:'',url:'',autoAssign:false,autoMerge:false,browserTesting:false,addedAt:1 }] }));
   const tenancy = {status:'connected', user:'synthetic@example.com', environments:[{name:'Synthetic',url:environment,active:true}], isReal:true};
@@ -61,7 +61,7 @@ async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliab
   const reader=vi.fn<StartPolicyReader>(()=>({pid:123,refresh(){},stop(){}}));
   const tenantDlp=new TenantDlpService(path.join(HOME_DIR,'governance'),reader);await tenantDlp.init();cleanup.push(()=>tenantDlp.close());
   const canvasOwnership=new CanvasOwnership(path.join(HOME_DIR,'leases'));cleanup.push(()=>canvasOwnership.close());
-  const {app,closeAdmission}=createOfficeHttpApp({backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,workflowReliability,changeDrain:(value,apply)=>maintenance.change(value,apply)});
+  const {app,closeAdmission}=createOfficeHttpApp({officeReload,backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,workflowReliability,changeDrain:(value,apply)=>maintenance.change(value,apply)});
   const server=http.createServer(app);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
   const url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -75,13 +75,50 @@ it('reads reliability only for authenticated connected repositories and rejects 
   expect((await request('/api/repos/synthetic%2Frepo/reliability?branch=other')).status).toBe(400);expect(observe).not.toHaveBeenCalled();
   expect((await request('/api/repos/synthetic%2Frepo/reliability')).status).toBe(200);expect(observe).toHaveBeenCalledExactlyOnceWith('synthetic/repo');
 });
+it('authenticates reload, pins PID and requires both services drained before preparing',async()=>{
+  const commit=vi.fn(async()=>'accepted' as const),cancel=vi.fn(),prepare=vi.fn(async()=>({operationId:'11111111-1111-4111-8111-111111111111',commit,cancel}));
+  const {url,request,delivery}=await office(false,undefined,undefined,{prepare,view:()=>({supported:true,phase:'idle'})});
+  expect((await fetch(url+'/api/office/reload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedPid:process.pid})})).status).toBe(401);
+  expect((await request('/api/office/reload','POST',{expectedPid:process.pid+1})).status).toBe(409);
+  expect((await request('/api/office/reload','POST',{expectedPid:process.pid,command:'arbitrary'})).status).toBe(400);
+  expect((await request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(409);expect(prepare).not.toHaveBeenCalled();
+  await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});delivery.setDraining(false);
+  expect((await request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(409);delivery.setDraining(true);
+  const response=await request('/api/office/reload','POST',{expectedPid:process.pid});expect(response.status).toBe(202);expect(await response.json()).toMatchObject({accepted:true,preserveMaintenance:true});
+  await vi.waitFor(()=>expect(commit).toHaveBeenCalledOnce());expect(cancel).not.toHaveBeenCalled();
+  expect((await request('/api/runtime')).status).toBe(200);
+  expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:false})).status).toBe(503);
+});
+it('keeps HTTP admission and maintenance unchanged when the owning launcher cannot acknowledge reload',async()=>{
+  const prepare=vi.fn(async()=>{throw new Error('Older launcher');});const {request}=await office(false,undefined,undefined,{prepare,view:()=>({supported:false,phase:'idle',reason:'Older launcher'})});
+  await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});
+  expect((await request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(503);
+  expect(await (await request('/api/runtime')).json()).toMatchObject({pid:process.pid,draining:true,reload:{supported:false}});
+  expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true})).status).toBe(200);
+});
+it.each(['active','cleanup','undrained'])('rechecks %s work after asynchronous reload preparation and cancels before acceptance',async mode=>{
+  const commit=vi.fn(async()=>'accepted' as const),cancel=vi.fn();let intervene=()=>{};
+  const prepare=vi.fn(async()=>{intervene();return {operationId:'11111111-1111-4111-8111-111111111111',commit,cancel};});
+  const {request,swarm,delivery}=await office(false,undefined,undefined,{prepare,view:()=>({supported:true,phase:'idle'})});
+  await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});
+  intervene=()=>{if(mode==='undrained'){delivery.setDraining(false);return;}const usage=swarm.sessionUsage();vi.spyOn(swarm,'sessionUsage').mockReturnValue({...usage,...(mode==='active'?{used:1}:{blockedReason:'Synthetic cleanup'})});};
+  expect((await request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(409);
+  expect(cancel).toHaveBeenCalledOnce();expect(commit).not.toHaveBeenCalled();
+});
+it.each(['refused','unknown'])('reopens mutation admission only on an explicit parent refusal, never an %s outcome',async result=>{
+  const {request}=await office(false,undefined,undefined,{prepare:async()=>({operationId:'11111111-1111-4111-8111-111111111111',commit:async()=>result as 'refused'|'unknown',cancel(){}}),view:()=>({supported:true,phase:'failed'})});
+  await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});
+  expect((await request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(202);
+  expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true})).status).toBe(result==='refused'?200:503);
+  expect((await request('/api/runtime')).status).toBe(200);
+});
 
 it('uses the production session boundary and reports actual initialized services',async()=>{
   const {request,url,external}=await office();
   expect((await fetch(url+'/api/state')).status).toBe(401);
   expect((await request('/api/state','GET',undefined,{Origin:'https://foreign.example'})).status).toBe(403);
   expect((await request('/api/state')).status).toBe(200);
-  expect(await (await request('/api/runtime')).json()).toMatchObject({demo:false,policyReaderMode:'launcher'});
+  expect(await (await request('/api/runtime')).json()).toMatchObject({demo:false,policyReaderMode:'launcher',homeDir:HOME_DIR});
   expect(await (await request('/api/governance/tenant')).json()).toMatchObject({status:'unavailable',complianceVerified:false});
   expect(await (await request('/api/governance/tools')).json()).toMatchObject({evaluated:0,tenantPolicyVerified:false});
   expect(await (await request('/api/capabilities')).json()).toMatchObject({results:[]});

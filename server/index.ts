@@ -21,6 +21,7 @@ import { ToolGovernanceService, setToolGovernanceGate } from './toolGovernance.t
 import { TenantDlpService, policyReaderMode } from './tenantDlp.ts';
 import { createDeliveryGovernance } from './deliveryGovernance.ts';
 import { OfficeShutdown } from './officeShutdown.ts';
+import {OfficeReloadRequester} from './officeReload.mjs';
 import { parseBody } from './requestSchemas.ts';
 import { OfficeMaintenance } from './officeMaintenance.ts';
 import {createDeclaredSchemaObserver} from './declaredSchema.ts';
@@ -117,7 +118,10 @@ try{await synthesis.init();}catch(error){synthesisUnavailableReason=error instan
 // authentication/readiness. Every service closes its admission barrier at once.
 let deliveryTimer: NodeJS.Timeout | undefined;
 let closeHttpAdmission: (() => void) | undefined;
+const officeReload=underLauncher()?new OfficeReloadRequester():undefined;
+void officeReload?.probe();
 const officeShutdown = new OfficeShutdown([
+  { name: 'launcher reload', close:()=>officeReload?.close() },
   { name: 'HTTP admission', close: () => closeHttpAdmission?.() },
   { name: 'architecture synthesis', close:()=>synthesis.close() },
   { name: 'maintenance', close: () => maintenance.close() },
@@ -157,7 +161,7 @@ if (officeShutdown.closed) await shutdown('stop');
 delivery.onChange = () => { if (swarm.snapshot().repos.length) swarm.requestReview(); };
 capabilities.onChange = delivery.onChange;
 
-const {app,browserAuth,closeAdmission}=createOfficeHttpApp({synthesis:synthesisUnavailableReason?undefined:synthesis,synthesisUnavailableReason,backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,changeDrain:(value,apply)=>maintenance.change(value,apply),requestHandoff:()=>{void shutdown('restart');}});
+const {app,browserAuth,closeAdmission}=createOfficeHttpApp({officeReload,synthesis:synthesisUnavailableReason?undefined:synthesis,synthesisUnavailableReason,backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,changeDrain:(value,apply)=>maintenance.change(value,apply),requestHandoff:()=>{void shutdown('restart');}});
 closeHttpAdmission=closeAdmission;
 deliveryTimer = setInterval(() => { void delivery.tick(swarm.snapshot().repos).catch((err) => console.warn('delivery scheduler:', err.message)); }, 30_000);
 deliveryTimer.unref();
@@ -178,6 +182,7 @@ server.on('upgrade', (req, socket, head) => {
 
 server.once('error', error => { console.error('Office listener failed:', error); void shutdown('startup failure'); });
 server.listen(PORT, '127.0.0.1', () => {
+  officeReload?.ready();
   setOfficeUrl(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
   console.log(`\n  🏢 cubefarm on http://localhost:${PORT}${DEMO ? '  (DEMO MODE: fake GitHub + fake agents)' : ''}`);
   console.log(`     state: ${STATE_FILE}`);

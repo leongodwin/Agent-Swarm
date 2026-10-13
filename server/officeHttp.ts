@@ -23,8 +23,10 @@ import { templateCatalog, templateFiles, installTemplate, type TemplateId } from
 import { discoverSkills, selectSkills } from './skillRegistry.ts';
 import { createBrowserAuth } from './browserAuth.ts';
 import { parseBody, proposalSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
+import type {OfficeReloadRequester} from './officeReload.mjs';
 
 export interface OfficeHttpServices {
+  officeReload?:Pick<OfficeReloadRequester,'prepare'|'view'>;
   workflowReliability?:Pick<WorkflowReliabilityService,'observe'>;
   synthesis?:HldSynthesisService;
   synthesisUnavailableReason?:string;
@@ -43,8 +45,9 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   const workflowReliability=services.workflowReliability??new WorkflowReliabilityService();
   const app = express();
   let closed = false;
+  let reloadPending = false;
   const requireOpen = () => { if (closed) throw new HttpError(503, 'Office is shutting down; retry after restart'); };
-  app.use('/api', (_req, _res, next) => { try { requireOpen(); next(); } catch (error) { next(error); } });
+  app.use('/api', (req, _res, next) => { try { requireOpen();if(reloadPending&&req.method!=='GET')throw new HttpError(503,'Office reload is pending; inspect runtime before changing the office');next(); } catch (error) { next(error); } });
   // Agent CLIs calling back: hooks (a tool result can be a large screenshot, hence the limit) and the CEO's office tools.
   // The token in the path is the session's; unknown tokens get an empty answer.
   app.post('/api/hooks/:token', express.json({ limit: '64mb' }), (req, res, next) => void handleHook(String(req.params.token), req.body).then((answer) => { requireOpen(); res.json(answer); }).catch(next));
@@ -99,7 +102,25 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.get('/api/state', route(() => swarm.snapshot()));
   app.get('/api/capabilities', route(() => capabilities.view()));
   app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
-  app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, demo: backend.demo, policyReaderMode, draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+  app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+  app.post('/api/office/reload',route(async(req,res)=>{
+    const {expectedPid}=parseBody(z.object({expectedPid:z.number().int().positive()}).strict(),req.body);
+    const ready=()=>{
+      requireOpen();
+      if(expectedPid!==process.pid)throw new HttpError(409,'Office process changed; inspect runtime before reload');
+      if(backend.demo||!services.officeReload)throw new HttpError(409,'This office cannot request an acknowledged launcher reload');
+      if(!swarm.isDraining||!delivery.isDraining||delivery.view().running||swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason)throw new HttpError(409,'Drain both services and wait for all work and cleanup before reload');
+    };
+    ready();
+    let handle;
+    try{handle=await services.officeReload!.prepare();}catch{throw new HttpError(503,'Owning launcher did not acknowledge reload; server remains running. Inspect runtime reload status');}
+    try{ready();}catch(error){handle.cancel();throw error;}
+    // Commit only after the HTTP acceptance is flushed. A disconnected caller cancels the reservation.
+    reloadPending=true;
+    res.once('finish',()=>{void handle.commit().then(result=>{if(result==='refused')reloadPending=false;}).catch(()=>{});});
+    res.once('close',()=>{if(!res.writableFinished){handle.cancel();reloadPending=false;}});
+    res.status(202).json({accepted:true,pid:process.pid,operationId:handle.operationId,preserveTerminals:true,preserveMaintenance:true});
+  }));
   app.post('/api/office/drain',route(async req=>{
     const {expectedPid,draining}=parseBody(z.object({expectedPid:z.number().int().positive(),draining:z.boolean()}).strict(),req.body);
     if(expectedPid!==process.pid)throw new HttpError(409,'Office process changed; inspect the current runtime before drain');
@@ -113,7 +134,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     if(expectedPid!==process.pid)throw new HttpError(409,'Office process changed; inspect the current runtime before handoff');
     if(backend.demo||!services.requestHandoff)throw new HttpError(409,'This office does not support launcher handoff');
     if(delivery.view().running||swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason)throw new HttpError(409,'Wait for active agent, architecture and delivery work before handoff');
-    res.status(202).json({accepted:true,pid:process.pid,preserveTerminals:true});
+    res.status(202).json({accepted:true,pid:process.pid,preserveTerminals:true,relaunch:'external-checkout-change'});
     services.requestHandoff();
   }));
   app.get('/api/governance/tools', route(() => toolGovernance.view()));

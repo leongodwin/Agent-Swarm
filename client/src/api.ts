@@ -38,6 +38,7 @@ export interface FloorOptions {
 }
 
 export const api = {
+  officeRuntime:()=>call<{pid:number;startedAt:string;draining:boolean;reload?:import('../../server/officeReload.mjs').ReloadState}>('GET','/api/runtime',undefined,true),
   tenantDlp: () => call<import('../../shared/tenantDlp').TenantDlpView>('GET', '/api/governance/tenant'),
   toolGovernance: () => call<import('../../shared/toolGovernance').ToolGovernanceView>('GET', '/api/governance/tools'),
   workflowReliability:(repo:string)=>call<import('../../shared/workflowReliability').WorkflowReliability>('GET',`/api/repos/${encodeURIComponent(repo)}/reliability`),

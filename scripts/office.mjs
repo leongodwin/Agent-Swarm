@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import {PolicyReaderHost} from '../server/policyReaderHost.mjs';
+import {LauncherReloadController} from '../server/officeReload.mjs';
 import { clientPort, isUpdateCommand, parseOfficeArgs, parseSymref, refusal, rollbackPlan, stepsFor, swarmHome } from './officeSteps.mjs';
 
 const HELP = `
@@ -81,6 +82,19 @@ function killGroup(pid) {
 /** The server and, with --dev, Vite. Each is { name, proc, exited, stopped }. */
 const children = { server: null, client: null };
 let firstStart = true;
+const reloadController=new LauncherReloadController({
+  current:()=>children.server?.proc,
+  busy:()=>!!updating||shuttingDown,
+  report:reason=>warn(reason),
+  async restart(peer){
+    const child=children.server;
+    if(child?.proc!==peer)throw new Error('Server ownership changed');
+    log('Reloading the idle office through the owning launcher');
+    await stopChild(child,'restart');
+    if(peer.exitCode!==0||updating||shuttingDown)throw new Error('Reload did not stop cleanly');
+    return children.server?.proc??startServer().proc;
+  },
+});
 
 function spawnChild(name, args, { ipc = false, env = process.env } = {}) {
   const proc = spawn(process.execPath, args, {
@@ -106,9 +120,11 @@ function startServer() {
     : [path.join('bin', 'cubefarm.js'), ...demo, ...(opts.open && firstStart ? [] : ['--no-open'])];
   const child = spawnChild('server', args, { ipc: true, env: { ...process.env, SWARM_LAUNCHER: '1',SWARM_POLICY_READER_HOST:opts.demo?'0':'1' } });
   child.proc.on('message', (msg) => {
+    if(reloadController.handle(child.proc,msg))return;
     if(!opts.demo&&policyReaderHost.handle(child.proc,msg))return;
     if (msg?.type === 'office:update') void update(`the office asked, from ${short(String(msg.from ?? ''))}`);
   });
+  return child;
 }
 
 function startClient() {
@@ -133,7 +149,10 @@ function startChildren() {
 }
 
 function onExit(child, how) {
-  if(child.name==='server')policyReaderHost.disconnect(child.proc,opts.dev&&!shuttingDown&&!updating);
+  if(child.name==='server'){
+    policyReaderHost.disconnect(child.proc,!shuttingDown&&!updating&&(opts.dev||reloadController.owns(child.proc)));
+    reloadController.exited(child.proc,how);
+  }
   if (children[child.name] === child) children[child.name] = null;
   if (child.stopped || shuttingDown) return;
   if (child.name === 'server' && opts.dev) {
@@ -372,6 +391,7 @@ let shuttingDown = false;
 async function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
+  reloadController.close();
   log('Stopping the office');
   policyReaderHost.clear();
   await stopChildren('stop');
