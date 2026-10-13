@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Live policy-reader warm reuse, 13 October
+
+After the user's sign-in reply, the running server initially had stale evidence and no reader handle. A fresh read created reader PID 37928. Selecting the already-authorized leon@graspai.co.uk account completed native authentication and policy discovery; the browser's localhost error page did not prevent the server from returning the authenticated observation. No callback URL, authentication code or token was replayed, stored in the evidence receipt or used to bypass the browser page.
+
+The server returned a fresh complete standard-policy inventory for tenant 5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c at `2026-10-13T08:14:44.0708792Z`, then a second fresh observation at `2026-10-13T08:16:08.5625028Z` on the same PID 37928 without another sign-in. Both contained zero standard policies. Persisted local evidence matched the second observation. This verifies actual in-process authentication reuse and standard inventory access, not advanced policy coverage, complete schema compliance or authentication across a server/launcher restart. The office still uses direct-reader mode; no watched source file was changed during this validation so the authenticated reader remains available.
+
+Evidence: `.swarm-reliability/policy-live-warm-reuse-2026-10-13.json` and `policy-signin-callback-2026-10-13.json`. No tenant mutation, profile change, new permissions, agent message or Copilot Studio work occurred. Browser account selection used the account already authorized by the user. The full production objective remains incomplete.
+
 ## Authentication admission and discovery freshness
 
 Tenancy shutdown now closes admission before cancelling authentication jobs. New login/selection requests are denied, pending jobs remain cancelled despite late callbacks, and a native launch handle returned after synchronous shutdown is immediately asked to stop. Discovery completing after closure returns disconnected state. Stop failures are reported without reopening admission. An already-issued native profile-selection command cannot be physically undone by this barrier, and native stop acknowledgement remains separate evidence.

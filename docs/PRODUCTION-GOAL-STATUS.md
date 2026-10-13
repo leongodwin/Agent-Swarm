@@ -13,6 +13,15 @@ The full goal remains active: governed, resilient multi-agent delivery across Mi
 
 ## This batch
 
+- Verified a real authenticated standard-policy inventory for leon@graspai.co.uk and tenant 5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c. The previous process was absent; a new reader was created and account selection used the identity already authorized by the user. Browser callback presentation did not prevent the native read from completing; no callback URL/code was replayed or browser restriction bypassed.
+- Two fresh observations completed on the same reader PID 37928 at `2026-10-13T08:14:44.0708792Z` and `2026-10-13T08:16:08.5625028Z`, without another sign-in. Both contained zero standard policies. Persisted evidence matched the second read; the live Operations & audit panel correctly displayed observed inventory while retaining unverified compliance status.
+- This establishes actual warm in-process authentication reuse and standard inventory access. Cross-restart/launcher reuse, advanced policy discovery, comprehensive schema governance and full lifecycle acceptance remain unproven. The existing office remains in direct-reader mode; no watched source edits or restart were performed, preserving the authenticated process.
+- This was live read-only verification and documentation, so no source tests were rerun. Latest unchanged source measurement remains 695 passed and one TODO, build/typecheck/API regression passed, and 3,929/7,226 backend branches (54.37%), below the unchanged 90.01% gate. No tenant mutation, profile selection, permission grant, real agent message, new remote CI result or Copilot Studio work occurred. Copilot Studio stays paused; the full objective remains active.
+
+Latest evidence: `.swarm-reliability/policy-live-warm-reuse-2026-10-13.json`, `.swarm-reliability/policy-signin-callback-2026-10-13.json`, `.swarm-reliability/policy-live-warm-reuse-ui-2026-10-13.png`. See [RELIABILITY.md](RELIABILITY.md).
+
+### Previous tenancy-admission checkpoint
+
 - Closed tenancy admission before shutdown cancellation. New logins/selections are denied, late callbacks/discovery cannot restore current identity, and late startup handles are asked to stop. Cleanup failures preserve closure. Already-issued native commands and physical stop acknowledgement remain separate limitations.
 - Serialized profile changes and rechecked discovery generation/lifetime before selection dispatch and completion. Expired discovery awaits one fresh read; failed/superseded observations are stale. Clock rollback cannot extend cache reuse. Authentication profile discovery is not proof of valid tokens, licensing, effective permissions or tenant governance.
 - Corrected tenancy/security presentation: unknown tenant metadata and unverified controls are explicit; configured profiles differ from selected profiles. Removed automatic agent service-principal, role-isolation, isolated-environment and zero-trust assertions. Identity/access guidance and local scans are not certified tenant configuration. The live panel was visually inspected through a temporary tab, which was closed afterward.
