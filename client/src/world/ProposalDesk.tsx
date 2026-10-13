@@ -74,11 +74,11 @@ export function ProposalDesk({
       ctx.fillText('📊 Commercial Scope & Licensing BOM', 48, 136);
 
       const items = [
-        { label: 'Copilot Studio Packs', val: '25,000 msgs / mo ($200)', color: '#38bdf8' },
-        { label: 'Power Apps Capacity', val: 'Per-User & Per-App Hybrid', color: '#a78bfa' },
-        { label: 'Dataverse Storage', val: 'High-Volume Elastic Audit', color: '#f472b6' },
-        { label: 'Entra ID P1/P2', val: 'Conditional Access & DLP', color: '#34d399' },
-        { label: 'Delivery Timeline', val: '8–12 Weeks (6 Sprints)', color: '#fbbf24' },
+        { label: 'Licence Prices', val: 'User-supplied sources required', color: '#38bdf8' },
+        { label: 'Platform Capacity', val: 'Actual entitlements need validation', color: '#a78bfa' },
+        { label: 'Data & Storage', val: 'Scope and requirements need review', color: '#f472b6' },
+        { label: 'Security & Compliance', val: 'Review category is not certification', color: '#34d399' },
+        { label: 'Delivery Timeline', val: 'Not estimated without team input', color: '#fbbf24' },
       ];
 
       items.forEach((item, idx) => {
@@ -105,7 +105,7 @@ export function ProposalDesk({
 
       ctx.fillStyle = '#4ade80';
       ctx.font = `700 20px ${SANS}`;
-      ctx.fillText('📈 Projected Return on Investment (ROI)', 536, 136);
+      ctx.fillText('📈 Commercial Scenario · Unreviewed', 536, 136);
 
       // ROI Banner
       roundRect(ctx, 536, 168, 440, 120, 14);
@@ -116,11 +116,11 @@ export function ProposalDesk({
 
       ctx.fillStyle = '#86efac';
       ctx.font = `700 14px ${SANS}`;
-      ctx.fillText('NET 3-YEAR PROJECTED EFFICIENCY RETURN', 556, 196);
+      ctx.fillText('COSTS AND BENEFITS NEED EXPLICIT INPUTS', 556, 196);
 
       ctx.fillStyle = '#4ade80';
       ctx.font = `800 48px ${SANS}`;
-      ctx.fillText('284% ROI', 556, 252);
+      ctx.fillText('NOT ESTIMATED', 556, 252);
 
       // Call to action button visual
       roundRect(ctx, 536, 320, 440, 80, 12);
@@ -136,10 +136,10 @@ export function ProposalDesk({
       // Feature bullet points
       ctx.fillStyle = '#94a3b8';
       ctx.font = `500 14px ${SANS}`;
-      ctx.fillText('• Export turnkey Markdown Statements of Work (SOW)', 546, 436);
-      ctx.fillText('• Live itemized Microsoft SKU pricing breakdown', 546, 468);
-      ctx.fillText('• One-click handoff to High-Level Design (HLD) Agent', 546, 500);
-      ctx.fillText('• Tailored for ISO 27001, HIPAA & SOC2 environments', 546, 532);
+      ctx.fillText('• Copy unreviewed scenario drafts as Markdown', 546, 436);
+      ctx.fillText('• No live pricing feed or implied budget approval', 546, 468);
+      ctx.fillText('• Open the requirements-derived architecture draft', 546, 500);
+      ctx.fillText('• Compliance controls need independent evidence', 546, 532);
     },
     [],
   );

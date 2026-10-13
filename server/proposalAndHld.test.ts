@@ -2,67 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { generateProposal } from './proposalAgent';
 import { generateHld } from './hldAgent';
 
-describe('Proposal Generator Agent', () => {
-  it('calculates comprehensive licensing BOM, ROI, and SOW roadmap', () => {
-    const res = generateProposal({
-      title: 'Contoso Asset Inspection Automation',
-      clientName: 'Contoso Logistics Ltd',
-      industry: 'Logistics',
-      problemStatement: 'Manual paper forms delay repair billing by 48 hours.',
-      userCount: 500,
-      monthlyTransactions: 50000,
-      complianceTier: 'standard',
-      targetChannels: ['Teams', 'Webchat'],
-      integrationPoints: ['Dataverse', 'SAP ERP'],
-    });
-
-    expect(res.proposalId).toMatch(/^PROP-/);
-    expect(res.totalMonthlyLicenseCost).toBeGreaterThan(0);
-    expect(res.annualLicenseCost).toBe(res.totalMonthlyLicenseCost * 12);
-    expect(res.threeYearRoiPercent).toBeGreaterThan(100);
-    expect(res.sprintRoadmap.length).toBe(6);
-
-    // Verify SKUs
-    const skus = res.licensingBOM.map((b) => b.sku);
-    expect(skus).toContain('Copilot Studio Message Pack');
-    expect(skus).toContain('Power Apps Per User Plan');
-    expect(skus).toContain('Dataverse Database Capacity (GB)');
-    expect(skus).toContain('Microsoft Entra ID P1');
-
-    // Verify Markdown SOW
-    expect(res.markdownContent).toContain('Commercial Proposal & Solution Scope');
-    expect(res.markdownContent).toContain('Contoso Logistics Ltd');
-    expect(res.markdownContent).toContain('Sprint 1: Foundation');
+describe('Proposal scenario', () => {
+  it('keeps pricing, savings and schedule unknown without explicit commercial inputs', () => {
+    const result=generateProposal({title:'Expense solution',clientName:'Client',industry:'Services',problemStatement:'Receipt capture',userCount:1,monthlyTransactions:1,complianceTier:'financial',targetChannels:[],integrationPoints:[]});
+    expect(result).toMatchObject({status:'draft',totalMonthlyLicenseCost:null,annualLicenseCost:null,implementationCostEstimate:null,projectedAnnualSavings:null,threeYearRoiPercent:null,estimatedTimelineWeeks:null});
+    expect(result.licensingBOM).toEqual([]);expect(result.sprintRoadmap.every(item=>item.weeks==='Unscheduled')).toBe(true);
+    expect(result.markdownContent).toContain('Users supplied: 1');expect(result.markdownContent).not.toContain('Copilot Studio Message Pack');
   });
-
-  it('adjusts security pricing for financial compliance tier', () => {
-    const std = generateProposal({
-      title: 'App',
-      clientName: 'Client',
-      industry: 'General',
-      problemStatement: 'Problem',
-      userCount: 100,
-      monthlyTransactions: 10000,
-      complianceTier: 'standard',
-      targetChannels: ['Teams'],
-      integrationPoints: ['Dataverse'],
-    });
-
-    const fin = generateProposal({
-      title: 'App',
-      clientName: 'Client',
-      industry: 'Finance',
-      problemStatement: 'Problem',
-      userCount: 100,
-      monthlyTransactions: 10000,
-      complianceTier: 'financial',
-      targetChannels: ['Teams'],
-      integrationPoints: ['Dataverse'],
-    });
-
-    const stdEntra = std.licensingBOM.find((b) => b.category === 'Security & Entra')!;
-    const finEntra = fin.licensingBOM.find((b) => b.category === 'Security & Entra')!;
-    expect(finEntra.unitPriceMonthly).toBeGreaterThan(stdEntra.unitPriceMonthly);
+  it('does not infer security SKUs or certification from the compliance review category', () => {
+    const result=generateProposal({title:'App',clientName:'Client',industry:'Finance',problemStatement:'Requirements',userCount:100,monthlyTransactions:10000,complianceTier:'hipaa',targetChannels:['Teams'],integrationPoints:['Dataverse']});
+    expect(result.licensingBOM).toEqual([]);expect(result.markdownContent).toContain('not certification');expect(result.markdownContent).not.toContain('Microsoft Entra ID P2');
   });
 });
 

@@ -183,6 +183,7 @@ function FloorRow({ repo, all }: { repo: RepoView; all: RepoView[] }) {
         </div>
       )}
       <button className="btn btn-small" onClick={() => openOverlay({kind:'hld',repoId:repo.id})}>Architecture draft</button>
+      <button className="btn btn-small" onClick={() => openOverlay({kind:'proposal'})}>Commercial draft</button>
       <details className="small preview-details">
         <summary>
           🖥️ App preview · <PreviewPill status={repo.preview.status} />

@@ -1,10 +1,9 @@
 import { z } from 'zod';
 import { HttpError } from './httpError.ts';
+import {proposalInputSchema} from '../shared/proposals.ts';
 const text = z.string().trim().min(1).max(8000);
 const strings = z.array(z.string().trim().min(1).max(500)).max(100);
-export const proposalSchema = z.object({ title: text, clientName: text, industry: text, problemStatement: text,
-  userCount: z.number().int().positive().max(1_000_000), monthlyTransactions: z.number().int().positive().max(1_000_000_000),
-  complianceTier: z.enum(['standard', 'hipaa', 'financial']), targetChannels: strings, integrationPoints: strings }).strict();
+export const proposalSchema = proposalInputSchema;
 export const hldSchema = z.object({ solutionName: text, problemContext: text, tenantName: text.optional(),
   repoId: text.optional(), components: z.array(z.object({ role: text, title: text, badge: text, details: text, deliverables: strings }).strict()).max(100) }).strict();
 export const loginSchema = z.object({ name: z.string().trim().min(1).max(30).optional(),

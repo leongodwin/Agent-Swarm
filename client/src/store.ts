@@ -140,13 +140,13 @@ export const TOUR_WAYPOINTS: TourWaypoint[] = [
   },
   {
     id: 'proposal-desk',
-    title: 'Pre-Sales Proposal & Commercial SOW Suite',
+    title: 'Commercial Scenario Drafting Suite',
     floor: 0,
     x: -8.5,
     z: 3.2,
     yaw: Math.PI / 4,
     pitch: -0.08,
-    description: 'Executive proposal generator calculating licensing BOM, ROI, and commercial Statements of Work.',
+    description: 'Unreviewed scope and user-supplied commercial scenarios. Prices, entitlements, benefits and budget require validation.',
   },
   {
     id: 'hld-station',
