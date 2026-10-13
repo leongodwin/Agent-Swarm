@@ -579,6 +579,33 @@ it('blocks CEO work without native terminal readiness and retains the queued job
   expect(swarm.snapshot().ceo.retryAt).toBeGreaterThan(Date.now());
 });
 
+it.each(['claude','codex','opencode','copilot'] as const)('uses selected CEO %s for readiness, dispatch and tool refresh without changing the model',async cli=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const preflight=vi.fn(async()=>null);swarm.ceoPreflight=preflight;
+  swarm.updateAgent(CEO_ID,{cli,model:'explicit-model'});await swarm.messageCeo('Synthetic architecture request');await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());expect(preflight).toHaveBeenCalledWith(['synthetic/repo'],cli);
+  const options=fake.startSession.mock.calls[0][0] as SessionOptions;expect(options).toMatchObject({role:'ceo',cli,model:'explicit-model'});expect(options.office).toBeDefined();expect(await options.authorizeTool!()).toBeNull();expect(preflight).toHaveBeenLastCalledWith(['synthetic/repo'],cli);
+  expect(swarm.snapshot().agents.find(a=>a.id===CEO_ID)?.cli).toBe(cli);
+});
+it.each([false,true])('never transfers a CEO checkpoint to a different coding agent (change %s)',async change=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  swarm.updateAgent(CEO_ID,{cli:'codex'});await swarm.messageCeo('Synthetic first request');await vi.advanceTimersByTimeAsync(150);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  const callbacks=fake.startSession.mock.calls[0][1];callbacks.sessionId('codex-owned-session');callbacks.finished({ok:true,text:'synthetic',costUsd:0,turns:1,errors:[]});
+  if(change)swarm.updateAgent(CEO_ID,{cli:'claude'});await swarm.messageCeo('Synthetic next request');await vi.advanceTimersByTimeAsync(300);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+  const options=fake.startSession.mock.calls[1][0] as SessionOptions;expect(options.cli).toBe(change?'claude':'codex');expect(options.resumeSessionId).toBe(change?undefined:'codex-owned-session');
+});
+it('defers a CEO runtime change during preflight instead of dispatching with the old readiness result',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});let ready!:(value:string|null)=>void;
+  const preflight=vi.fn(()=>new Promise<string|null>(resolve=>{ready=resolve;}));swarm.ceoPreflight=preflight;
+  await swarm.messageCeo('Synthetic runtime change');await vi.advanceTimersByTimeAsync(150);swarm.updateAgent(CEO_ID,{cli:'codex'});ready(null);
+  for(let i=0;i<20;i++)await Promise.resolve();expect(fake.startSession).not.toHaveBeenCalled();expect(swarm.snapshot().ceo.blockedReason).toContain('runtime configuration changed');expect(swarm.snapshot().ceo.queue).toHaveLength(1);
+});
+it('releases only the rejected provider hold when the operator selects another CEO CLI',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  swarm.updateAgent(CEO_ID,{cli:'copilot',model:'same-model'});await swarm.messageCeo('Synthetic held request');await vi.advanceTimersByTimeAsync(150);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  fake.startSession.mock.calls[0][1].finished({ok:false,text:'',costUsd:0,turns:0,errors:['Native rejection'],configurationError:{kind:'unsupported-model',cli:'copilot',model:'same-model'}});
+  swarm.updateAgent(CEO_ID,{cli:'codex'});await vi.advanceTimersByTimeAsync(300);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));expect((fake.startSession.mock.calls[1][0] as SessionOptions)).toMatchObject({cli:'codex',model:'same-model'});expect(swarm.snapshot().ceo.blockedReason).toBeNull();
+});
+
 it('holds unsupported CEO model work through messages, cosmetic edits and restart until the model changes',async()=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
   swarm.updateAgent(CEO_ID,{model:'synthetic-invalid'});await swarm.messageCeo('Original synthetic request');await vi.advanceTimersByTimeAsync(150);
@@ -659,7 +686,7 @@ it('reserves the CEO during checks and starts a ready job using the fixed Copilo
   const preflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;})); swarm.ceoPreflight = preflight;
   swarm.messageCeo('Synthetic company question'); await vi.advanceTimersByTimeAsync(150);
   expect(swarm.snapshot().agents.find(a => a.id === CEO_ID)?.status).toBe('preparing');
-  expect(preflight).toHaveBeenCalledExactlyOnceWith(['synthetic/repo']); expect(fake.startSession).not.toHaveBeenCalled();
+  expect(preflight).toHaveBeenCalledExactlyOnceWith(['synthetic/repo'],'copilot'); expect(fake.startSession).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1000); expect(preflight).toHaveBeenCalledOnce(); checked(null);
   await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
   expect(fake.startSession.mock.calls[0][0]).toMatchObject({role: 'ceo', cli: 'copilot', additionalDirectories: [HOME_DIR]});
@@ -773,6 +800,60 @@ it('expires stalled CEO readiness and ignores its eventual result', async () => 
   expect(swarm.snapshot().ceo.blockedReason).toContain('expired after 90 seconds');
   expect(swarm.snapshot().ceo.queue).toHaveLength(1); expect(preflight).toHaveBeenCalledOnce();
   checked(null); for (let i = 0; i < 20; i++) await Promise.resolve(); expect(fake.startSession).not.toHaveBeenCalled();
+});
+
+async function retainedCeo(preflight: Swarm['ceoPreflight'], resumeId: string | null = 'ceo-owned-session') {
+  const {swarm, fake} = await office(true, fake => {fake.terminals = true;});
+  swarm.updateAgent(CEO_ID, {cli: 'codex'}); swarm.ceoPreflight = async () => null;
+  swarm.messageCeo('Synthetic retained CEO question'); await vi.advanceTimersByTimeAsync(150);
+  await vi.waitFor(() => expect(fake.startSession).toHaveBeenCalledOnce());
+  fake.startSession.mock.calls[0][1].sessionId('ceo-owned-session');
+  vi.useRealTimers(); await swarm.shutdown(true); vi.useFakeTimers();
+  const fakeRestored = backend(); fakeRestored.terminals = true; const releaseIdle = vi.fn();
+  fakeRestored.reconnectClis.mockImplementation(async terminalFor => {
+    const terminal = terminalFor(CEO_ID)!; expect(terminal).toBeTruthy(); terminal.releaseIdle = releaseIdle;
+    return [{agentId: CEO_ID, cli: 'codex', resumeId, busy: true}];
+  });
+  const restored = new Swarm(fakeRestored as unknown as Backend); offices.push(restored);
+  restored.ceoPreflight = preflight; restored.capabilityPreflight = async () => null;
+  return {swarm: restored, fake: fakeRestored, releaseIdle};
+}
+
+it('rebinds a retained CEO only after checking its selected runtime and owned checkpoint', async () => {
+  const preflight = vi.fn(async () => null); const {swarm, fake, releaseIdle} = await retainedCeo(preflight);
+  await swarm.init();
+  expect(preflight).toHaveBeenCalledWith(['synthetic/repo'], 'codex');
+  expect(fake.startSession).toHaveBeenCalledOnce();
+  expect(fake.startSession.mock.calls[0][0]).toMatchObject({cli: 'codex', reattach: true, resumeSessionId: 'ceo-owned-session'});
+  expect(swarm.snapshot().ceo.queue).toHaveLength(0); expect(swarm.snapshot().ceo.job?.kind).toBe('chat');
+  expect(releaseIdle).not.toHaveBeenCalled();
+  expect(fake.startSession.mock.invocationCallOrder[0]).toBeLessThan(fake.hooksReady.mock.invocationCallOrder[0]);
+});
+
+it('holds a retained CEO job when readiness fails and releases the old terminal', async () => {
+  const {swarm, fake, releaseIdle} = await retainedCeo(async () => 'Synthetic readiness expired'); await swarm.init();
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(releaseIdle).toHaveBeenCalledOnce();
+  expect(swarm.snapshot().ceo.blockedReason).toBe('Synthetic readiness expired'); expect(swarm.snapshot().ceo.queue).toHaveLength(1);
+});
+
+it.each(['wrong-checkpoint', null])('rejects an unowned or absent retained CEO checkpoint: %s', async checkpoint => {
+  const preflight = vi.fn(async () => null); const {swarm, fake, releaseIdle} = await retainedCeo(preflight, checkpoint);
+  if (checkpoint === null) {
+    const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+    saved.agents.find((a: {id: string}) => a.id === CEO_ID).sessionId = null;
+    await fs.writeFile(STATE_FILE, JSON.stringify(saved));
+  }
+  await swarm.init(); expect(preflight).not.toHaveBeenCalled(); expect(fake.startSession).not.toHaveBeenCalled();
+  expect(releaseIdle).toHaveBeenCalledOnce(); expect(swarm.snapshot().ceo.queue).toHaveLength(1);
+});
+
+it('does not rebind a retained CEO after shutdown interrupts readiness', async () => {
+  let checked!: (value: string | null) => void;
+  const preflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;}));
+  const {swarm, fake} = await retainedCeo(preflight); const pending = swarm.init();
+  await vi.waitFor(() => expect(preflight).toHaveBeenCalledOnce());
+  vi.useRealTimers(); await swarm.shutdown(true); checked(null); await pending;
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(fake.hooksReady).not.toHaveBeenCalled();
 });
 
 async function retainedOffice(preflight: Swarm['capabilityPreflight'], cli = 'codex', resumeId: string | null = 'keeper-owned-session') {

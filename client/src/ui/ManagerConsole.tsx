@@ -268,6 +268,7 @@ function FloorBrief({ repo }: { repo: RepoView }) {
 }
 
 function CeoTab() {
+  const clis=useStore(s=>s.clis);
   const ceo = useStore((s) => s.agents[CEO_ID]);
   const log = useStore((s) => s.logs[CEO_ID]) ?? [];
   const info = useStore((s) => s.ceo);
@@ -301,10 +302,14 @@ function CeoTab() {
             <span className="muted small">CEO</span>
             <StatusPill status={ceo.status} />
             <span className="spacer" />
+            <select aria-label="CEO coding agent" title="Coding agent for the next CEO job; readiness is checked before execution" value={ceo.cli||'copilot'} onChange={event=>void attempt(()=>api.updateAgent(ceo.id,{cli:event.target.value as AgentCli}))} style={{width:'auto'}}>
+              {!clis.some(cli=>cli.id===(ceo.cli||'copilot'))&&<option value={ceo.cli||'copilot'}>{ceo.cli||'copilot'} · discovery pending</option>}
+              <CliOptions clis={clis}/>
+            </select>
             <input
               className="inline"
               defaultValue={ceo.model}
-              title="The CEO's GitHub Copilot CLI model override; leave empty to use its default"
+              title="The selected CEO coding agent's model override; leave empty to use its default"
               placeholder="CLI default"
               style={{ maxWidth: 150 }}
               onBlur={(e) => e.target.value !== ceo.model && void attempt(() => api.updateAgent(ceo.id, { model: e.target.value }))}

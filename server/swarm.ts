@@ -303,7 +303,7 @@ export class Swarm {
   workerAdmissionContext: (repoIds: string[]) => string = () => '';
   capabilityStatus = () => '{}';
   capabilityPreflight: (repoId: string, cli: string) => Promise<string | null> = async () => { throw new Error('Capability service is not configured'); };
-  ceoPreflight: (repoIds: string[]) => Promise<string | null> = async () => { throw new Error('CEO readiness is not configured'); };
+  ceoPreflight: (repoIds: string[],cli:AgentCli) => Promise<string | null> = async () => { throw new Error('CEO readiness is not configured'); };
   taskPaused: (title: string) => boolean = () => false;
   deliveryRevision = () => 0;
   requestDeliveryReview: (id: string) => Promise<string> = async () => { throw new Error('Delivery unavailable'); };
@@ -504,7 +504,7 @@ export class Swarm {
       }
     }
     const savedCeo=this.state.agents.find(a=>a.id===CEO_ID);
-    if(savedCeo?.status==='error'&&copilotUnavailableModel(savedCeo.lastError??'',savedCeo.model||CEO_MODEL))this.holdCeoModel(savedCeo.model||CEO_MODEL);
+    if(savedCeo?.status==='error'&&this.ceoCli(savedCeo)==='copilot'&&copilotUnavailableModel(savedCeo.lastError??'',savedCeo.model||CEO_MODEL))this.holdCeoModel(savedCeo.model||CEO_MODEL);
     this.stateLoaded = true;
     for (const r of this.state.repos) if (r.localPath) this.backend.setLocalPath(r.fullName, r.localPath);
     const interrupted: PersistedAgent[] = [];
@@ -514,11 +514,11 @@ export class Swarm {
       this.agentRt.set(a.id, { log: tail, pending: [], session: null, currentTool: null, browserUrl: null, screenshot: await loadScreen(a.id), shots: [], terminal: await this.loadTerminal(a.id) });
     }
     // CLIs the terminal keeper kept running through the restart go back into their terminals, and busy ones carry on.
-    // (The CEO's session is resumed instead: its office tools live in this process.)
+    // One-shot Copilot sessions resume cold; retained native CEO sessions rebind office tools after fresh admission.
     const back = await this.backend
       .reconnectClis((id) => {
         const a = this.state.agents.find((x) => x.id === id);
-        return a && a.role !== 'ceo' ? this.terminalFor(a) : null;
+        return a ? this.terminalFor(a) : null;
       })
       .catch((err) => {
         console.warn('could not reconnect to the terminal keeper', err);
@@ -1478,7 +1478,7 @@ export class Swarm {
     if (patch.effort !== undefined) a.effort = EFFORTS.includes(patch.effort as EffortLevel) ? (patch.effort as EffortLevel) : '';
     if(a.role==='ceo'){
       const c=this.state.ceo;
-      if(c.modelBlock&&c.modelBlock.fingerprint!==this.ceoModelFingerprint(a.model||CEO_MODEL)){
+      if(c.modelBlock&&c.modelBlock.fingerprint!==this.ceoModelFingerprint(a.model||CEO_MODEL,this.ceoCli(a))){
         if(c.blockedReason===c.modelBlock.reason)c.blockedReason=null;
         c.modelBlock=null;c.retryAt=null;
         this.later(()=>this.schedule(),200);
@@ -1563,6 +1563,16 @@ export class Swarm {
 
   /** An agent whose CLI kept working through the office's restart: the office follows its session again. */
   private async reattachSession(a: PersistedAgent, held: ReconnectedCli) {
+    if(a.role==='ceo'){
+      const job=this.state.ceo.job;
+      if(!job||!held.resumeId||held.agentId!==a.id||held.cli!==this.ceoCli(a)||held.cli!==a.sessionCli||held.resumeId!==a.sessionId){
+        this.agentRt.get(a.id)?.terminal?.releaseIdle?.();
+        if(job)this.deferCeoJob(a,job,'Retained CEO runtime ownership differs; verify the preserved checkpoint before retrying');
+        else {a.status='error';a.endedAt=Date.now();a.lastError='Retained CEO lacks its owned job; execution denied';this.emitAgent(a);this.save();}
+        return;
+      }
+      await this.runCeoJob(a,job,held);return;
+    }
     const generation = this.reserveTask(a);
     const repo = this.state.repos.find((r) => r.id === a.repoId);
     const rt = this.agentRt.get(a.id);
@@ -1654,13 +1664,13 @@ export class Swarm {
   }
 
   /**
-   * The CEO always uses Copilot CLI; workers use the terminal runtime or Claude Code through the SDK. A session can
+   * The CEO uses their selected terminal CLI (Copilot by default); workers use the terminal runtime or Claude Code through the SDK. A session can
    * only be resumed by the CLI that made it, so a follow-up stays with that CLI.
    */
   private sessionRuntime(a: PersistedAgent, resume?: string, retainedCli?: AgentCli): { terminal?: AgentTerminal; cli?: AgentCli; label?: string; resumeSessionId?: string } {
     if (resume && !isCli(a.sessionCli)) resume = undefined; // legacy IDs do not establish a runtime owner
     const inTerminal = !!retainedCli || a.role === 'ceo' || (this.state.settings.runtime === 'terminal' && this.backend.terminals);
-    let cli: AgentCli = a.role === 'ceo' ? 'copilot' : retainedCli ?? (a.cli || this.state.settings.defaultCli);
+    let cli: AgentCli = a.role === 'ceo' ? this.ceoCli(a) : retainedCli ?? (a.cli || this.state.settings.defaultCli);
     if (resume && a.sessionCli && a.sessionCli !== cli) {
       if (a.role === 'ceo') resume = undefined;
       else if (inTerminal) cli = a.sessionCli;
@@ -3038,7 +3048,7 @@ export class Swarm {
       a.lastError = null;
       this.appendLog(a, [{ kind: 'system', text: '↺ The office server restarted. Picking the job back up.' }]);
     }
-    if (this.state.ceo.job) {
+    if (this.state.ceo.job && !BUSY.includes(a.status)) {
       this.state.ceo.queue.unshift(this.state.ceo.job);
       this.state.ceo.job = null;
     }
@@ -3089,9 +3099,10 @@ export class Swarm {
     this.later(() => this.schedule(), 150);
   }
 
-  private ceoModelFingerprint(model:string){return crypto.createHash('sha256').update(JSON.stringify(['copilot','unsupported-model',model])).digest('hex');}
+  private ceoCli(a:PersistedAgent):AgentCli{return isCli(a.cli)?a.cli:'copilot';}
+  private ceoModelFingerprint(model:string,cli:AgentCli='copilot'){return crypto.createHash('sha256').update(JSON.stringify([cli,'unsupported-model',model])).digest('hex');}
   private holdCeoModel(model:string){
-    const reason='GitHub Copilot CLI rejected the configured CEO model. Select an available model or clear the override to use the CLI default; queued work is held until the model changes.';
+    const reason='GitHub Copilot CLI rejected the configured CEO model. Select an available model, clear the override, or select a compatible coding agent; queued work is held until the model changes or its coding agent changes.';
     this.state.ceo.modelBlock={fingerprint:this.ceoModelFingerprint(model),reason};
     this.state.ceo.blockedReason=reason;this.state.ceo.retryAt=null;
   }
@@ -3101,7 +3112,7 @@ export class Swarm {
     const a = this.state.agents.find((x) => x.id === CEO_ID);
     const c = this.state.ceo;
     if(c.modelBlock&&a){
-      if(c.modelBlock.fingerprint===this.ceoModelFingerprint(a.model||CEO_MODEL))return;
+      if(c.modelBlock.fingerprint===this.ceoModelFingerprint(a.model||CEO_MODEL,this.ceoCli(a)))return;
       if(c.blockedReason===c.modelBlock.reason)c.blockedReason=null;
       c.modelBlock=null;c.retryAt=null;
     }
@@ -3128,15 +3139,16 @@ export class Swarm {
     void this.runCeoJob(a, job);
   }
 
-  private async runCeoJob(a: PersistedAgent, job: CeoJob) {
+  private async runCeoJob(a: PersistedAgent, job: CeoJob,held?:ReconnectedCli) {
     if (this.closed) return;
     const generation = this.reserveTask(a);
     const ownsJob = () => this.ownsTask(a, generation) && this.state.ceo.job === job;
     const rt = this.agentRt.get(a.id)!;
+    const defer=(reason:string)=>{if(held)rt.terminal?.releaseIdle?.();this.deferCeoJob(a,job,reason);};
     const floor = this.ceoFloor(job.repoId);
     const label = jobLabel(job, floor);
     this.state.ceo.job = job;
-    Object.assign(a, { status: 'preparing' as AgentStatus, cli: 'copilot', task: null, issueNumber: null, issueTitle: label, startedAt: Date.now(), endedAt: null, costUsd: 0, turns: 0, lastError: null });
+    Object.assign(a, { status: 'preparing' as AgentStatus, task: null, issueNumber: null, issueTitle: label, startedAt:held?a.startedAt??Date.now():Date.now(), endedAt: null, costUsd:held?a.costUsd:0, turns:held?a.turns:0, lastError: null });
     this.appendLog(a, [
       { kind: 'system', text: '' },
       { kind: 'system', text: `━━━ ${label} ━━━` },
@@ -3149,35 +3161,39 @@ export class Swarm {
     const scopeIds = job.repoId ? [job.repoId, ...this.repo(job.repoId).links] : this.state.repos.map(repo => repo.id);
     const scope = () => JSON.stringify(this.state.repos.map(repo => [repo.id, repo.fullName, repo.localPath, repo.targetTenancy, repo.defaultBranch, repo.links, repo.mission, repo.summary, repo.qaBrief]));
     const checkedScope = scope();
+    const selectedCli=this.ceoCli(a),runtimeScope=()=>JSON.stringify([this.ceoCli(a),a.model||CEO_MODEL,a.effort||CEO_EFFORT]),checkedRuntime=runtimeScope();
     let blocker: string | null = null;
     if (!this.backend.demo) {
       if (!this.backend.terminals) blocker = 'CEO terminal runtime is unavailable; install the supported terminal runtime and refresh readiness';
       else {
-        blocker = await this.boundedReadiness(() => this.ceoPreflight([...scopeIds]), 'CEO', this.taskStops.get(a.id)?.signal);
+        blocker = await this.boundedReadiness(() => this.ceoPreflight([...scopeIds],selectedCli), 'CEO', this.taskStops.get(a.id)?.signal);
       }
     }
     if (this.closed) return;
-    if (!ownsJob()) return;
+    if (!ownsJob()) {if(held)rt.terminal?.releaseIdle?.();return;}
     if (a.status !== 'preparing') {
       // stopped before the session started
+      if (held) rt.terminal?.releaseIdle?.();
       this.state.ceo.job = null;
       this.emitCeo();
       this.save();
       return;
     }
     if (checkedScope !== scope()) blocker = 'CEO project scope changed during readiness verification; retry with the current projects';
-    if (blocker) return this.deferCeoJob(a, job, blocker);
+    if(checkedRuntime!==runtimeScope())blocker='CEO runtime configuration changed during readiness; recheck the selected CLI before execution';
+    if (blocker) return defer(blocker);
     try { await fs.mkdir(CEO_DIR, {recursive: true}); }
-    catch { if (ownsJob()) this.deferCeoJob(a, job, 'CEO workspace is unavailable; repair its folder access before retrying'); return; }
+    catch { if (ownsJob()) defer('CEO workspace is unavailable; repair its folder access before retrying'); return; }
     if (this.closed) return;
-    if (!ownsJob()) return;
-    if (a.status !== 'preparing') { this.state.ceo.job = null; this.emitCeo(); this.save(); return; }
-    if (checkedScope !== scope()) return this.deferCeoJob(a, job, 'CEO project scope changed while preparing its workspace; retry with the current projects');
+    if (!ownsJob()) {if(held)rt.terminal?.releaseIdle?.();return;}
+    if (a.status !== 'preparing') { if (held) rt.terminal?.releaseIdle?.(); this.state.ceo.job = null; this.emitCeo(); this.save(); return; }
+    if (checkedScope !== scope()) return defer('CEO project scope changed while preparing its workspace; retry with the current projects');
+    if(checkedRuntime!==runtimeScope())return defer('CEO runtime configuration changed while preparing its workspace; retry with current readiness');
     a.status = 'working'; this.emitAgent(a); this.emitCeo();
     const s = this.state.settings;
     // A chat carries on from the CEO's last session, so "why did you propose that?" has an answer.
     try {
-    const how = this.sessionRuntime(a, job.kind === 'chat' ? (a.sessionId ?? undefined) : undefined);
+    const how = this.sessionRuntime(a, held?a.sessionId??undefined:job.kind === 'chat' ? (a.sessionId ?? undefined) : undefined);
     let completed = false;
     const live = () => !completed && ownsJob() && a.status === 'working';
     const authority = () => live()
@@ -3186,7 +3202,7 @@ export class Swarm {
     let refreshing: Promise<string | null> | undefined;
     const authorizeTool: SessionAuthorization = async () => {
       const denied = authority(); if (denied) return denied;
-      refreshing ??= (this.backend.demo ? Promise.resolve(null) : this.boundedReadiness(() => this.ceoPreflight(scopeIds), 'CEO tool', signal)).finally(() => {refreshing = undefined;});
+      refreshing ??= (this.backend.demo ? Promise.resolve(null) : this.boundedReadiness(() => this.ceoPreflight(scopeIds,selectedCli), 'CEO tool', signal)).finally(() => {refreshing = undefined;});
       const blocker = await refreshing;
       return authority() ?? blocker;
     };
@@ -3208,6 +3224,7 @@ export class Swarm {
         browserTesting: false,
         additionalDirectories: this.state.repos.filter((r) => scopeIds.includes(r.id) && this.repoRt.get(r.id)?.cloneStatus === 'ready').map((r) => this.backend.mainDir(r.fullName)),
         role: 'ceo',
+        ...(held?{reattach:true}:{}),
         office: this.officeTools(authorizeTool),
         authorizeTool,
         ...how,
@@ -3242,7 +3259,7 @@ export class Swarm {
       this.state.ceo.lastFingerprint = this.fingerprint();
     }
     this.emitCeo(); this.save();
-    } catch { if (ownsJob()) this.deferCeoJob(a, job, 'CEO session could not start; check CLI authentication and runtime configuration'); }
+    } catch { if (ownsJob()) defer('CEO session could not start; check CLI authentication and runtime configuration'); }
   }
 
   private deferCeoJob(a: PersistedAgent, job: CeoJob, reason: string) {
@@ -3627,7 +3644,7 @@ export class Swarm {
         doing: this.agentDoing(a),
         issue: a.issueNumber ? { number: a.issueNumber, title: a.issueTitle } : null,
         pullRequest: a.prNumber ? { number: a.prNumber, url: a.prUrl } : null,
-        codingAgent: ceo ? 'copilot' : a.cli || this.state.settings.defaultCli,
+        codingAgent: ceo ? BUSY.includes(a.status)&&isCli(a.sessionCli)?a.sessionCli:this.ceoCli(a) : a.cli || this.state.settings.defaultCli,
         model: ceo ? a.model || 'the coding agent default' : this.modelFor(a, a.cli || this.state.settings.defaultCli) || 'the coding agent default',
         effort: a.effort || (ceo ? CEO_EFFORT : this.state.settings.defaultEffort),
         hiredBy: a.hiredBy,

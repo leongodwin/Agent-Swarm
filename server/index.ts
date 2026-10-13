@@ -64,11 +64,11 @@ swarm.capabilityPreflight = async (repoId, cli) => {
   return capabilityBlocker(result);
 };
 delivery.checkCapabilities = (repoId, cwd, environment, force) => capabilities.check(repoId, cwd, environment, 'git', force);
-swarm.ceoPreflight = async (repoIds) => {
-  const host = capabilityBlocker(await capabilities.check('__office__', HOME_DIR, undefined, 'copilot'));
+swarm.ceoPreflight = async (repoIds,cli) => {
+  const host = capabilityBlocker(await capabilities.check('__office__', HOME_DIR, undefined, cli));
   if (host) return `Office runtime: ${host}`;
   const results = await Promise.all(repoIds.map(async id => {
-    const blocker = await swarm.capabilityPreflight(id, 'copilot');
+    const blocker = await swarm.capabilityPreflight(id, cli);
     return blocker ? `${id}: ${blocker}` : null;
   }));
   return results.filter(Boolean).join('; ') || null;
