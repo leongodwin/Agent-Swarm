@@ -62,12 +62,16 @@ export async function reconcileAdditionalAction(action: AdditionalAction, compon
 export async function verifyMigrationCompatibility(actions: TargetAction[], components: { key: string; logicalName: string }[], request: Request) {
   for (const action of actions) {
     if (action.type !== 'schema-check') continue;
-    const table = components.find((component) => component.key === action.component)!;
-    const tables = z.object({ value: z.array(z.object({ Attributes: z.array(attribute), 'Attributes@odata.nextLink': z.never().optional() })).max(1),'@odata.nextLink':z.never().optional() }).parse(await request('GET', `EntityDefinitions?$select=LogicalName&$filter=${encodeURIComponent(`LogicalName eq '${table.logicalName}'`)}&$expand=Attributes($select=LogicalName,MetadataId,AttributeType,AttributeTypeName,RequiredLevel)&$top=2`));
+    const matches=components.filter(component=>component.key===action.component);
+    if(matches.length!==1)throw new Error('Schema check must resolve to exactly one approved table');
+    const table=matches[0];
+    const tableName=z.string().regex(/^[a-z_][a-z0-9_]*$/i).parse(table.logicalName).toLowerCase();
+    const tables = z.object({ value: z.array(z.object({ LogicalName:z.string().regex(/^[a-z_][a-z0-9_]*$/), Attributes: z.array(attribute), 'Attributes@odata.nextLink': z.never().optional() })).max(1),'@odata.nextLink':z.never().optional() }).parse(await request('GET', `EntityDefinitions?$select=LogicalName&$filter=${encodeURIComponent(`LogicalName eq '${tableName}'`)}&$expand=Attributes($select=LogicalName,MetadataId,AttributeType,AttributeTypeName,RequiredLevel)`));
     // A missing table is an additive import, not an unknown HTTP error.
     if (!tables.value.length) continue;
+    if(tables.value[0].LogicalName!==tableName)throw new Error('Schema response differs from the approved table identity');
     const result = tables.value[0].Attributes;
     if (result.length >= 5000) throw new Error('Schema inventory may be truncated');
-    try {await verifyColumns(action.columns,table.logicalName,result,request,true);}catch {throw new Error(`Incompatible schema migration for ${table.logicalName}; provide a separately reviewed data migration`);}
+    try {await verifyColumns(action.columns,tableName,result,request,true);}catch {throw new Error(`Incompatible schema migration for ${tableName}; provide a separately reviewed data migration`);}
   }
 }

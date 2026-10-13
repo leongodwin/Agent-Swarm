@@ -37,6 +37,7 @@ it('uses documented typed metadata requests and denies changed identities, missi
   expect(request.mock.calls[0][0]).toBe('GET');expect(request.mock.calls[0][1]).toContain(`/Attributes(${id})/Microsoft.Dynamics.CRM.StringAttributeMetadata?`);expect(request.mock.calls[0][1]).toContain('MaxLength,Format');
   await expect(verifyColumns([title],'exp_report',[{...actual,MetadataId:undefined}],request)).rejects.toThrow('metadata ID');
   await expect(verifyColumns([title],'exp_report',[actual,actual],request)).rejects.toThrow('ambiguous');
+  await expect(verifyColumns([title],'exp_report',[actual,{...actual,LogicalName:'exp_other',MetadataId:id.toUpperCase()}],request)).rejects.toThrow('metadata IDs');
   await expect(verifyColumns([title,title],'exp_report',[actual],request)).rejects.toThrow('Duplicate');
   await expect(verifyColumns([title],'exp_report',[],request)).rejects.toThrow('Missing');await verifyColumns([title],'exp_report',[],request,true);
   await expect(verifyColumns([title],'exp_report',[actual],async()=>({...actual,MetadataId:'22222222-2222-4222-8222-222222222222'}))).rejects.toThrow('identity');

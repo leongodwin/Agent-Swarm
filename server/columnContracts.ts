@@ -43,6 +43,8 @@ export async function verifyColumns(columns:ColumnContract[],table:string,attrib
   columns=z.array(columnContract).min(1).max(100).parse(columns);
   if(new Set(columns.map(column=>column.name)).size!==columns.length)throw new Error('Duplicate declared columns');
   const rows=attributes.map(value=>baseAttribute.parse(value));if(rows.length>=5000||new Set(rows.map(row=>row.LogicalName)).size!==rows.length)throw new Error('Schema inventory is truncated or ambiguous');
+  const metadataIds=rows.flatMap(row=>row.MetadataId?[row.MetadataId.toLowerCase()]:[]);
+  if(new Set(metadataIds).size!==metadataIds.length)throw new Error('Schema metadata IDs are ambiguous');
   for(const column of columns) {
     const current=rows.find(row=>row.LogicalName===column.name);if(!current){if(migration)continue;throw new Error(`Missing declared column ${column.name}`);}
     compareColumn({...column,constraints:undefined},current,migration);

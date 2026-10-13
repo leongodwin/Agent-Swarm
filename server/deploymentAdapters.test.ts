@@ -22,11 +22,24 @@ const table = { key: 'reports', kind: 'dataverse-table', id, logicalName: 'exp_r
 const schema = { id: 'schema', type: 'schema-check', component: 'reports', columns: [{ name: 'exp_title', type: 'String', required: 'None' }] } as const;
 it('checks schema contracts and blocks incompatible pre-import migrations', async () => {
   const attributes = [{ LogicalName: 'exp_title', AttributeType: 'Integer', RequiredLevel: { Value: 'None' } }];
-  const request = vi.fn<Request>(async (_method, resource) => ({ value: resource.startsWith('EntityDefinitions?') ? [{ Attributes: attributes }] : attributes }));
+  const request = vi.fn<Request>(async (_method, resource) => ({ value: resource.startsWith('EntityDefinitions?') ? [{ LogicalName:table.logicalName,Attributes: attributes }] : attributes }));
   await expect(verifyMigrationCompatibility([{ ...schema, columns: [...schema.columns] }], [table], request)).rejects.toThrow('Incompatible schema');
   await expect(reconcileAdditionalAction({ ...schema, columns: [...schema.columns] }, table, request, run(), async () => {}, async () => {})).rejects.toThrow('reviewed solution import');
   expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
   await expect(verifyMigrationCompatibility([{ ...schema, columns: [...schema.columns] }], [table], async () => ({ value: [] }))).resolves.toBeUndefined();
+});
+it('binds migration observations to one approved table and rejects missing, mismatched and truncated identities',async()=>{
+  const action={...schema,columns:[...schema.columns]};
+  const observed={LogicalName:table.logicalName,Attributes:[{LogicalName:'exp_title',AttributeType:'String',RequiredLevel:{Value:'None'}}]};
+  const request=vi.fn<Request>(async()=>({value:[observed]}));
+  await verifyMigrationCompatibility([action],[{...table,logicalName:table.logicalName.toUpperCase()}],request);
+  expect(request.mock.calls.every(([method])=>method==='GET')).toBe(true);
+  expect(request.mock.calls[0][1]).not.toContain('$top=');
+  for(const response of [{value:[{...observed,LogicalName:'exp_other'}]},{value:[{Attributes:observed.Attributes}]},{value:[observed], '@odata.nextLink':'more'},{value:[{...observed,'Attributes@odata.nextLink':'more'}]},{value:[observed,observed]}])
+    await expect(verifyMigrationCompatibility([action],[table],async()=>response)).rejects.toThrow();
+  const unused=vi.fn<Request>(async()=>({value:[]}));
+  for(const components of [[],[table,table],[{...table,logicalName:"exp_report')?$select=secret"}]])await expect(verifyMigrationCompatibility([action],components,unused)).rejects.toThrow();
+  expect(unused).not.toHaveBeenCalled();
 });
 it('grants only the approved record share and recovers a lost response without another grant', async () => {
   let shared = false;

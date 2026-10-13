@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Schema observation identity and metadata query compatibility
+
+Pre-import migration checks now resolve exactly one approved table, validate/canonicalize its logical name, and require the returned table identity to match. Missing identities, another table, duplicate matches and collection/attribute continuation markers are denied. Base column inventory also rejects reused metadata IDs across different column names, case-insensitively. This complements existing type/requiredness/declared-constraint comparisons; it does not establish complete table, relationship, privilege or field-security coverage.
+
+A read-only MyDevNet query reproduced a live failure: the exact filtered `EntityDefinitions` query with expanded attributes failed with `$top=2`, while the same query without it succeeded and returned `account` with 217 attributes. The adapter no longer supplies that unsupported option; its exact-name filter and response cardinality validation remain. The corrected adapter was checked against the captured live metadata for the declared `account.name` column, verifying response/query compatibility rather than an approved application's complete schema or a real import. Supported metadata query forms are described in [Microsoft's table-definition query documentation](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-metadata-web-api).
+
+The active Dataverse CLI profile identified MyDevNet and the read-only request explicitly pinned its URL. No authentication profile selection, tenant mutation, import or role grant occurred. Local regressions cover wrong/missing table identities, duplicates, pagination, unsafe names and metadata-ID ambiguity. Evidence: `.swarm-reliability/schema-identity-coverage-2026-10-13.txt`, `schema-identity-coverage-exit-2026-10-13.txt`, `schema-identity-api-e2e-2026-10-13.txt`, `schema-identity-live-top-2026-10-13.txt`, `schema-identity-live-metadata-2026-10-13.json`, `schema-identity-live-adapter-2026-10-13.json` and `schema-identity-live-runtime-2026-10-13.json`. Copilot Studio remains paused.
+
 ## Automatic lifecycle policy observation
 
 The production lifecycle provider requests a fresh authenticated standard-policy inventory at each build, test, import, post-deployment, verification and health check, using the exact manifest tenant/account. Warm native authentication is reused through the existing reader. Concurrent checks for that identity join one pending read; a different tenant/account cannot take over pending discovery. A non-forced service read may reuse fresh persisted evidence, but production lifecycle checks explicitly force discovery.
