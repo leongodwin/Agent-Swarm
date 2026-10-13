@@ -22,7 +22,7 @@ const issue = {number: 1, title: 'Build synthetic feature', body: 'Test only', u
 function backend() {
   const external = {
     demo: false, terminals: false,
-    user: vi.fn(async () => 'synthetic-user'), reconnectClis: vi.fn(async () => []), hooksReady: vi.fn(),
+    user: vi.fn(async () => 'synthetic-user'), reconnectClis: vi.fn<Backend['reconnectClis']>(async () => []), hooksReady: vi.fn(),
     detectClis: vi.fn(async () => []), releaseClis: vi.fn(async () => {}),
     setLocalPath: vi.fn(), ensureClone: vi.fn(async () => {}), releaseDesk: vi.fn(async () => {}),
     listIssues: vi.fn(async () => [issue]), listPulls: vi.fn(async (): Promise<PullInfo[]> => []), syncMain: vi.fn(async () => null),
@@ -312,8 +312,9 @@ it('does not send a checked follow-up after shutdown changes its session', async
   await swarm.assign(agent.id, 1); for (let i = 0; i < 30 && !fake.startSession.mock.calls.length; i++) await Promise.resolve();
   const handle = fake.startSession.mock.results[0].value; let checked!: (value: string | null) => void;
   swarm.capabilityPreflight = () => new Promise(resolve => {checked = resolve;});
-  const pending = swarm.message(agent.id, 'Continue the feature'); await swarm.shutdown(true); checked(null);
-  await expect(pending).rejects.toThrow('Session changed'); expect(handle.send).not.toHaveBeenCalled();
+  const pending = swarm.message(agent.id, 'Continue the feature'); const rejected = expect(pending).rejects.toThrow('Session changed');
+  await Promise.resolve(); await swarm.shutdown(true); checked(null);
+  await rejected; expect(handle.send).not.toHaveBeenCalled();
 });
 
 it('reserves a release reviewer while checking and requires readiness before starting', async () => {
@@ -332,8 +333,9 @@ it('does not start release QA on blocked readiness or after the reviewer is stop
   await expect(swarm.reviewDeliveryRelease(qa.id, 'synthetic/repo', 'synthetic-release')).rejects.toThrow('environment unavailable');
   let checked!: (value: string | null) => void;
   swarm.capabilityPreflight = () => new Promise(resolve => {checked = resolve;});
-  const pending = swarm.reviewDeliveryRelease(qa.id, 'synthetic/repo', 'synthetic-release'); swarm.stopAgent(qa.id); checked(null);
-  await expect(pending).rejects.toThrow('Reviewer stopped'); expect(fake.startSession).not.toHaveBeenCalled();
+  const pending = swarm.reviewDeliveryRelease(qa.id, 'synthetic/repo', 'synthetic-release'); const rejected = expect(pending).rejects.toThrow('Reviewer stopped');
+  await Promise.resolve(); swarm.stopAgent(qa.id); checked(null);
+  await rejected; expect(fake.startSession).not.toHaveBeenCalled();
 });
 
 it('checks the owning CLI before restart recovery resumes a saved session', async () => {
@@ -500,4 +502,82 @@ it('expires stalled CEO readiness and ignores its eventual result', async () => 
   expect(swarm.snapshot().ceo.blockedReason).toContain('expired after 90 seconds');
   expect(swarm.snapshot().ceo.queue).toHaveLength(1); expect(preflight).toHaveBeenCalledOnce();
   checked(null); for (let i = 0; i < 20; i++) await Promise.resolve(); expect(fake.startSession).not.toHaveBeenCalled();
+});
+
+async function retainedOffice(preflight: Swarm['capabilityPreflight'], cli = 'codex', resumeId: string | null = 'keeper-owned-session') {
+  const {swarm, fake} = await office(true); const developer = swarm.hireAgent('synthetic/repo', {name: 'Synthetic developer'});
+  await swarm.assign(developer.id, 1); for (let i = 0; i < 30 && !fake.startSession.mock.calls.length; i++) await Promise.resolve();
+  fake.startSession.mock.calls[0][1].sessionId('older-persisted-session'); await swarm.shutdown(true);
+  const restoredBackend = backend(); restoredBackend.terminals = true; const releaseIdle = vi.fn();
+  restoredBackend.reconnectClis.mockImplementation(async terminalFor => {
+    const terminal = terminalFor(developer.id)!; terminal.releaseIdle = releaseIdle;
+    return [{agentId: developer.id, cli: cli as 'codex', resumeId, busy: true}];
+  });
+  const restored = new Swarm(restoredBackend as unknown as Backend); offices.push(restored); restored.capabilityPreflight = preflight;
+  return {swarm: restored, fake: restoredBackend, releaseIdle, developer};
+}
+
+it('reattaches a verified retained CLI using keeper ownership despite an SDK default', async () => {
+  const preflight = vi.fn(async () => null); const {swarm, fake, releaseIdle, developer} = await retainedOffice(preflight);
+  await swarm.init();
+  expect(preflight).toHaveBeenCalledWith('synthetic/repo', 'codex'); expect(fake.startSession).toHaveBeenCalledOnce();
+  expect(fake.startSession.mock.calls[0][0]).toMatchObject({cli: 'codex', reattach: true, resumeSessionId: 'keeper-owned-session', terminal: expect.anything()});
+  expect(releaseIdle).not.toHaveBeenCalled(); expect(fake.hooksReady).toHaveBeenCalledOnce();
+  expect(fake.startSession.mock.invocationCallOrder[0]).toBeLessThan(fake.hooksReady.mock.invocationCallOrder[0]);
+  vi.useRealTimers(); // flush the real emulator while persisting the adopted terminal
+  await swarm.shutdown(true); const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  expect(saved.agents.find((a: {id: string}) => a.id === developer.id)).toMatchObject({sessionId: 'keeper-owned-session', sessionCli: 'codex'});
+});
+
+it('quarantines blocked retained work before releasing waiting hooks', async () => {
+  const {swarm, fake, releaseIdle, developer} = await retainedOffice(async () => 'Synthetic target access expired'); await swarm.init();
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(releaseIdle).toHaveBeenCalledOnce();
+  expect(releaseIdle.mock.invocationCallOrder[0]).toBeLessThan(fake.hooksReady.mock.invocationCallOrder[0]);
+  expect(swarm.snapshot().agents.find(a => a.id === developer.id)).toMatchObject({status: 'error', lastError: 'Synthetic target access expired'});
+});
+
+it('quarantines a retained paused task without starting a new session', async () => {
+  const preflight = vi.fn(async () => null); const {swarm, fake, releaseIdle, developer} = await retainedOffice(preflight);
+  swarm.taskPaused = () => true; await swarm.init();
+  expect(preflight).not.toHaveBeenCalled(); expect(fake.startSession).not.toHaveBeenCalled(); expect(releaseIdle).toHaveBeenCalledOnce();
+  expect(swarm.snapshot().agents.find(a => a.id === developer.id)?.status).toBe('stopped');
+});
+
+it('rechecks a pause applied during retained-session readiness', async () => {
+  let paused = false; let checked!: (value: string | null) => void;
+  const preflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;})); const {swarm, fake, releaseIdle} = await retainedOffice(preflight);
+  swarm.taskPaused = () => paused; const pending = swarm.init(); await vi.waitFor(() => expect(preflight).toHaveBeenCalledOnce());
+  paused = true; checked(null); await pending;
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(releaseIdle).toHaveBeenCalledOnce();
+});
+
+it('quarantines invalid retained CLI metadata without querying readiness', async () => {
+  const preflight = vi.fn(async () => null); const {swarm, fake, releaseIdle} = await retainedOffice(preflight, 'unknown-runtime'); await swarm.init();
+  expect(preflight).not.toHaveBeenCalled(); expect(fake.startSession).not.toHaveBeenCalled(); expect(releaseIdle).toHaveBeenCalledOnce();
+});
+
+it('times out retained admission, quarantines the process and ignores late readiness', async () => {
+  let checked!: (value: string | null) => void;
+  const preflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;})); const {swarm, fake, releaseIdle} = await retainedOffice(preflight);
+  const pending = swarm.init(); await vi.waitFor(() => expect(preflight).toHaveBeenCalledOnce());
+  await vi.advanceTimersByTimeAsync(90000); await pending; checked(null); for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(releaseIdle).toHaveBeenCalledOnce(); expect(fake.hooksReady).toHaveBeenCalledOnce();
+});
+
+it('does not reopen hooks or reattach after shutdown interrupts retained admission', async () => {
+  let checked!: (value: string | null) => void;
+  const preflight = vi.fn(() => new Promise<string | null>(resolve => {checked = resolve;})); const {swarm, fake} = await retainedOffice(preflight);
+  const pending = swarm.init(); await vi.waitFor(() => expect(preflight).toHaveBeenCalledOnce());
+  vi.useRealTimers(); await swarm.shutdown(true); checked(null); await pending;
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(fake.hooksReady).not.toHaveBeenCalled();
+});
+
+it.each(['qa', 'fix'])('removes stale %s pipeline activity when retained work is quarantined', async task => {
+  const {swarm, fake, developer} = await retainedOffice(async () => 'Synthetic access expired');
+  const saved = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+  Object.assign(saved.agents.find((a: {id: string}) => a.id === developer.id), {task, prNumber: 7});
+  saved.qa = [{repoId: 'synthetic/repo', prNumber: 7, status: task === 'qa' ? 'testing' : 'fixing', qaAgentId: developer.id, devAgentId: developer.id, testedSha: 'old-head', passedSha: 'old-head'}];
+  await fs.writeFile(STATE_FILE, JSON.stringify(saved)); await swarm.init();
+  expect(fake.startSession).not.toHaveBeenCalled(); expect(swarm.snapshot().qa[0].status).toBe(task === 'qa' ? 'queued' : 'failed');
+  if (task === 'qa') {vi.useRealTimers(); await swarm.shutdown(true); const recovered = JSON.parse(await fs.readFile(STATE_FILE, 'utf8')); expect(recovered.qa[0]).toMatchObject({testedSha: null, passedSha: null, qaAgentId: null});}
 });

@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Retained CLI admission
+
+Busy keeper sessions no longer bypass capability readiness on startup. The office verifies the returned agent/CLI/session metadata and terminal support, checks the actual retained CLI, and rechecks pause/cancellation before following it. Keeper metadata replaces stale persisted runtime ownership. A verified retained terminal is adopted as that CLI even when the office default has changed to SDK, avoiding a second SDK session alongside the surviving process.
+
+Admission checks run concurrently before reopening waiting hooks. Blocked, paused, malformed or expired sessions invoke their owned terminal's release/quarantine path; no replacement model session starts. Interrupted QA records return to the queue without approval, and interrupted repairs leave the fixing state. Shutdown prevents hook reopening or late adoption. The shared readiness boundary now expires worker/CEO decisions after 90 seconds, responds to shutdown and ignores late results.
+
+Tests exercise actual Swarm startup with a synthetic keeper/session backend and real terminal-emulator persistence. They verify metadata selection, ordering, pause changes, timeout, quarantine invocation and pipeline state recovery. They do not establish physical process termination, native keeper recovery, worktree identity, authenticated CLI accounts or complete containment of unhooked/idle native commands. Full native execution and policy/schema certification remain required. Evidence: `.swarm-reliability/retained-admission-coverage-2026-10-13.txt`, `retained-admission-coverage-exit-2026-10-13.txt`, and `retained-admission-api-e2e-2026-10-13.txt`.
+
 ## CEO dispatch admission
 
 The CEO reserves a preparing slot before readiness checks. Non-demo dispatch requires native terminal support, a configured CEO readiness provider and a usable ready decision. The office provider checks GitHub authentication and the fixed Copilot CLI, then checks the job's project scope (including declared linked projects). Additional reference directories are limited to that checked scope. Project paths, targets, links or requirements changing during verification invalidate admission.

@@ -19,12 +19,12 @@ describe('Review regressions', () => {
     expect(await check.call(fake, agent, {})).toBe(false);
     expect(agent.status).toBe('stopped'); expect(agent.lastError).toContain('paused'); expect(preflight).not.toHaveBeenCalled();
   });
-  it('reattaches solely to stop a surviving paused platform session', () => {
-    const start = vi.fn(); const stop = vi.fn();
-    const fake = { state: { repos: [{ id: 'repo', fullName: 'owner/repo' }] }, taskPaused: () => true, appendLog: vi.fn(), backend: { deskDir: () => 'desk' }, agentSlug: () => 'grace', startAgentSession: start, stopAgent: stop };
-    const restore = (Swarm.prototype as unknown as { reattachSession(a: unknown): void }).reattachSession;
-    restore.call(fake, { id: 'grace', repoId: 'repo', issueTitle: 'Copilot Studio topics', task: 'fix', sessionId: 'existing-session' });
-    expect(start.mock.calls[0][7]).toBe('reattach'); expect(stop).toHaveBeenCalledWith('grace');
+  it('quarantines a surviving paused platform session without launching a replacement', async () => {
+    const start = vi.fn(); const releaseIdle = vi.fn();
+    const fake = { state: {repos: [{id: 'repo', fullName: 'owner/repo'}], qa: []}, agentRt: new Map([['grace', {terminal: {releaseIdle}}]]), taskPaused: () => true, appendLog: vi.fn(), backend: {terminals: true}, emitAgent: vi.fn(), save: vi.fn(), startAgentSession: start };
+    const restore = (Swarm.prototype as unknown as {reattachSession(a: unknown, held: unknown): Promise<void>}).reattachSession;
+    await restore.call(fake, {id: 'grace', repoId: 'repo', issueTitle: 'Copilot Studio topics', task: 'fix', sessionId: 'existing-session'}, {agentId: 'grace', cli: 'codex', resumeId: 'keeper-session', busy: true});
+    expect(start).not.toHaveBeenCalled(); expect(releaseIdle).toHaveBeenCalledOnce();
   });
   it('includes delivery changes in CEO heartbeat decisions', () => {
     let revision = 1;

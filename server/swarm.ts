@@ -16,6 +16,7 @@ import { DEFAULT_PREVIEW, Previews, parsePreviewPatch } from './previews.ts';
 import { drainDecision, lastUpdateMessage, POSTPONE_MS, type DrainInput, type LastUpdate } from './officeUpdate.ts';
 import { clampPacingSessions, DEFAULT_PACING_SESSIONS, mayStart, PACING_MS, pacingMessage, usageLabel, usageView, type UsageWarning, type WorkKind } from './pacing.ts';
 import { isCli } from './clis.ts';
+import type {ReconnectedCli} from './cliRunner.ts';
 import { AgentTerminal } from './terminal.ts';
 import { blockers, holdUps, issueSpecialty } from '../shared/issues.ts';
 import { effectiveModel } from '../shared/models.ts';
@@ -505,7 +506,8 @@ export class Swarm {
     }
     for (const c of back) if (c.busy && !carryOn.some((a) => a.id === c.agentId)) this.agentRt.get(c.agentId)?.terminal?.releaseIdle?.();
     for (const r of this.state.repos) this.repoRt.set(r.id, { issues: [], pulls: [], lastSync: null, syncing: false, cloneStatus: 'pending', lastMergedAt: null, folderSync: null, merging: false });
-    for (const a of carryOn) this.reattachSession(a);
+    await Promise.all(carryOn.map(a => this.reattachSession(a, back.find(held => held.agentId === a.id)!)));
+    if (this.closed) return;
     this.backend.hooksReady();
 
     try {
@@ -1471,12 +1473,33 @@ export class Swarm {
   }
 
   /** An agent whose CLI kept working through the office's restart: the office follows its session again. */
-  private reattachSession(a: PersistedAgent) {
+  private async reattachSession(a: PersistedAgent, held: ReconnectedCli) {
     const repo = this.state.repos.find((r) => r.id === a.repoId);
-    if (!repo) return;
+    const rt = this.agentRt.get(a.id);
+    let blocker: string | null = null;
+    let paused = this.taskPaused(a.issueTitle ?? '');
+    if (!repo || !rt?.terminal || !this.backend.terminals || held?.agentId !== a.id || !isCli(held?.cli) || !(held.resumeId === null || typeof held.resumeId === 'string' && held.resumeId.length > 0)) blocker = 'Retained CLI identity or terminal context is unavailable';
+    else {
+      a.sessionId = held.resumeId; a.sessionCli = held.cli;
+      a.status = 'preparing';
+      if (paused) blocker = 'This platform is paused by the manager';
+      else blocker = await this.sessionReadiness(a, repo, held.resumeId ?? undefined, held.cli);
+    }
+    if (this.closed) return;
+    paused = this.taskPaused(a.issueTitle ?? '');
+    if (paused) blocker = 'This platform is paused by the manager';
+    if (!blocker && (a.status !== 'preparing' || !this.state.agents.includes(a))) blocker = 'Retained task was cancelled during readiness verification';
+    if (blocker) {
+      rt?.terminal?.releaseIdle?.();
+      Object.assign(a, {status: paused || a.status === 'stopped' ? 'stopped' : 'error', endedAt: Date.now(), lastError: blocker});
+      const record = this.state.qa.find(q => q.repoId === a.repoId && q.prNumber === a.prNumber);
+      if (a.task === 'qa' && record?.status === 'testing') this.setQa(record, {status: 'queued', qaAgentId: null, testedSha: null, passedSha: null});
+      if (a.task === 'fix' && record?.status === 'fixing') this.setQa(record, {status: 'failed'});
+      this.appendLog(a, [{kind: 'error', text: `Retained CLI quarantined: ${blocker}`}]);
+      this.emitAgent(a); this.save(); return;
+    }
     this.appendLog(a, [{ kind: 'system', text: '↻ The office restarted; their CLI kept working and the office is following it again.' }]);
-    this.startAgentSession(a, repo, a.task === 'qa' && a.prNumber === null ? this.backend.mainDir(repo.fullName) : this.backend.deskDir(repo.fullName, this.agentSlug(a)), '', '', a.sessionId ?? undefined, undefined, 'reattach');
-    if (this.taskPaused?.(a.issueTitle ?? '')) this.stopAgent(a.id);
+    this.startAgentSession(a, repo!, a.task === 'qa' && a.prNumber === null ? this.backend.mainDir(repo!.fullName) : this.backend.deskDir(repo!.fullName, this.agentSlug(a)), '', '', a.sessionId ?? undefined, undefined, 'reattach');
   }
 
   /** The manager pressed Esc in the agent's terminal and the CLI stopped its turn: a Stop that leaves the CLI to them. */
@@ -1541,10 +1564,10 @@ export class Swarm {
    * The CEO always uses Copilot CLI; workers use the terminal runtime or Claude Code through the SDK. A session can
    * only be resumed by the CLI that made it, so a follow-up stays with that CLI.
    */
-  private sessionRuntime(a: PersistedAgent, resume?: string): { terminal?: AgentTerminal; cli?: AgentCli; label?: string; resumeSessionId?: string } {
+  private sessionRuntime(a: PersistedAgent, resume?: string, retainedCli?: AgentCli): { terminal?: AgentTerminal; cli?: AgentCli; label?: string; resumeSessionId?: string } {
     if (resume && !isCli(a.sessionCli)) resume = undefined; // legacy IDs do not establish a runtime owner
-    const inTerminal = a.role === 'ceo' || (this.state.settings.runtime === 'terminal' && this.backend.terminals);
-    let cli: AgentCli = a.role === 'ceo' ? 'copilot' : a.cli || this.state.settings.defaultCli;
+    const inTerminal = !!retainedCli || a.role === 'ceo' || (this.state.settings.runtime === 'terminal' && this.backend.terminals);
+    let cli: AgentCli = a.role === 'ceo' ? 'copilot' : retainedCli ?? (a.cli || this.state.settings.defaultCli);
     if (resume && a.sessionCli && a.sessionCli !== cli) {
       if (a.role === 'ceo') resume = undefined;
       else if (inTerminal) cli = a.sessionCli;
@@ -1695,14 +1718,11 @@ export class Swarm {
     }
   }
 
-  private async sessionReadiness(a: PersistedAgent, repo: PersistedRepo, resume?: string): Promise<string | null> {
+  private async sessionReadiness(a: PersistedAgent, repo: PersistedRepo, resume?: string, retainedCli?: AgentCli): Promise<string | null> {
     if (this.backend.demo) return null;
     const terminal = a.role === 'ceo' || this.state.settings.runtime === 'terminal' && this.backend.terminals;
-    const cli = !terminal ? 'node' : resume && a.sessionCli && a.role !== 'ceo' ? a.sessionCli : a.cli || this.state.settings.defaultCli;
-    try {
-      const decision = await this.capabilityPreflight(repo.id, cli);
-      return decision === null ? null : typeof decision === 'string' && decision.trim() ? decision : 'Capability check returned no usable decision';
-    } catch { return 'Capability check unavailable; refresh project readiness before assigning work'; }
+    const cli = retainedCli ?? (!terminal ? 'node' : resume && a.sessionCli && a.role !== 'ceo' ? a.sessionCli : a.cli || this.state.settings.defaultCli);
+    return this.boundedReadiness(() => this.capabilityPreflight(repo.id, cli), 'Capability');
   }
 
   private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo, resume?: string) {
@@ -1759,7 +1779,7 @@ export class Swarm {
     if (this.closed) return;
     const rt = this.agentRt.get(a.id)!;
     a.status = 'working';
-    const how = this.sessionRuntime(a, resumeSessionId);
+    const how = this.sessionRuntime(a, resumeSessionId, mode === 'reattach' ? a.sessionCli ?? undefined : undefined);
     this.emitAgent(a);
     rt.session = this.backend.startSession(
       {
@@ -2362,8 +2382,8 @@ export class Swarm {
         throw new HttpError(409, `${a.name} is running a non-interactive Copilot task; send a follow-up after it finishes.`);
       }
       const blocker = await this.sessionReadiness(a, repo, a.sessionId ?? undefined);
-      if (blocker) throw new HttpError(409, blocker);
       if (this.closed || rt.session !== session) throw new HttpError(409, 'Session changed during readiness verification; retry the follow-up');
+      if (blocker) throw new HttpError(409, blocker);
       this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${text}` }]);
       if (!typed) rt.session.send(text);
       return;
@@ -2929,7 +2949,7 @@ export class Swarm {
     if (!this.backend.demo) {
       if (!this.backend.terminals) blocker = 'CEO terminal runtime is unavailable; install the supported terminal runtime and refresh readiness';
       else {
-        blocker = await this.checkCeoReadiness(scopeIds);
+        blocker = await this.boundedReadiness(() => this.ceoPreflight([...scopeIds]), 'CEO');
       }
     }
     if (this.closed) return;
@@ -3018,7 +3038,7 @@ export class Swarm {
     this.emitAgent(a); this.emitCeo(); this.save();
   }
 
-  private checkCeoReadiness(scopeIds: string[]): Promise<string | null> {
+  private boundedReadiness(check: () => Promise<string | null>, label: string): Promise<string | null> {
     return new Promise(resolve => {
       let settled = false;
       const signal = this.lifecycleStop.signal;
@@ -3026,13 +3046,13 @@ export class Swarm {
         if (settled) return;
         settled = true; clearTimeout(timer); signal.removeEventListener('abort', aborted); resolve(result);
       };
-      const aborted = () => finish('CEO readiness cancelled by office shutdown');
-      const timer = setTimeout(() => finish('CEO readiness expired after 90 seconds; refresh capabilities before retrying'), 90_000);
+      const aborted = () => finish(`${label} readiness cancelled by office shutdown`);
+      const timer = setTimeout(() => finish(`${label} readiness expired after 90 seconds; refresh capabilities before retrying`), 90_000);
       timer.unref(); signal.addEventListener('abort', aborted, {once: true});
       if (signal.aborted) {aborted(); return;}
-      Promise.resolve().then(() => this.ceoPreflight([...scopeIds])).then(decision => {
-        finish(decision === null ? null : typeof decision === 'string' && decision.trim() ? decision : 'CEO readiness returned no usable decision');
-      }, () => finish('CEO readiness is unavailable; refresh authentication and project capabilities'));
+      Promise.resolve().then(() => settled ? null : check()).then(decision => {
+        finish(decision === null ? null : typeof decision === 'string' && decision.trim() ? decision : `${label} readiness returned no usable decision`);
+      }, () => finish(`${label} readiness is unavailable; refresh authentication and project capabilities`));
     });
   }
 
