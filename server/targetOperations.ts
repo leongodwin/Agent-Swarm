@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { DeliveryRun } from '../shared/delivery.ts';
+import {columnContract} from './columnContracts.ts';
 
 // Dataverse IDs are GUIDs; legacy sequential IDs need not have RFC UUID version bits.
 export const dataverseGuid = z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i);
@@ -14,7 +15,7 @@ export const targetActionSchema = z.discriminatedUnion('type', [
   z.object({ id: z.string().regex(/^[\w-]+$/), type: z.literal('connection-reference-check'), component: z.string(), connectionId: z.string().trim().min(1).max(1000), connectorId: z.string().trim().min(1).max(1000) }).strict(),
   z.object({ id: z.string().regex(/^[\w-]+$/), type: z.literal('connection-reference-bind'), component: z.string(), expectedConnectionId: z.string().nullable(), connectionId: z.string().min(1).max(1000), connectorId: z.string().min(1).max(1000) }).strict(),
   z.object({ id: z.string().regex(/^[\w-]+$/), type: z.literal('record-share'), component: z.string(), recordId: guid, principalId: guid, principalType: z.enum(['systemuser', 'team']), expectedRights: z.array(z.enum(['ReadAccess', 'WriteAccess', 'AppendAccess', 'AppendToAccess'])).length(0), rights: z.array(z.enum(['ReadAccess', 'WriteAccess', 'AppendAccess', 'AppendToAccess'])).min(1).max(4) }).strict(),
-  z.object({ id: z.string().regex(/^[\w-]+$/), type: z.literal('schema-check'), component: z.string(), columns: z.array(z.object({ name: z.string().regex(/^[a-z_][a-z0-9_]*$/), type: z.enum(['String', 'Memo', 'Integer', 'Decimal', 'Money', 'DateTime', 'Boolean', 'Lookup', 'Picklist', 'Uniqueidentifier', 'File']), required: z.enum(['None', 'Recommended', 'ApplicationRequired', 'SystemRequired']) }).strict()).min(1).max(100) }).strict(),
+  z.object({ id: z.string().regex(/^[\w-]+$/), type: z.literal('schema-check'), component: z.string(), columns: z.array(columnContract).min(1).max(100).refine(columns=>new Set(columns.map(column=>column.name)).size===columns.length,'Column contracts must be unique') }).strict(),
 ]);
 export type TargetComponent = z.infer<typeof targetComponentSchema>;
 export type TargetAction = z.infer<typeof targetActionSchema>;

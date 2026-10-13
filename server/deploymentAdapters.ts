@@ -2,11 +2,10 @@ import { z } from 'zod';
 import type { DeliveryRun } from '../shared/delivery.ts';
 import type { TargetAction, MappedComponent, Request } from './targetOperations.ts';
 import { reconcile } from './platformLifecycle.ts';
+import {baseAttribute as attribute,verifyColumns} from './columnContracts.ts';
 
 export type AdditionalAction = Extract<TargetAction, { type: 'connection-reference-bind' | 'record-share' | 'schema-check' }>;
 const sameRights = (a: string[], b: string[]) => [...new Set(a)].sort().join(',') === [...new Set(b)].sort().join(',');
-const attribute = z.object({ LogicalName: z.string(), AttributeType: z.string(), AttributeTypeName: z.object({ Value: z.string() }).optional(), RequiredLevel: z.object({ Value: z.string() }) });
-const attributeType = (value: z.infer<typeof attribute>) => value.AttributeTypeName?.Value === 'FileType' ? 'File' : value.AttributeType;
 
 export async function reconcileAdditionalAction(action: AdditionalAction, component: MappedComponent, request: Request, run: DeliveryRun, save: () => Promise<void>, owned: () => Promise<void>) {
   let mutate: () => Promise<unknown> = async () => { throw new Error('Schema contract not observed; repair through a reviewed solution import'); };
@@ -25,9 +24,10 @@ export async function reconcileAdditionalAction(action: AdditionalAction, compon
   } else if (action.type === 'schema-check') {
     if (component.kind !== 'dataverse-table' || !component.logicalName) throw new Error('Schema contract requires a mapped table');
     observe = async () => {
-      const metadata = z.object({ value: z.array(attribute) }).parse(await request('GET', `EntityDefinitions(LogicalName='${component.logicalName}')/Attributes?$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel`));
+      const metadata = z.object({ value: z.array(attribute),'@odata.nextLink':z.never().optional() }).parse(await request('GET', `EntityDefinitions(LogicalName='${component.logicalName}')/Attributes?$select=LogicalName,MetadataId,AttributeType,AttributeTypeName,RequiredLevel`));
       if (metadata.value.length >= 5000) throw new Error('Schema inventory may be truncated');
-      return action.columns.every((column) => metadata.value.some((actual) => actual.LogicalName === column.name && attributeType(actual) === column.type && actual.RequiredLevel.Value === column.required));
+      try {await verifyColumns(action.columns,component.logicalName!,metadata.value,request);return true;}
+      catch {throw new Error('Schema contract verification failed; inspect metadata and use a reviewed solution import for changes');}
     };
   } else {
     if (component.kind !== 'dataverse-table' || !component.logicalName || !component.entitySet || !component.primaryId) throw new Error('Record sharing requires a mapped table');
@@ -63,14 +63,11 @@ export async function verifyMigrationCompatibility(actions: TargetAction[], comp
   for (const action of actions) {
     if (action.type !== 'schema-check') continue;
     const table = components.find((component) => component.key === action.component)!;
-    const tables = z.object({ value: z.array(z.object({ Attributes: z.array(attribute), 'Attributes@odata.nextLink': z.never().optional() })).max(1) }).parse(await request('GET', `EntityDefinitions?$select=LogicalName&$filter=${encodeURIComponent(`LogicalName eq '${table.logicalName}'`)}&$expand=Attributes($select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel)&$top=2`));
+    const tables = z.object({ value: z.array(z.object({ Attributes: z.array(attribute), 'Attributes@odata.nextLink': z.never().optional() })).max(1),'@odata.nextLink':z.never().optional() }).parse(await request('GET', `EntityDefinitions?$select=LogicalName&$filter=${encodeURIComponent(`LogicalName eq '${table.logicalName}'`)}&$expand=Attributes($select=LogicalName,MetadataId,AttributeType,AttributeTypeName,RequiredLevel)&$top=2`));
     // A missing table is an additive import, not an unknown HTTP error.
     if (!tables.value.length) continue;
     const result = tables.value[0].Attributes;
     if (result.length >= 5000) throw new Error('Schema inventory may be truncated');
-    for (const column of action.columns) {
-      const old = result.find((item) => item.LogicalName === column.name);
-      if (old && (attributeType(old) !== column.type || old.RequiredLevel.Value !== column.required)) throw new Error(`Incompatible schema migration for ${table.logicalName}.${column.name}; provide a separately reviewed data migration`);
-    }
+    try {await verifyColumns(action.columns,table.logicalName,result,request,true);}catch {throw new Error(`Incompatible schema migration for ${table.logicalName}; provide a separately reviewed data migration`);}
   }
 }
