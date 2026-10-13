@@ -21,6 +21,6 @@ it('relays a denial instead of discarding the server governance decision',async(
 it('allows only an explicit verified pre-tool reply and rejects absent decisions or HTTP failure',async()=>{
  const answer=hookDecision({status:'allowed',reason:'Request-local safeguards passed'});const url=await transport(answer);
  expect((await invoke(url)).out).toEqual({});expect((await invoke(url,'PreToolUse',true)).out).toEqual(answer);
- for(const url of [await transport({}),await transport({},503),'https://unapproved.example']){const result=await invoke(url);expect(result.code).toBe(2);expect(result.out.hookSpecificOutput.permissionDecision).toBe('deny');}
+ for(const url of [await transport({}),await transport({},503),'https://unapproved.example']){const result=await invoke(url);expect(result.code).toBe(0);expect(result.out.hookSpecificOutput.permissionDecision).toBe('deny');}
 });
 it('does not block observational hooks when the office is unavailable',async()=>{expect(await invoke('https://unapproved.example','PostToolUse')).toEqual({code:0,out:{}});});

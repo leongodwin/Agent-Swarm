@@ -1,3 +1,4 @@
+import {prepareCodexHooks} from './codexHookTrust.ts';
 import {geminiSettings,GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
 import {runtimeModelError} from '../shared/runtimePolicy.ts';
 import { playwrightMcp } from './browserTools.ts';
@@ -8,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { HOME_DIR } from './config.ts';
-import { codexHookCommand,cliLabel, CODEX_HOOK_SOURCE, codexThread, commandFor, hookReviewKey, interruptions, isCli, launchArgs, NOTIFY_SOURCE, OPENCODE_PLUGIN_SOURCE, STATUSLINE_SOURCE, trustKey } from './clis.ts';
+import { CODEX_HOOK_EVENTS,codexHookInvocation,codexHookCommand,cliLabel, CODEX_HOOK_SOURCE, codexThread, commandFor, hookReviewKey, interruptions, isCli, launchArgs, NOTIFY_SOURCE, OPENCODE_PLUGIN_SOURCE, STATUSLINE_SOURCE, trustKey } from './clis.ts';
 import { adoptPty, discardPty, hooksReady, keeperHookUrl, keeperPid, leaveKeeper, spawnPty, startKeeper, terminalsAvailable, type Pty } from './ptyClient.ts';
 import {
   clip,
@@ -232,9 +233,10 @@ interface CliMeta {
   busy: boolean;
 }
 
+const codexGovernanceSha=crypto.createHash('sha256').update(CODEX_HOOK_SOURCE).digest('hex');
 const openCodeGovernanceSha=crypto.createHash('sha256').update(OPENCODE_PLUGIN_SOURCE).digest('hex');
 const geminiGovernanceSha=crypto.createHash('sha256').update(GEMINI_HOOK_SOURCE).digest('hex');
-const metaOf = (l: LiveCli): CliMeta => ({ agentId: l.agentId, cli: l.cli, token: l.token, dir: l.dir, resumeId: l.resumeId, busy: !!l.session,...(l.cli==='opencode'?{governanceSha256:openCodeGovernanceSha}:l.cli==='gemini'?{governanceSha256:geminiGovernanceSha,governanceReady:l.governanceReady===true}:{}) });
+const metaOf = (l: LiveCli): CliMeta => ({ agentId: l.agentId, cli: l.cli, token: l.token, dir: l.dir, resumeId: l.resumeId, busy: !!l.session,...(l.cli==='opencode'?{governanceSha256:openCodeGovernanceSha}:l.cli==='gemini'?{governanceSha256:geminiGovernanceSha,governanceReady:l.governanceReady===true}:l.cli==='codex'?{governanceSha256:codexGovernanceSha,governanceReady:l.governanceReady===true}:{}) });
 const remember = (l: LiveCli) => l.proc?.setMeta(metaOf(l));
 
 /** A CLI is running in its terminal: its output, its keys and its hooks are connected. */
@@ -242,7 +244,7 @@ function wire(l: LiveCli, office?: OfficeTools) {
   const p = l.proc!;
   lives.set(l.term, l);
   routes.set(l.token, { hook: (b) => (l.session ? l.session.hook(b) : idleHook(l, b)), office });
-  l.term.bind({ write: (d) => {if(l.cli!=='gemini'||l.governanceReady)quietly(() => p.write(d));}, resize: (c, r) => quietly(() => p.resize(c, r)) });
+  l.term.bind({ write: (d) => {if(!['gemini','codex'].includes(l.cli)||l.governanceReady)quietly(() => p.write(d));}, resize: (c, r) => quietly(() => p.resize(c, r)) });
   p.onData((data) => {
     if (lives.get(l.term) === l) {
       l.term.write(data);
@@ -292,7 +294,7 @@ export async function reconnectClis(terminalFor: (agentId: string) => AgentTermi
     const meta = (h.meta ?? {}) as Partial<CliMeta>;
     const term = meta.agentId ? terminalFor(meta.agentId) : null;
     // Copilot runs one-shot with its result in the terminal output, which a restart loses: resume its session instead.
-    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || meta.cli==='opencode'&&meta.governanceSha256!==openCodeGovernanceSha || meta.cli==='gemini'&&(meta.governanceSha256!==geminiGovernanceSha||meta.governanceReady!==true) || !meta.token || !meta.dir || !meta.agentId) {
+    if (h.exit !== null || !term || lives.has(term) || !isCli(meta.cli) || meta.cli === 'copilot' || meta.cli==='codex'&&(meta.governanceSha256!==codexGovernanceSha||meta.governanceReady!==true) || meta.cli==='opencode'&&meta.governanceSha256!==openCodeGovernanceSha || meta.cli==='gemini'&&(meta.governanceSha256!==geminiGovernanceSha||meta.governanceReady!==true) || !meta.token || !meta.dir || !meta.agentId) {
       discardPty(h);
       if (meta.cli === 'codex' && meta.resumeId) void codexThread('archive', meta.resumeId, h.exit === null ? new Promise((r) => setTimeout(r, 5000)) : undefined);
       continue;
@@ -415,6 +417,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   let capacityTimer: NodeJS.Timeout | undefined;
   let geminiStartupTimer:NodeJS.Timeout|undefined;
   let geminiPromptSent=false;
+  let codexTrustReady=false;
   const nudged = new Set<string>();
   let trustKeys = 0; // keys pressed on a folder-trust question (a few at most)
   let trustedAt = 0;
@@ -548,7 +551,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       }
     }
     if(cli==='gemini'&&event==='SessionStart'){if(b.bridgeSha256!==geminiGovernanceSha)return hookDecision({status:'unavailable',reason:'Gemini bridge version is unverified'});if(live){live.governanceReady=true;remember(live);}return {};}
-    if(cli==='gemini'&&!live?.governanceReady&&event==='PreToolUse')return hookDecision({status:'unavailable',reason:'Gemini governance startup is unverified'});
+    if(['gemini','codex'].includes(cli)&&!live?.governanceReady&&event==='PreToolUse')return hookDecision({status:'unavailable',reason:'Coding runtime governance startup is unverified'});
     switch (event) {
       case 'PreToolUse': {
         const name = String(b.tool_name ?? '');
@@ -700,7 +703,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const handle: SessionHandle = {
     send(text) {
       const proc = live?.proc;
-      if (done || !proc || cli==='gemini'&&!live?.governanceReady) return;
+      if (done || !proc || ['gemini','codex'].includes(cli)&&!live?.governanceReady) return;
       busy();
       turnError = null;
       officePrompts.push(text.trim());
@@ -715,6 +718,11 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     },
   };
 
+  const verifyCodex = async()=>{
+    const command=commandFor('codex');if(!command)throw new Error('Codex CLI is unavailable');
+    writeHelpers();const hookPath=path.join(BIN_DIR,'codex-hook.cjs');
+    return prepareCodexHooks(command,opts.cwd,hookPath,CODEX_HOOK_SOURCE,CODEX_HOOK_EVENTS.map(event=>({event,command:codexHookInvocation(hookPath,event),timeout:event==='Interrupt'?3:10})));
+  };
   if (adopt && live) {
     // Back in the CLI that was waiting at its prompt: same conversation, same terminal.
     clearTimeout(live.idleTimer);
@@ -725,8 +733,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     Object.assign(live, { statusLine });
     remember(live);
     if (live.resumeId) cb.sessionId(live.resumeId);
-    if (opts.typed || opts.reattach) busy(); // typed at the prompt, or still at it after a restart: already running
-    else handle.send(opts.prompt);
+    const resumeTurn=()=>{if(done)return;if(live){live.governanceReady=true;remember(live);}if(opts.typed||opts.reattach)busy();else handle.send(opts.prompt);recoveryPending=!!opts.reattach;};
+    if(cli==='codex'){live.governanceReady=false;remember(live);void verifyCodex().then(resumeTurn,()=>finish({ok:false,text:'',errors:['Retained Codex hook trust could not be verified; follow-up denied']}));}else resumeTurn();
     recoveryPending = !!opts.reattach;
     shotTimer = setInterval(collectShots, 2000);
     monitorCapacity();
@@ -827,8 +835,9 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   if (cli === 'claude' || cli === 'copilot') cb.sessionId(sessionId);
   term.note(`── ${label}${opts.label ? ` · ${opts.label}` : ''} ──`);
   const resumeId = cli === 'claude' || cli === 'copilot' ? sessionId : (opts.resumeSessionId ?? null);
-  const l: LiveCli = { agentId: opts.agentId ?? '', cli, term, proc: null, token, dir, resumeId, statusLine, output: '', shots: new Set(), session: { hook, exited } };
+  const l: LiveCli = { governanceReady:cli==='codex'?codexTrustReady:undefined,agentId: opts.agentId ?? '', cli, term, proc: null, token, dir, resumeId, statusLine, output: '', shots: new Set(), session: { hook, exited } };
   const begin = () => {
+    if(cli==='codex')l.governanceReady=codexTrustReady;
     if (done) return; // stopped while its thread was being unarchived
     let p: Pty;
     try {
@@ -867,7 +876,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
         return;
       }
       const review = hookReviewKey(screen);
-      const key = trustKeys < 12 && Date.now() - trustedAt > 3000 ? (trustKey(screen) ?? review) : null;
+      const key = trustKeys < 12 && Date.now() - trustedAt > 3000 ? (trustKey(screen) ?? (cli==='codex'?null:review)) : null;
       if (key === 'down') {
         trustKeys += 1;
         quietly(() => p.write(term.appCursor ? '\x1bOB' : '\x1b[B'));
@@ -895,7 +904,9 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     }, BOOT_MS);
   };
   // Codex won't resume a thread the office archived (see codexThread): it's unarchived first.
-  if (cli === 'codex' && opts.resumeSessionId) void codexThread('unarchive', opts.resumeSessionId).then(begin);
+  if(cli==='codex'){
+    void verifyCodex().then(async verified=>{if(done)return;codexTrustReady=true;log([{kind:'system',text:`Verified native trust for ${verified.verified} generated office hooks.`}]);if(opts.resumeSessionId)await codexThread('unarchive',opts.resumeSessionId);if(!done)begin();},()=>{if(!done)finish({ok:false,text:'',errors:['Codex office hook trust could not be verified; no task was sent. Inspect native hook policy and source integrity.']});});
+  }
   else if(cli==='gemini')void verifyGeminiProfile(cmd,opts.browserTesting).then(blocker=>{if(done)return;if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}begin();},()=>finish({ok:false,text:'',errors:['Gemini protected-profile validation failed; execution denied']}));
   else begin();
 

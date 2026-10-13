@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import {geminiProfilePath} from './geminiBridge.ts';
 import {allowedRuntime,runtimeModelError} from '../shared/runtimePolicy.ts';
 import fs from 'node:fs';
@@ -144,6 +145,10 @@ export function codexHookCommand(node: string, script: string, win = WIN): strin
   return win ? `node "${script}"` : [node, script].map((s) => `'${s.replaceAll("'", `'"'"'`)}'`).join(' ');
 }
 
+export function codexHookInvocation(script:string,event:string){
+  return `${codexHookCommand(process.execPath,script)} --event ${event} --bridge-sha256 ${crypto.createHash('sha256').update(CODEX_HOOK_SOURCE).digest('hex')}`;
+}
+
 export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
   const error=runtimeModelError(id,ctx.model);if(error)throw new Error(error);
   switch (id) {
@@ -154,7 +159,7 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
     case 'codex': {
       const toml = (s: string) => JSON.stringify(s); // a JSON string is a valid TOML basic string
       const args = [
-        '--no-alt-screen',
+        '--no-alt-screen','--enable','hooks',
         '-c',
         `notify=[${[process.execPath, ctx.notify.script, ctx.notify.url].map(toml).join(',')}]`,
         '-c',
@@ -163,7 +168,7 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         ...(ctx.effort ? ['-c', `model_reasoning_effort=${toml(EFFORT_CODEX[ctx.effort])}`] : []),
         ...(ctx.browser ? ['-c', `mcp_servers.playwright={command=${toml(ctx.browser.command)},args=[${ctx.browser.args.map(toml).join(',')}],startup_timeout_sec=60}`] : []),
         ...(ctx.officeUrl ? ['-c', `mcp_servers.office={url=${toml(ctx.officeUrl)}}`] : []),
-        ...CODEX_HOOK_EVENTS.flatMap((e) => ['-c', `hooks.${e}=[{hooks=[{type="command",command=${toml(codexHookCommand(process.execPath, ctx.codexHook))},timeout=${e === 'Interrupt' ? 3 : 10}}]}]`]),
+        ...CODEX_HOOK_EVENTS.flatMap((e) => ['-c', `hooks.${e}=[{hooks=[{type="command",command=${toml(codexHookInvocation(ctx.codexHook,e))},timeout=${e === 'Interrupt' ? 3 : 10}}]}]`]),
         // Like the manager's own Codex, but it can't stop to ask: no approvals and no sandbox (its sandbox can't reach
         // the credential store, so git and gh fail in it).
         '--dangerously-bypass-approvals-and-sandbox',
@@ -311,13 +316,22 @@ if (event.type === 'agent-turn-complete') {
 /** Trusted pre-tool hooks relay the office decision. Transport failures deny
  * pre-tool execution, while observational hooks remain nonblocking. */
 export const CODEX_HOOK_SOURCE = String.raw`// cubefarm: relays governance decisions for trusted pre-tool hooks.
-const url = process.argv[2] || process.env.CUBEFARM_HOOK_URL;
-const chunks = [];
-process.stdin.on('data', (c) => chunks.push(c));
+const url = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : process.env.CUBEFARM_HOOK_URL;
+const eventIndex=process.argv.indexOf('--event');
+const expectedEvent=eventIndex>=0?process.argv[eventIndex+1]:undefined;
+const hashIndex=process.argv.indexOf('--bridge-sha256');
+const expectedHash=hashIndex>=0?process.argv[hashIndex+1]:undefined;
+const chunks = [];let inputBytes=0;
+process.stdin.on('data', (c) => {inputBytes+=c.length;if(inputBytes<=1024*1024)chunks.push(c);});
 process.stdin.on('end', async () => {
   let body = {};
   try {
+    if(inputBytes>1024*1024)throw new Error('Hook input exceeds its bound');
     body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    const actualHash=require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync(__filename)).digest('hex');
+    if(expectedEvent&&body.hook_event_name!==expectedEvent)throw new Error('Hook event identity changed');
+    if(expectedHash&&expectedHash!==actualHash)throw new Error('Hook source identity changed');
+    body.bridgeSha256=actualHash;
     if (!url) throw new Error('Office hook URL unavailable');
     const endpoint = new URL(url);
     if (endpoint.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) throw new Error('Office hook must use loopback');
@@ -330,10 +344,11 @@ process.stdin.on('end', async () => {
     const preservePermissions = !process.argv.includes('--approve-governed');
     process.stdout.write(JSON.stringify(preservePermissions && body.hook_event_name === 'PreToolUse' && answer?.hookSpecificOutput?.permissionDecision === 'allow' ? {} : answer));
   } catch {
-    if (body.hook_event_name === 'PreToolUse') {
+    if ((expectedEvent??body.hook_event_name) === 'PreToolUse') {
       process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Office governance unavailable; execution denied' } }));
       process.stderr.write('Office governance unavailable; execution denied.');
-      process.exitCode = 2;
+      // Native Codex reliably honors a successful structured denial; an error exit can be treated as a failed hook.
+      process.exitCode = 0;
     } else process.stdout.write('{}');
   }
 });

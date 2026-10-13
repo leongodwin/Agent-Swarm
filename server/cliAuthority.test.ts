@@ -9,6 +9,7 @@ vi.mock('./config.ts', async importOriginal => {
   return {...real, HOME_DIR: await fs.mkdtemp(path.join(os.tmpdir(), 'cli-authority-'))};
 });
 vi.mock('./clis.ts', async importOriginal => ({...await importOriginal<typeof import('./clis.ts')>(), commandFor: () => ({file:'synthetic-cli',args:[]})}));
+vi.mock('./codexHookTrust.ts',()=>({prepareCodexHooks:vi.fn(async()=>({verified:5,hashes:[]}))}));
 vi.mock('./geminiBridge.ts',async original=>({...await original<typeof import('./geminiBridge.ts')>(),verifyGeminiProfile:vi.fn(async()=>null)}));
 vi.mock('./ptyClient.ts', () => ({
   terminalsAvailable: true, keeperHookUrl: () => 'http://127.0.0.1:1', keeperPid: () => 0,
@@ -19,19 +20,21 @@ vi.mock('./ptyClient.ts', () => ({
   },
 }));
 import { HOME_DIR } from './config.ts';
-import { handleHook, releaseClis, startCliSession,reconnectClis } from './cliRunner.ts';
+import { handleHook, releaseClis, startCliSession as startRealCliSession,reconnectClis } from './cliRunner.ts';
 import {startKeeper,discardPty,adoptPty} from './ptyClient.ts';
 import { setToolGovernanceGate } from './toolGovernance.ts';
 import {OPENCODE_PLUGIN_SOURCE} from './clis.ts';
 import {GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
+import {prepareCodexHooks} from './codexHookTrust.ts';
 import crypto from 'node:crypto';
 
 afterEach(async () => { await releaseClis(false); vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs(); setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'})); });
 afterAll(async () => fs.rm(HOME_DIR,{recursive:true,force:true,maxRetries:10,retryDelay:100}));
-function session(authorize: () => string | null) {
+async function startCliSession(...args:Parameters<typeof startRealCliSession>){const handle=startRealCliSession(...args);for(let i=0;i<25;i++)await Promise.resolve();return handle;}
+async function session(authorize: () => string | null) {
   vi.useFakeTimers();
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
-  return startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-worker',cli:'codex',terminal:term,keepAlive:true,authorizeTool:authorize} satisfies SessionOptions,
+  return await startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-worker',cli:'codex',terminal:term,keepAlive:true,authorizeTool:authorize} satisfies SessionOptions,
     {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
 }
 it.each([undefined,'old-plugin-hash'])('discards an OpenCode process retained without the current governance bridge: %s',async governanceSha256=>{
@@ -47,11 +50,11 @@ it.each([false,true])('reports capacity failure for a %s retained Codex task and
   const options:SessionOptions={cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-capacity-worker',cli:'codex',terminal:term,keepAlive:true,authorizeTool:()=>null};
   const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
   if(reattach){
-    startCliSession(options,callbacks);
+    await startCliSession(options,callbacks);
     await handleHook(native.token,{hook_event_name:'Stop',last_assistant_message:'synthetic result'});
     await vi.advanceTimersByTimeAsync(3000);callbacks.finished.mockClear();
   }
-  const handle=reattach?startCliSession({...options,reattach:true},callbacks):startCliSession(options,callbacks);
+  const handle=await (reattach?startCliSession({...options,reattach:true},callbacks):startCliSession(options,callbacks));
   screen='■ Selected model is at capacity. Please try a different model.\n› Ask Codex to do anything';
   await vi.advanceTimersByTimeAsync(1000);expect(callbacks.finished).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1000);expect(callbacks.finished).toHaveBeenCalledOnce();
@@ -63,7 +66,7 @@ it.each([false,true])('reports capacity failure for a %s retained Codex task and
 it('denies an actual CLI hook when task authority is revoked during asynchronous governance', async () => {
   let active=true;let finish!:()=>void;
   setToolGovernanceGate(()=>new Promise(resolve=>{finish=()=>resolve({status:'allowed',reason:'synthetic'});}));
-  const handle=session(()=>active?null:'Task revoked');
+  const handle=await session(()=>active?null:'Task revoked');
   const pending=handleHook(native.token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});
   for(let i=0;i<20&&!finish;i++)await Promise.resolve();
   active=false;finish();
@@ -75,7 +78,7 @@ it('carries an OpenCode pre-tool request through live session authority and deni
   let active=true,complete!:()=>void;
   setToolGovernanceGate(()=>new Promise(resolve=>{complete=()=>resolve({status:'allowed',reason:'Synthetic scan'});}));
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
-  const handle=startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'openai/gpt-synthetic',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'opencode',terminal:term,authorizeTool:()=>active?null:'Task cancelled'},
+  const handle=await startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'openai/gpt-synthetic',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'opencode',terminal:term,authorizeTool:()=>active?null:'Task cancelled'},
     {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
   vi.stubEnv('CUBEFARM_NOTIFY_URL','http://127.0.0.1:4499/api/hooks/synthetic');
   vi.stubGlobal('fetch',vi.fn(async(_url,request)=>({ok:true,json:()=>handleHook(native.token,JSON.parse(request.body))})));
@@ -88,7 +91,7 @@ it.each([false,true])('withholds the Gemini task and input until an actual bridg
   vi.useFakeTimers();setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic scan'}));
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=> 'Type your message',appCursor:false} as unknown as AgentTerminal;
   const callback={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
-  native.write.mockClear();const handle=startCliSession({cwd:HOME_DIR,prompt:'Synthetic confidential task',systemAppend:'Synthetic office instructions',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'gemini',terminal:term,authorizeTool:()=>null},callback);
+  native.write.mockClear();const handle=await startCliSession({cwd:HOME_DIR,prompt:'Synthetic confidential task',systemAppend:'Synthetic office instructions',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'gemini',terminal:term,authorizeTool:()=>null},callback);
   for(let i=0;i<20&&!(term.bind as any).mock.calls.length;i++)await Promise.resolve();
   const input=(term.bind as any).mock.calls[0][0];
   expect(native.args.join(' ')).not.toContain('Synthetic confidential task');
@@ -107,18 +110,23 @@ it.each([false,true])('withholds the Gemini task and input until an actual bridg
 it('does not spawn Gemini when its required protected profile is unavailable',async()=>{
   vi.mocked(verifyGeminiProfile).mockResolvedValueOnce('Synthetic protected profile is unavailable');native.write.mockClear();
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
-  const finished=vi.fn();startCliSession({cwd:HOME_DIR,prompt:'Confidential synthetic task',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'gemini',terminal:term,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+  const finished=vi.fn();await startCliSession({cwd:HOME_DIR,prompt:'Confidential synthetic task',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'gemini',terminal:term,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
   for(let i=0;i<30&&!finished.mock.calls.length;i++)await Promise.resolve();expect(finished).toHaveBeenCalledOnce();expect(term.bind).not.toHaveBeenCalled();expect(native.write).not.toHaveBeenCalled();expect(finished.mock.calls[0][0]).toMatchObject({ok:false,errors:['Synthetic protected profile is unavailable']});
 });
 it('does not treat a long-lived zero exit as proof of successful Codex work',async()=>{
   vi.useFakeTimers();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;const finished=vi.fn();
-  startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+  await startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
   await vi.advanceTimersByTimeAsync(21000);native.exit!(0);expect(finished).toHaveBeenCalledOnce();expect(finished.mock.calls[0][0]).toMatchObject({ok:false,text:'',errors:[expect.stringContaining('before finishing')]});
+});
+it('does not spawn Codex or send its task when native trust validation fails',async()=>{
+ vi.mocked(prepareCodexHooks).mockRejectedValueOnce(new Error('Native trust unavailable'));native.write.mockClear();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;const finished=vi.fn();
+ await startCliSession({cwd:HOME_DIR,prompt:'Confidential task',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+ expect(term.bind).not.toHaveBeenCalled();expect(native.write).not.toHaveBeenCalled();expect(finished.mock.calls[0][0]).toMatchObject({ok:false,errors:[expect.stringContaining('no task was sent')]});
 });
 
 it('rejects a disallowed CLI before spawning a terminal process',()=>{
  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
- expect(()=>startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'ceo',cli:'copilot',terminal:term},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()})).toThrow('Only Codex');
+ expect(()=>startRealCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'ceo',cli:'copilot',terminal:term},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()})).toThrow('Only Codex');
 });
 
 it.each(['idle','changing','active','follow-up','completion'] as const)('reconciles retained idle Codex conservatively: %s',async mode=>{
@@ -127,10 +135,10 @@ it.each(['idle','changing','active','follow-up','completion'] as const)('reconci
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>screen} as unknown as AgentTerminal;
   const options:SessionOptions={cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'qa',agentId:'synthetic-recovery',cli:'codex',terminal:term,keepAlive:true,authorizeTool:()=>null};
   const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
-  startCliSession(options,callbacks);
+  await startCliSession(options,callbacks);
   await handleHook(native.token,{hook_event_name:'Stop',last_assistant_message:'previous result'});
   await vi.advanceTimersByTimeAsync(3000);callbacks.finished.mockClear();
-  const handle=startCliSession({...options,keepAlive:false,reattach:true},callbacks);
+  const handle=await startCliSession({...options,keepAlive:false,reattach:true},callbacks);
   screen='Worked for 19m 44s • 12:06\n› Ask Codex to do anything';
   await vi.advanceTimersByTimeAsync(1000);expect(callbacks.finished).not.toHaveBeenCalled();
   if(mode==='active')screen+='\nWorking (1s)';
@@ -152,7 +160,7 @@ it.each(['idle','changing','active','follow-up','completion'] as const)('reconci
 
 it('denies pre-tool execution from an idle CLI even when request-local governance would allow it', async () => {
   setToolGovernanceGate(async()=>({status:'allowed',reason:'synthetic'}));
-  session(()=>null);
+  await session(()=>null);
   await handleHook(native.token,{hook_event_name:'Stop',last_assistant_message:'synthetic result'});
   await vi.advanceTimersByTimeAsync(3000);
   const denied=await handleHook(native.token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});
