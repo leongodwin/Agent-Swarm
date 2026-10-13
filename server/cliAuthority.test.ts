@@ -29,6 +29,25 @@ function session(authorize: () => string | null) {
   return startCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-worker',cli:'claude',terminal:term,keepAlive:true,authorizeTool:authorize} satisfies SessionOptions,
     {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
 }
+it.each([false,true])('reports capacity failure for a %s retained Codex task and keeps developer work resumable',async reattach=>{
+  vi.useFakeTimers();
+  let screen='';
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>screen} as unknown as AgentTerminal;
+  const options:SessionOptions={cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'synthetic-capacity-worker',cli:'codex',terminal:term,keepAlive:true,authorizeTool:()=>null};
+  const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
+  if(reattach){
+    startCliSession(options,callbacks);
+    await handleHook(native.token,{hook_event_name:'Stop',last_assistant_message:'synthetic result'});
+    await vi.advanceTimersByTimeAsync(3000);callbacks.finished.mockClear();
+  }
+  const handle=reattach?startCliSession({...options,reattach:true},callbacks):startCliSession(options,callbacks);
+  screen='■ Selected model is at capacity. Please try a different model.\n› Ask Codex to do anything';
+  await vi.advanceTimersByTimeAsync(1000);expect(callbacks.finished).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1000);expect(callbacks.finished).toHaveBeenCalledOnce();
+  expect(callbacks.finished.mock.calls[0][0]).toMatchObject({ok:false,text:'',errors:[expect.stringContaining('model is at capacity')]});
+  const calls=callbacks.finished.mock.calls.length;await vi.advanceTimersByTimeAsync(5000);expect(callbacks.finished).toHaveBeenCalledTimes(calls);
+  handle.stop();
+});
 
 it('denies an actual CLI hook when task authority is revoked during asynchronous governance', async () => {
   let active=true;let finish!:()=>void;

@@ -350,6 +350,15 @@ export function resumableSession(b: Record<string, unknown>, exists: (file: stri
 /** Claude Code was told to resume a conversation that isn't on disk (it says so and exits 1). */
 export const lostConversation = (screen: string) => /No conversation found with session ID/i.test(screen);
 
+/** Native Codex failure plus its idle prompt, not a capacity phrase in task text.
+ * Visible active-turn indicators veto classification of an old failure. */
+export function codexCapacityIdle(screen:string):boolean {
+  const plain=screen.replace(ANSI,'').replace(/\r/g,'');
+  return /^\s*■\s*Selected model is at capacity\./im.test(plain)
+    && /^\s*›\s*Ask Codex to do anything\s*$/m.test(plain)
+    && !/esc to interrupt|\bWorking\s*\(|\bThinking\s*\(/i.test(plain);
+}
+
 export function startCliSession(opts: SessionOptions, callbacks: SessionCallbacks): SessionHandle {
   const term = opts.terminal!;
   // A follow-up to the session a CLI is still waiting in picks that CLI up again, and so does an office that restarted
@@ -384,6 +393,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   let bootTimer: NodeJS.Timeout | undefined;
   let screenTimer: NodeJS.Timeout | undefined;
   let shotTimer: NodeJS.Timeout | undefined;
+  let capacityTimer: NodeJS.Timeout | undefined;
   const nudged = new Set<string>();
   let trustKeys = 0; // keys pressed on a folder-trust question (a few at most)
   let trustedAt = 0;
@@ -412,6 +422,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     for (const t of [finishTimer, bootTimer]) clearTimeout(t);
     clearInterval(screenTimer);
     clearInterval(shotTimer);
+    clearInterval(capacityTimer);
     collectShots(true);
     if (term.onInput === watchKeys) term.onInput = null;
     const l = live;
@@ -434,6 +445,19 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const busy = () => {
     begun = true;
     clearTimeout(finishTimer);
+  };
+  const monitorCapacity=()=>{
+    if(cli!=='codex')return;
+    let previous='';
+    capacityTimer=setInterval(()=>{
+      if(done){clearInterval(capacityTimer);return;}
+      const screen=term.screen();
+      if(!codexCapacityIdle(screen)){previous='';return;}
+      if(screen!==previous){previous=screen;return;}
+      const error='Codex selected model is at capacity; the task did not complete. Retry when capacity is available or choose a model in the agent settings.';
+      log([{kind:'error',text:error}]);
+      finish({ok:false,text:'',errors:[error]},true);
+    },1000);
   };
 
   /** The turn was interrupted from the terminal: the office treats it like Stop, and the CLI waits for the manager. */
@@ -663,6 +687,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     if (opts.typed || opts.reattach) busy(); // typed at the prompt, or still at it after a restart: already running
     else handle.send(opts.prompt);
     shotTimer = setInterval(collectShots, 2000);
+    monitorCapacity();
     return handle;
   }
   if (opts.reattach) {
@@ -771,6 +796,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     live = l;
     wire(l, opts.office);
     shotTimer = setInterval(collectShots, 2000);
+    monitorCapacity();
 
     // Starting up: answer the folder-trust question for the office's own worktrees (the answer that trusts it), and
     // say so when a CLI is waiting on something only the manager can do (signing in),

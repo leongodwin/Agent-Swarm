@@ -340,3 +340,11 @@ Delivery now opens FlowAgent through `connectOwnedFlowAdapter`. Both delivery-of
 An ordinary provider error is propagated without retiring an otherwise owned connector, allowing later explicitly authorized reads to reuse its authenticated runtime. The wrapper does not retry mutations or treat a failed operation as successful. Existing durable intent and independent observation remain necessary to reconcile a lost write response. Already-issued remote requests can still finish, so this is local admission/acceptance fencing rather than atomic Microsoft-side revocation.
 
 Local tests cover pre-dispatch denial, revoked ownership during read/write, late connection after cancellation, concurrent close, cleanup failure and ordinary-error reuse. The DeliveryService integration fixture verifies rejection before import when ownership is replaced during the identity read; it uses synthetic providers and does not establish live tenant execution or full governance.
+
+### Codex capacity failures in retained terminals
+
+Codex can return to its idle prompt after reporting that the selected model is at capacity without sending the office its normal completed-turn notification. The terminal process can remain live, so process/terminal presence and a saved working label do not prove ongoing model work. Read-only inspection of the working office reproduced this for three retained agents.
+
+New and retained Codex sessions now monitor the visible native capacity error together with the exact idle prompt. Two unchanged observations classify the attempt as failed, clearing its active task callback and timers; developer keep-alive behavior preserves the conversation terminal where configured. Task quotations, non-idle/login screens and visible active-turn indicators are rejected. The monitor never changes the requested model or writes to a worktree. QA closes its terminal according to existing task completion policy; generated files are retained.
+
+This is a narrow provider-failure classification, not a general idle detector or proof of remote operation completion. Existing task failure/cooldown behavior still applies. Per-model exponential backoff, capacity telemetry and verified controlled rollout remain necessary for the broader runtime/reliability goal.

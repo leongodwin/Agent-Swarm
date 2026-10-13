@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { copilotResponse, lostConversation, resumableSession } from './cliRunner.ts';
+import { codexCapacityIdle,copilotResponse, lostConversation, resumableSession } from './cliRunner.ts';
 
 describe('copilotResponse', () => {
   it('returns plain text without terminal styling', () => {
@@ -33,4 +33,9 @@ describe('lostConversation', () => {
   it('ignores other screens', () => {
     expect(lostConversation('Claude Code v2.1.280\n❯ ')).toBe(false);
   });
+});
+describe('Codex capacity idle observation',()=>{
+  const failed='■ Selected model is at capacity. Please try a different model.\n› Ask Codex to do anything\n(the office restarted)';
+  it('recognizes a native failure at its idle prompt after restart',()=>expect(codexCapacityIdle(failed)).toBe(true));
+  it.each(['Selected model is at capacity.\n› Ask Codex to do anything',failed+'\nesc to interrupt',failed+'\nWorking (10s)',failed.replace('› Ask Codex to do anything','Sign in')])('rejects task text, active work and non-idle screens',screen=>expect(codexCapacityIdle(screen)).toBe(false));
 });
