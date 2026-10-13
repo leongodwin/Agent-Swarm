@@ -40,6 +40,13 @@ export async function loadLatestHld(repoPath:string,guard:()=>void=()=>{},repoId
     if(repoId&&artifact.repoId!==repoId)throw new HttpError(409,'Saved architecture draft belongs to another repository');return artifact;
   }catch(error){if(error instanceof HttpError)throw error;throw new HttpError(409,'Saved architecture draft is unreadable; preserve its files before repair');}
 }
+export async function loadHldVersion(repoPath:string,repoId:string,docId:string,sha256:string,guard:()=>void=()=>{}):Promise<HldArtifact>{
+  hldResultSchema.shape.docId.parse(docId);pointerSchema.shape.sha256.parse(sha256);guard();
+  const root=await fs.realpath(repoPath);guard();const dir=await directory(root,false,guard);
+  if(!dir)throw new HttpError(404,'Architecture version is unavailable');
+  const artifact=await readArtifact(root,dir,docId,sha256,guard);
+  if(artifact.repoId!==repoId)throw new HttpError(409,'Architecture version belongs to another project');return artifact;
+}
 export async function saveHldArtifact(repoPath:string,input:HldInput,result:HldResult,guard:()=>void=()=>{},repoId?:string):Promise<HldResult>{
   guard();const root=await fs.realpath(repoPath);guard();let entry=writers.get(root);if(!entry){entry={writer:new SerialWriter(),active:0};writers.set(root,entry);}const owner=entry;owner.active++;
   try{return await owner.writer.write(async()=>{

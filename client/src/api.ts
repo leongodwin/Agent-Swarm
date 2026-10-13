@@ -10,7 +10,7 @@ export type { DlpScanReport } from '../../shared/dlp';
 import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../../shared/tenancy';
 import { ensureSession } from './session';
 
-async function call<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
+async function call<T = unknown>(method: string, url: string, body?: unknown,quiet=false): Promise<T> {
   await ensureSession();
   const options = {
     method,
@@ -22,7 +22,7 @@ async function call<T = unknown>(method: string, url: string, body?: unknown): P
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const message = (data as { error?: string }).error ?? `${res.status} ${res.statusText}`;
-    useStore.getState().pushToast('error', message);
+    if(!quiet)useStore.getState().pushToast('error', message);
     throw new Error(message);
   }
   return data as T;
@@ -113,6 +113,10 @@ export const api = {
   generateProposal: <T = unknown>(body: unknown) => call<T>('POST', '/api/proposals/generate', body),
   generateHld: <T = unknown>(body: unknown) => call<T>('POST', '/api/hld/generate', body),
   latestHld:<T=unknown>(repoId:string)=>call<T>('GET',`/api/hld/latest?repoId=${encodeURIComponent(repoId)}`),
+  synthesizeHld:<T=unknown>(body:unknown)=>call<T>('POST','/api/hld/jobs',body),
+  hldJobs:<T=unknown>(repoId:string)=>call<T>('GET',`/api/hld/jobs?repoId=${encodeURIComponent(repoId)}`,undefined,true),
+  hldJobResult:<T=unknown>(repoId:string,id:string)=>call<T>('GET',`/api/hld/jobs/${encodeURIComponent(id)}/result?repoId=${encodeURIComponent(repoId)}`),
+  cancelHldJob:<T=unknown>(repoId:string,id:string)=>call<T>('POST',`/api/hld/jobs/${encodeURIComponent(id)}/cancel`,{repoId}),
   solutionArchitecture: (repoId: string) => call<ParsedSolution>('GET', `/api/repos/${encodeURIComponent(repoId)}/solution-architecture`),
   flowRuns: (repoId: string) => call<FlowRun[]>('GET', `/api/repos/${encodeURIComponent(repoId)}/flow-runs`),
   resubmitFlowRun: (repoId: string, runId: string) => call<{ ok: boolean; resubmitted: FlowRun }>('POST', `/api/repos/${encodeURIComponent(repoId)}/flow-runs/${encodeURIComponent(runId)}/resubmit`),

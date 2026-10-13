@@ -24,6 +24,8 @@ import { OfficeShutdown } from './officeShutdown.ts';
 import { parseBody } from './requestSchemas.ts';
 import { OfficeMaintenance } from './officeMaintenance.ts';
 import {createDeclaredSchemaObserver} from './declaredSchema.ts';
+import {HldSynthesisService} from './hldSynthesis.ts';
+import {discoverSkills,selectSkills} from './skillRegistry.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
 const runtimeStartedAt = new Date().toISOString();
@@ -101,12 +103,20 @@ swarm.requestDeliveryReview = async (id) => {
   if (release.approvedAt && !delivery.view().runs.some((r) => r.releaseId === id && r.phase === 'reviewing')) return 'Release plan approved; visual review becomes available after verification';
   return swarm.reviewDeliveryRelease(release.plan.qaOwner, release.repoId, id);
 };
+const synthesis=new HldSynthesisService(path.join(HOME_DIR,backend.demo?'demo-architecture':'architecture'),{
+  assertOpen(){if(backend.demo)throw new HttpError(409,'Demo cannot synthesize with a live model');if(officeShutdown.closed)throw new HttpError(503,'Office is shutting down');if(swarm.isDraining)throw new HttpError(409,'Office maintenance pauses new architecture jobs');},
+  context(repoId){const repo=swarm.snapshot().repos.find(item=>item.id===repoId);if(!repo?.checkoutPath)throw new HttpError(404,'Architecture project checkout is unavailable');const catalogue=discoverSkills();return {checkoutPath:repo.checkoutPath,fingerprint:JSON.stringify([repo.id,repo.localPath,repo.targetTenancy,repo.mission,catalogue.fingerprint,delivery.view().policy?.copilotPaused]),copilotPaused:!!delivery.view().policy?.copilotPaused,skills:selectSkills(catalogue,`${repo.mission} ${repo.summary}`).map(({id,name,platform,sha256,version,description,toolStatus})=>({id,name,platform,sha256,version,description,toolStatus}))};},
+  admission:repoId=>swarm.capabilityPreflight(repoId,'claude'),start:(options,callbacks)=>backend.startSession(options,callbacks),
+});
+let synthesisUnavailableReason:string|undefined;
+try{await synthesis.init();}catch(error){synthesisUnavailableReason=error instanceof Error?error.message:'Architecture synthesis is unavailable';console.warn(synthesisUnavailableReason);await synthesis.close();}
 // Install shutdown before retained-session admission, which can await native
 // authentication/readiness. Every service closes its admission barrier at once.
 let deliveryTimer: NodeJS.Timeout | undefined;
 let closeHttpAdmission: (() => void) | undefined;
 const officeShutdown = new OfficeShutdown([
   { name: 'HTTP admission', close: () => closeHttpAdmission?.() },
+  { name: 'architecture synthesis', close:()=>synthesis.close() },
   { name: 'maintenance', close: () => maintenance.close() },
   { name: 'swarm', close: restart => swarm.shutdown(restart) },
   { name: 'tenancy', close: () => backend.tenancy.close() },
@@ -143,7 +153,7 @@ if (officeShutdown.closed) await shutdown('stop');
 delivery.onChange = () => { if (swarm.snapshot().repos.length) swarm.requestReview(); };
 capabilities.onChange = delivery.onChange;
 
-const {app,browserAuth,closeAdmission}=createOfficeHttpApp({backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,changeDrain:(value,apply)=>maintenance.change(value,apply),requestHandoff:()=>{void shutdown('restart');}});
+const {app,browserAuth,closeAdmission}=createOfficeHttpApp({synthesis:synthesisUnavailableReason?undefined:synthesis,synthesisUnavailableReason,backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,changeDrain:(value,apply)=>maintenance.change(value,apply),requestHandoff:()=>{void shutdown('restart');}});
 closeHttpAdmission=closeAdmission;
 deliveryTimer = setInterval(() => { void delivery.tick(swarm.snapshot().repos).catch((err) => console.warn('delivery scheduler:', err.message)); }, 30_000);
 deliveryTimer.unref();

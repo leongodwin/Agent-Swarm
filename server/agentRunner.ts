@@ -13,6 +13,8 @@ import { governSessionTool, hookDecision, type SessionAuthorization } from './to
 // The CEO runs through here too, with the office tools instead of a shell.
 
 export interface SessionOptions {
+  /** Structured planning jobs: no built-in tools, inherited MCP servers or project hooks. */
+  noTools?: boolean;
   cwd: string;
   prompt: string;
   systemAppend: string;
@@ -333,23 +335,24 @@ export function startSession(opts: SessionOptions, callbacks: SessionCallbacks):
     model: opts.model || undefined,
     effort: opts.effort,
     // The manager's own setup (settings, skills, plugins, MCP servers, connectors), plus the office's servers below.
-    settingSources: ['user', 'project', 'local'],
+    settingSources: opts.noTools ? [] : ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: opts.systemAppend },
-    mcpServers,
+    mcpServers: opts.noTools ? {} : mcpServers,
+    ...(opts.noTools ? {tools: [], strictMcpConfig: true, maxTurns: 4} : {}),
     disallowedTools,
     resume: opts.resumeSessionId,
     stderr: (data) => {
       const line = data.trim();
       if (line && /error|fail/i.test(line)) cb.log([{ kind: 'error', text: clip(line, 200) }]);
     },
-    permissionMode: 'acceptEdits',
+    permissionMode: opts.noTools ? 'default' : 'acceptEdits',
     canUseTool: async (name, input) => {
-      const decision = await governSessionTool(name, input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-permission' }, opts.authorizeTool);
+      const decision = await governSessionTool(name, input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-permission' }, opts.noTools ? ()=> 'Structured planning has no tool authority' : opts.authorizeTool);
       return decision.status === 'allowed' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
     },
     hooks: { PreToolUse: [{ hooks: [async (input) => {
       if (input.hook_event_name !== 'PreToolUse') return {};
-      const decision = await governSessionTool(input.tool_name, input.tool_input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-hook' }, opts.authorizeTool);
+      const decision = await governSessionTool(input.tool_name, input.tool_input, { actor: opts.agentId ?? opts.role, runtime: 'sdk', source: 'sdk-hook' }, opts.noTools ? ()=> 'Structured planning has no tool authority' : opts.authorizeTool);
       if (decision.status !== 'allowed') cb.log([{ kind: 'error', text: decision.reason }]);
       return decision.status === 'allowed' ? {} : hookDecision(decision);
     }] }] },
@@ -368,7 +371,7 @@ export function startSession(opts: SessionOptions, callbacks: SessionCallbacks):
       text: msg.subtype === 'success' ? msg.result : '',
       costUsd: lastCost,
       turns: lastTurns,
-      errors: msg.subtype === 'success' ? [] : msg.errors,
+      errors: msg.subtype === 'success' ? msg.is_error ? [msg.result || 'Model returned an error response'] : [] : msg.errors,
       structured: msg.subtype === 'success' ? msg.structured_output : undefined,
     });
   };

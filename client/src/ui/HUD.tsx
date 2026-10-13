@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo,useLayoutEffect,useRef,useState } from 'react';
 import { repoOnFloor, usePhoneBadge, useStore, TOUR_WAYPOINTS } from '../store';
 import { CEO_ID } from '../../../shared/types';
 import { currentQaApproval } from '../../../shared/qa';
@@ -150,6 +150,13 @@ export function HUD() {
   const travel = useStore((s) => s.travel);
   const toasts = useStore((s) => s.toasts);
   const dismiss = useStore((s) => s.dismissToast);
+  const statusRef=useRef<HTMLDivElement>(null);
+  const [workersTop,setWorkersTop]=useState(60);
+  useLayoutEffect(()=>{
+    const status=statusRef.current;if(!status)return;
+    const update=()=>setWorkersTop(status.offsetTop+status.offsetHeight+12);
+    const observer=new ResizeObserver(update);observer.observe(status);update();return()=>observer.disconnect();
+  },[]);
 
   const repo = floor === 0 ? null : repoOnFloor(repos, floor);
   const running = useMemo(() => Object.values(agents).filter((a) => a.status === 'working' || a.status === 'preparing').length, [agents]);
@@ -159,7 +166,7 @@ export function HUD() {
   const approvedQa = repo ? floorQa.filter(q => currentQaApproval(q, repo.pulls.find(p => p.number === q.prNumber))).length : 0;
 
   return (
-    <div className="hud">
+    <div className="hud" style={{['--workers-top' as string]:`${workersTop}px`}}>
       <div className="hud-floor" style={{ ['--accent' as string]: repo?.color ?? '#ff8a5b' }}>
         <div className="floor-num">{repo ? repo.floor : 'G'}</div>
         <div>
@@ -172,7 +179,7 @@ export function HUD() {
         </div>
       </div>
 
-      <div className="hud-status">
+      <div className="hud-status" ref={statusRef}>
         {demo && <span className="pill pill-demo">DEMO</span>}
         <span className={`pill ${connected ? 'pill-ok' : restarting ? 'pill-demo' : 'pill-bad'}`}>{connected ? '● live' : restarting ? '○ restarting' : '○ reconnecting'}</span>
         {draining&&<span className="pill pill-demo" role="status" title="New tasks are paused while current work finishes">Maintenance · new starts paused</span>}

@@ -4,6 +4,7 @@ import { useStore } from '../store';
 import { api } from '../api';
 import { generateHldContent, type HldResult, type HldComponent } from '../../../shared/hld';
 import type {HldArtifact} from '../../../shared/hldArtifact';
+import type {SynthesisJob} from '../../../shared/hldSynthesis';
 const views = [['overview','Requirements & gaps'],['plan','Implementation plan'],['diagrams','Diagram scope'],['document','Full document']] as const;
 
 export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
@@ -11,10 +12,19 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
   const repo = repoId?repos.find(item => item.id === repoId):repos[0];
   const pushToast = useStore(state => state.pushToast);
   const [activeTab,setActiveTab] = useState<'overview'|'plan'|'diagrams'|'document'>('overview');
-  const [saving,setSaving] = useState<'save'|'load'|null>(null);
+  const [saving,setSaving] = useState<'save'|'load'|'synthesize'|null>(null);
+  const [job,setJob]=useState<SynthesisJob|null>(null);
+  const [modelAvailable,setModelAvailable]=useState(false);
+  const [telemetryError,setTelemetryError]=useState('');
+  const activeJob=!!job&&!['completed','blocked','failed','cancelled'].includes(job.status);
   const [loaded,setLoaded]=useState<{repoId:string;input:HldArtifact['input']}|null>(null);
   const scope=useRef(repo?.id),epoch=useRef(0),currentInput=useRef('');scope.current=repo?.id;
   const [components,setComponents] = useState<HldComponent[]>([]);
+  useEffect(()=>{
+    setJob(null);setModelAvailable(false);setTelemetryError('');if(!repo)return;let cancelled=false;
+    const refresh=async()=>{try{const data=await api.hldJobs<{jobs:SynthesisJob[];available:boolean;unavailableReason?:string}>(repo.id);if(!cancelled){setJob(data.jobs[0]??null);setModelAvailable(data.available);setTelemetryError(data.unavailableReason??'');}}catch{if(!cancelled)setTelemetryError('Synthesis telemetry is unavailable; its last status is unverified until refresh succeeds.');}};
+    void refresh();const timer=setInterval(()=>void refresh(),1500);return()=>{cancelled=true;clearInterval(timer);};
+  },[repo?.id]);
   const [title,setTitle] = useState('');
   const [platform,setPlatform] = useState('');
   const [details,setDetails] = useState('');
@@ -36,6 +46,24 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
   const generated = useMemo(() => generateHldContent(input), [inputKey]);
   const [saved,setSaved] = useState<{key:string;result:HldResult}|null>(null);
   const draft = saved?.key===inputKey ? saved.result : generated;
+  const synthesize=async()=>{
+    if(!repo||saving||activeJob)return;const ticket=++epoch.current,id=repo.id;setSaving('synthesize');
+    try{const data=await api.synthesizeHld<{job:SynthesisJob}>({...input,repoId:id});if(ticket===epoch.current&&scope.current===id)setJob(data.job);}
+    catch(error){if(ticket===epoch.current&&scope.current===id)pushToast('error',error instanceof Error?error.message:'Could not start architecture synthesis');}
+    finally{if(ticket===epoch.current&&scope.current===id)setSaving(null);}
+  };
+  const loadModel=async()=>{
+    if(!repo||!job||job.status!=='completed'||saving)return;const ticket=++epoch.current,id=repo.id,key=inputKey;setSaving('load');
+    try{const {artifact}=await api.hldJobResult<{artifact:HldArtifact}>(id,job.id);if(ticket!==epoch.current||scope.current!==id)return;
+      if(currentInput.current!==key)throw new Error('Requirements changed while loading the model draft; retry to load its snapshot');
+      setLoaded({repoId:id,input:artifact.input});setComponents(artifact.input.components);setSaved({key:JSON.stringify(artifact.input),result:{...artifact.result,artifactSha256:artifact.sha256}});
+    }catch(error){if(ticket===epoch.current&&scope.current===id)pushToast('error',error instanceof Error?error.message:'Could not load model draft');}
+    finally{if(ticket===epoch.current&&scope.current===id)setSaving(null);}
+  };
+  const cancel=async()=>{
+    if(!repo||!job)return;const id=repo.id,jobId=job.id;
+    try{const data=await api.cancelHldJob<{job:SynthesisJob}>(id,jobId);if(scope.current===id)setJob(data.job);}catch{/* API displays the failure; keep the last observed job status. */}
+  };
   const save = async () => {
     if (!repo || saving) return;
     const ticket=++epoch.current,id=repo.id;setSaving('save');
@@ -70,9 +98,12 @@ export function ArchitectureDraftModal({repoId}: {repoId?: string}) {
       <strong>{draft.solutionName}</strong><span className="chip">Draft · unreviewed</span><span className="chip">{draft.missingEvidence.length} evidence gaps</span><span className="spacer"/>
       <button className="btn btn-small" onClick={() => void copy()}>Copy Markdown</button>
       <button className="btn btn-small" disabled={!repo || !!saving} onClick={() => void load()}>{saving==='load'?'Loading…':'Load saved draft'}</button>
-      <button className="btn btn-small" disabled={!repo || !!saving} onClick={() => void save()}>{saving==='save'?'Saving…':'Save draft to repository'}</button>
+      <button className="btn btn-small" disabled={!repo || !!saving || activeJob} onClick={() => void save()}>{saving==='save'?'Saving…':'Save draft to repository'}</button>
+      <button className="btn btn-small" disabled={!repo||!modelAvailable||!!saving||activeJob} onClick={()=>void synthesize()}>{saving==='synthesize'?'Starting…':'Synthesize with Claude'}</button>
     </div>
-    <p className="muted small">Requirements template. Model synthesis, architecture approval and tenant verification are pending.</p>
+    <p className="muted small">{draft.generationMethod==='model-synthesis'?'Model-generated draft. Independent architecture approval and tenant verification are pending.':'Requirements template. Model synthesis, architecture approval and tenant verification are pending.'}</p>
+    {telemetryError&&<p role="alert">{telemetryError}</p>}
+    {job&&<section aria-label="Architecture synthesis telemetry"><p><strong>Model job: {job.status}</strong> · {Math.round((job.elapsedMs??Math.max(0,Date.now()-job.startedAt))/1000)} seconds · five-minute deadline</p>{job.error&&<p role="alert">{job.error}</p>}<ol>{job.events.slice(-5).map((event,index)=><li key={`${event.at}-${index}`}>{event.text}</li>)}</ol>{activeJob&&<button className="btn btn-small" onClick={()=>void cancel()}>Cancel synthesis</button>}{job.status==='completed'&&<button className="btn btn-small" disabled={!!saving} onClick={()=>void loadModel()}>Load model-generated draft</button>}</section>}
     {loaded?.repoId===repo?.id&&<p className="muted small">Showing stored requirements. <button className="btn btn-small" disabled={!!saving} onClick={()=>{setLoaded(null);setSaved(null);}}>Use current project brief</button></p>}
     <div className="row" role="tablist" aria-label="Architecture draft views" style={{flexWrap:'wrap',gap:8}} onKeyDown={event=>{
       const current=views.findIndex(([id])=>id===activeTab);

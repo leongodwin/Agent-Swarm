@@ -1,12 +1,26 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { governTool, setToolGovernanceGate, evaluateToolRequest } from './toolGovernance.ts';
-const captured=vi.hoisted(()=>({options:null as any}));
+const captured=vi.hoisted(()=>({options:null as any,result:undefined as Record<string,unknown>|undefined}));
 vi.mock('@anthropic-ai/claude-agent-sdk',()=>({query:({options}:any)=>{
   captured.options=options;
-  return (async function*(){yield {type:'result',subtype:'success',is_error:false,result:'synthetic',total_cost_usd:0,num_turns:1};})();
+  return (async function*(){yield {type:'result',subtype:'success',is_error:false,result:'synthetic',total_cost_usd:0,num_turns:1,...captured.result};})();
 }}));
 import { startSession } from './agentRunner.ts';
-afterEach(()=>{setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'}));captured.options=null;});
+afterEach(()=>{setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'}));captured.options=null;captured.result=undefined;});
+it('retains an SDK error response even when it uses the success subtype',async()=>{
+  captured.result={is_error:true,result:'Not logged in · Please run /login'};
+  const result=await new Promise<any>(resolve=>startSession({cwd:process.cwd(),prompt:'Synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev'},
+    {log:()=>{},tool:()=>{},sessionId:()=>{},browserUrl:()=>{},screenshot:()=>{},finished:resolve}));
+  expect(result).toMatchObject({ok:false,errors:['Not logged in · Please run /login']});
+});
+it('gives structured planning no inherited settings, MCP connections or tool authority',async()=>{
+  setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic gate'}));
+  await new Promise<void>(resolve=>startSession({cwd:process.cwd(),prompt:'Synthetic structured design',systemAppend:'',model:'',effort:'medium',browserTesting:false,additionalDirectories:[],role:'dev',noTools:true},
+    {log:()=>{},tool:()=>{},sessionId:()=>{},browserUrl:()=>{},screenshot:()=>{},finished:()=>resolve()}));
+  expect(captured.options).toMatchObject({tools:[],settingSources:[],strictMcpConfig:true,mcpServers:{},permissionMode:'default',maxTurns:4});
+  expect(await captured.options.canUseTool('Write',{file_path:'untrusted',content:'changed'},{})).toMatchObject({behavior:'deny'});
+  expect((await captured.options.hooks.PreToolUse[0].hooks[0]({hook_event_name:'PreToolUse',tool_name:'Bash',tool_input:{command:'pac solution import'}},'tool-1',{})).hookSpecificOutput.permissionDecision).toBe('deny');
+});
 async function options(authorizeTool: (() => string | null) | undefined = () => null){
  await new Promise<void>(resolve=>startSession({cwd:process.cwd(),prompt:'synthetic',systemAppend:'',model:'test',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',agentId:'developer-1',authorizeTool},
  {log:()=>{},tool:()=>{},sessionId:()=>{},browserUrl:()=>{},screenshot:()=>{},finished:()=>resolve()}));return captured.options;

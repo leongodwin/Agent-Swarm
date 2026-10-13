@@ -518,7 +518,7 @@ input.inline:focus {
 /* Who's working: top right under the status pills. */
 .workers {
   position: absolute;
-  top: 60px;
+  top: var(--workers-top, 60px);
   right: 16px;
   width: min(360px, calc(100vw - 32px));
   max-height: calc(100vh - 180px);

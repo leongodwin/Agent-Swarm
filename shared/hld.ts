@@ -23,7 +23,8 @@ export interface HldResult {
   generatedAt: number;
   solutionName: string;
   status: 'draft';
-  generationMethod: 'requirements-template';
+  generationMethod: 'requirements-template' | 'model-synthesis';
+  synthesis?: {runtime:'claude-sdk';jobId:string;startedAt:number;elapsedMs:number;deadlineMs:300000};
   missingEvidence: string[];
   implementationPlan: {id: string; title: string; deliverables: string[]; acceptance: string[]}[];
   savedFilePath?: string;

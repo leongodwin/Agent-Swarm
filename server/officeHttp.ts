@@ -15,6 +15,7 @@ import type { TenantDlpService } from './tenantDlp.ts';
 import type { CanvasOwnership } from './canvasOwnership.ts';
 import { generateProposal } from './proposalAgent.ts';
 import { registerArchitectureRoutes } from './architectureRoutes.ts';
+import type {HldSynthesisService} from './hldSynthesis.ts';
 import { parseSolutionFolder } from '../shared/solutionParser.ts';
 import { scanDirectoryDlp } from './dlpScanner.ts';
 import { templateCatalog, templateFiles, installTemplate, type TemplateId } from './implementationTemplates.ts';
@@ -23,6 +24,8 @@ import { createBrowserAuth } from './browserAuth.ts';
 import { parseBody, proposalSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 
 export interface OfficeHttpServices {
+  synthesis?:HldSynthesisService;
+  synthesisUnavailableReason?:string;
   backend: Backend; swarm: Swarm; features: FeatureStore; capabilities: CapabilityService;
   delivery: DeliveryService; toolGovernance: ToolGovernanceService; tenantDlp: TenantDlpService;
   canvasOwnership: CanvasOwnership; homeDir: string; runtimeStartedAt: string;
@@ -221,7 +224,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
 
   // Validated document generation; filesystem targets come from the connected repo.
   app.post('/api/proposals/generate', route((req) => generateProposal(parseBody(proposalSchema, req.body))));
-  registerArchitectureRoutes(app,{demo:backend.demo,connectedRepo,assertOpen:requireOpen});
+  registerArchitectureRoutes(app,{demo:backend.demo,connectedRepo,assertOpen:requireOpen,synthesis:services.synthesis,synthesisUnavailableReason:services.synthesisUnavailableReason});
   app.get('/api/repos/:repo/solution-architecture', route((req) => {
     const repo = connectedRepo(repoId(req));
     return parseSolutionFolder(repo.checkoutPath ?? null, backend.demo);
