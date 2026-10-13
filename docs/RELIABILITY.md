@@ -290,3 +290,11 @@ Release plans also require `monitoring: { intervalMinutes, criticalProbeIds }`, 
 A historical completed release remains in the audit trail even if current health degrades. The panel shows current health separately, so a past verified deployment is not presented as a guarantee of current availability.
 
 PAC can print `Error:` to stdout while returning exit code zero. The command runner treats that as a failure and retains the uncertain import checkpoint. An import/uninstall lock must be investigated before retrying; exit code zero alone is not deployment evidence.
+
+### Rechecking deployment operations
+
+Cloud-flow and classic-workflow reconciliation invalidates and persists an existing operation's verification before requesting fresh platform evidence. A failed read, unsupported response, identity/context failure or observed drift leaves that operation unknown. Connection-reference checks follow the same rule. An unknown mutation is reconciled through observation; it is not repeated merely because the desired state is absent. Duplicate operation history is rejected, and a changed definition requires a new release. Cloud-flow operation hashes now include the solution name: historical operations lacking that binding require a new release rather than silently inheriting the stronger contract.
+
+Ownership is rechecked after platform reads, after cloud-flow preflight, before mutation and before accepting its postcondition. A revoked owner cannot report verification or save its failure status over a successor's run. If ownership is lost after a durable intent, that intent remains an unresolved outcome for the next owner to inspect. These checks cannot cancel an external command already issued, and do not establish provider-level atomic fencing.
+
+Local regressions cover persisted invalidation and JSON reload, drift/read failure, lost mutation responses, duplicate history and ownership loss during reads, writes and preflight. The isolated office API regression verifies the built application's session/schema boundary; it does not invoke these mutations against a tenant. Live mutation/recovery acceptance and production rollout of this batch remain separate.

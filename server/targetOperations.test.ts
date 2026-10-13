@@ -38,6 +38,22 @@ it('blocks wrong connector, inactive reference and lost ownership without issuin
   await expect(verifyConnectionReference(bindingAction, bindingComponent, request, run(), async () => {}, async () => { throw new Error('lost ownership'); })).rejects.toThrow('lost ownership');
   expect(request).not.toHaveBeenCalled();
 });
+it.each(['unavailable', 'malformed', 'revoked'] as const)('invalidates earlier connection verification when its recheck is %s', async failure => {
+  const state = run(); let owns = true;
+  const row = { connectionid: bindingAction.connectionId, connectorid: bindingAction.connectorId, statecode: 0 };
+  const owned = async () => { if (!owns) throw new Error('ownership lost'); };
+  const save = vi.fn(async () => {});
+  await verifyConnectionReference(bindingAction, bindingComponent, async () => row, state, save, owned);
+  const request = vi.fn<Request>(async () => {
+    if (failure === 'unavailable') throw new Error('read failed');
+    if (failure === 'revoked') owns = false;
+    return failure === 'malformed' ? {} : row;
+  });
+  await expect(verifyConnectionReference(bindingAction, bindingComponent, request, state, save, owned)).rejects.toThrow();
+  expect(state.operations![0].status).toBe('unknown');
+  expect(save).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
+});
 
 it('rejects source Canvas IDs and unrelated hosts in reported app links', () => {
   const mapping = [{ key: 'expenses', kind: 'canvas', id: other, playId: id }] as const;
@@ -79,6 +95,24 @@ it('reconciles a lost response without repeating the mutation', async () => {
   expect(request.mock.calls.filter(([method]) => method === 'PATCH')).toHaveLength(1);
   active = false;
   await expect(reconcileWorkflowAction(action, component, request, state, save, owned)).rejects.toThrow('observed drift');
+  expect(state.operations![0].status).toBe('unknown');
+});
+it('invalidates a verified classic workflow when its read fails or its definition is no longer supported', async () => {
+  for (const failure of ['request', 'category']) {
+    const state = run(); const save = vi.fn(async () => {});
+    await reconcileWorkflowAction(action, component, async () => ({ category: 0, type: 1, statecode: 1, statuscode: 2 }), state, save, async () => {});
+    const request = vi.fn<Request>(async () => { if (failure === 'request') throw new Error('read failed'); return { category: 5, type: 1, statecode: 1, statuscode: 2 }; });
+    await expect(reconcileWorkflowAction(action, component, request, state, save, async () => {})).rejects.toThrow(failure === 'request' ? 'read failed' : 'cloud flows');
+    expect(state.operations![0].status).toBe('unknown');
+    expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
+  }
+});
+it('does not accept a classic workflow read after ownership is revoked', async () => {
+  const state = run(); let owns = true;
+  const request = vi.fn<Request>(async () => { owns = false; return { category: 0, type: 1, statecode: 1, statuscode: 2 }; });
+  const save = vi.fn(async () => {});
+  await expect(reconcileWorkflowAction(action, component, request, state, save, async () => { if (!owns) throw new Error('ownership lost'); })).rejects.toThrow('ownership lost');
+  expect(save).not.toHaveBeenCalled(); expect(state.operations).toEqual([]);
 });
 it('blocks an unresolved action when its postcondition is absent', async () => {
   const state = run();

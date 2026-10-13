@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { DeliveryRun } from '../shared/delivery.ts';
 import {columnContract} from './columnContracts.ts';
+import {reconcile} from './operationReconciliation.ts';
 
 // Dataverse IDs are GUIDs; legacy sequential IDs need not have RFC UUID version bits.
 export const dataverseGuid = z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i);
@@ -80,15 +81,20 @@ export async function verifyConnectionReference(action: Extract<TargetAction, { 
   const id = `typed:${action.id}`;
   const commandSha256 = crypto.createHash('sha256').update(JSON.stringify({ action, component })).digest('hex');
   run.operations ??= [];
-  let op = run.operations.find((item) => item.id === id);
+  const matches = run.operations.filter(item => item.id === id);
+  if (matches.length > 1) throw new Error(`${id} has ambiguous operation history; inspect the release before retrying`);
+  let op = matches[0];
   if (op && op.commandSha256 !== commandSha256) throw new Error(`${id} target mapping or binding changed; create a new release`);
   await assertOwned();
+  if (op) {
+    op.status = 'unknown'; op.endedAt = new Date().toISOString(); await save();
+    await assertOwned();
+  }
   const row = z.object({ connectionid: z.string().nullable(), connectorid: z.string().nullable(), statecode: z.number() }).parse(await request('GET', `connectionreferences(${component.id})?$select=connectionid,connectorid,statecode`));
+  await assertOwned();
   if (row.connectionid !== action.connectionId || row.connectorid !== action.connectorId || row.statecode !== 0) {
-    if (op) { op.status = 'unknown'; await save(); }
     throw new Error(`${id} connection binding is missing, inactive or differs from the approved binding; reconcile it in the target before retrying`);
   }
-  await assertOwned();
   if (!op) { op = { id, kind: 'post-deploy', status: 'verified', commandSha256, startedAt: new Date().toISOString() }; run.operations.push(op); }
   op.status = 'verified'; op.endedAt = new Date().toISOString(); await save();
 }
@@ -102,23 +108,6 @@ export async function reconcileWorkflowAction(action: Extract<TargetAction, { ty
     if (row.category !== 0 || row.type !== 1) throw new Error('Only classic workflow definitions support this adapter; cloud flows require the Power Automate adapter');
     return row.statecode === desired.statecode && row.statuscode === desired.statuscode;
   };
-  const id = `typed:${action.id}`;
-  const commandSha256 = crypto.createHash('sha256').update(JSON.stringify({ action, component, desired })).digest('hex');
-  run.operations ??= [];
-  let op = run.operations.find((item) => item.id === id);
-  if (op && op.commandSha256 !== commandSha256) throw new Error(`${id} target mapping or desired state changed; create a new release`);
-  await assertOwned();
-  if (await observe()) {
-    if (!op) { op = { id, kind: 'post-deploy', status: 'verified', commandSha256, startedAt: new Date().toISOString() }; run.operations.push(op); }
-    op.status = 'verified'; op.endedAt = new Date().toISOString(); await save(); return;
-  }
-  if (op) throw new Error(`${id} has an unresolved outcome or observed drift; inspect the target before retrying`);
-  op = { id, kind: 'post-deploy', status: 'intent', commandSha256, startedAt: new Date().toISOString() };
-  run.operations.push(op); await save();
-  try {
-    await assertOwned();
-    await request('PATCH', `workflows(${component.id})`, desired);
-    if (!(await observe())) throw new Error(`${id} postcondition was not observed`);
-    op.status = 'verified'; op.endedAt = new Date().toISOString(); await save();
-  } catch (error) { op.status = 'unknown'; op.endedAt = new Date().toISOString(); await save(); throw error; }
+  await reconcile(`typed:${action.id}`, { action, component, desired }, run, save, assertOwned, observe,
+    () => request('PATCH', `workflows(${component.id})`, desired));
 }

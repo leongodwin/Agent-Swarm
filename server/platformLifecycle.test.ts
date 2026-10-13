@@ -36,6 +36,49 @@ it('reconciles a lost cloud-flow activation response without repeating it', asyn
   expect(run.operations![0].status).toBe('verified');
   active = false;
   await expect(reconcileCloudFlow(action, component, adapter, identity, 'Expense', run, save, owned)).rejects.toThrow('drift');
+  expect(run.operations![0].status).toBe('unknown');
+});
+it('invalidates prior cloud-flow verification when identity or context cannot be freshly verified', async () => {
+  const run = state(); let unavailable = false;
+  const call = vi.fn<FlowAdapter['call']>(async tool => {
+    if (tool === 'whoami') { if (unavailable) throw new Error('identity unavailable'); return who; }
+    if (tool === 'get_flow_context') return { workflowId: id, inSolution: true, solutionUniqueName: 'Expense', isManaged: false, category: 5 };
+    if (tool === 'get_flow') return 'Started';
+    throw new Error('unexpected mutation');
+  });
+  const execute = () => reconcileCloudFlow({ id: 'enable', type: 'cloud-flow-state', component: 'flow', state: 'active', forceManaged: false }, { id, key: 'flow', kind: 'cloud-flow' }, { call, close: owned }, identity, 'Expense', run, save, owned);
+  await execute(); unavailable = true;
+  await expect(execute()).rejects.toThrow('identity unavailable');
+  expect(run.operations![0].status).toBe('unknown');
+  unavailable = false; await execute();
+  expect(run.operations![0].status).toBe('verified');
+  expect(call.mock.calls.some(([tool]) => tool === 'publish_flow')).toBe(false);
+});
+it('does not activate a cloud flow after ownership is revoked during preflight', async () => {
+  const run = state(); let owns = true;
+  const call = vi.fn<FlowAdapter['call']>(async (tool, args) => {
+    if (tool === 'whoami') return who;
+    if (tool === 'get_flow_context') return { workflowId: id, inSolution: true, solutionUniqueName: 'Expense', isManaged: false, category: 5 };
+    if (tool === 'get_flow') return args.path === 'properties' ? { definition: {} } : 'Stopped';
+    if (tool === 'preflight_flow') { owns = false; return { overall: 'ready' }; }
+    throw new Error('unexpected mutation');
+  });
+  const save = vi.fn(async () => {});
+  await expect(reconcileCloudFlow({ id: 'enable', type: 'cloud-flow-state', component: 'flow', state: 'active', forceManaged: false }, { id, key: 'flow', kind: 'cloud-flow' }, { call, close: owned }, identity, 'Expense', run, save, async () => { if (!owns) throw new Error('ownership lost'); })).rejects.toThrow('ownership lost');
+  expect(call.mock.calls.some(([tool]) => tool === 'publish_flow')).toBe(false);
+  expect(run.operations![0].status).toBe('intent'); expect(save).toHaveBeenCalledTimes(1);
+});
+it('rejects an unsupported cloud-flow state before creating mutation intent', async () => {
+  const run = state();
+  const call = vi.fn<FlowAdapter['call']>(async tool => {
+    if (tool === 'whoami') return who;
+    if (tool === 'get_flow_context') return { workflowId: id, inSolution: true, solutionUniqueName: 'Expense', isManaged: false, category: 5 };
+    if (tool === 'get_flow') return 'Suspended';
+    throw new Error('unexpected mutation');
+  });
+  await expect(reconcileCloudFlow({ id: 'enable', type: 'cloud-flow-state', component: 'flow', state: 'active', forceManaged: false }, { id, key: 'flow', kind: 'cloud-flow' }, { call, close: owned }, identity, 'Expense', run, save, owned)).rejects.toThrow();
+  expect(run.operations).toEqual([]);
+  expect(call.mock.calls.some(([tool]) => tool === 'publish_flow' || tool === 'preflight_flow')).toBe(false);
 });
 it('requires release-correlated action output instead of unrelated successful activity', async () => {
   const run = state(); const check = { component: 'flow', action: 'Audit', correlationPointer: ['body', 'releaseId'], assertions: [{ pointer: ['body', 'saved'], equals: true }] };
