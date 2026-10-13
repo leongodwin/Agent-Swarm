@@ -308,6 +308,31 @@ it('does not accept independent verification after its delivery owner is replace
   }finally{warn.mockRestore();}
 });
 const validReview = (hash: string) => ({ evidenceHash: hash, scores: [4, 4, 4, 4, 4], notes: 'Inspected desktop/mobile hierarchy, accessibility, task clarity and recovery evidence.', recoveryReviewed: true });
+it('retains preflight cooldown across restarts and permits an explicit repaired retry',async()=>{
+  const {service,repo,root,deps}=await fixture();let probes=0;
+  service.checkCapabilities=async()=>{probes++;return {status:'blocked',checks:[{id:'auth',category:'authentication',passed:false,remedy:'Synthetic sign-in prerequisite'}]};};
+  await service.tick([repo]);expect(probes).toBe(1);const before=service.view();expect(before.blockers[0].preflightRetry?.failures).toBe(1);
+  for(let i=0;i<5;i++)await service.tick([repo]);expect(probes).toBe(1);expect(service.view().attemptHistory?.recorded.unsuccessful).toBe(1);
+  await service.close();const restarted=new DeliveryService(root,false,deps);services.push(restarted);await restarted.init();restarted.checkCapabilities=service.checkCapabilities;
+  await restarted.tick([repo]);expect(probes).toBe(1);expect(restarted.view().blockers[0].preflightRetry).toEqual(before.blockers[0].preflightRetry);
+  restarted.checkCapabilities=async()=>({status:'ready',configHash:'repaired',checks:[{id:'critical-flow',category:'workflow',passed:true,remedy:''}]});
+  await restarted.start(repo);await restarted.waitForIdle();expect(restarted.view().runs[0].phase).toBe('reviewing');expect(restarted.view().blockers).toEqual([]);
+});
+it('stops repeated automatic preflight failures at a persisted circuit without executing tenant commands',async()=>{
+  const {service,repo,calls,root}=await fixture();let probes=0;service.checkCapabilities=async()=>({status:'blocked',checks:[{id:'auth',category:'authentication',passed:false,remedy:`Synthetic rotating error ${++probes}`} ]});
+  const clock=vi.spyOn(Date,'now');let now=Date.now();
+  try{
+    for(let i=0;i<6;i++){clock.mockReturnValue(now);await service.tick([repo]);const retry=service.view().blockers[0].preflightRetry!;expect(retry.failures).toBe(i+1);if(retry.nextAttemptAt)now=Date.parse(retry.nextAttemptAt);}
+    clock.mockReturnValue(now+86400000);await service.tick([repo]);expect(probes).toBe(6);expect(service.view().blockers[0].preflightRetry?.nextAttemptAt).toBeNull();expect(service.view().attemptHistory?.recorded.unsuccessful).toBe(6);expect(calls.some(call=>call.includes('solution import'))).toBe(false);
+    const saved=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));expect(()=>validateDeliveryState(saved)).not.toThrow();saved.blockers[0].preflightRetry.nextAttemptAt=new Date().toISOString();expect(()=>validateDeliveryState(saved)).toThrow();
+  }finally{clock.mockRestore();}
+});
+it('admits a newly reviewed release context without waiting for the old preflight cooldown',async()=>{
+  const {service,repo}=await fixture();service.checkCapabilities=async()=>({status:'blocked',checks:[{id:'auth',category:'authentication',passed:false,remedy:'Synthetic prerequisite'}]});
+  await service.tick([repo]);const oldContext=service.view().blockers[0].preflightRetry!.context;
+  const replacement=await service.createRelease(repo,{...plan,name:'Synthetic corrected release'});await service.reviewArchitecture(replacement.id,'sherlock',replacement.planHash,architectureAssessment);await service.approveRelease(replacement.id,'sherlock',replacement.planHash);
+  await service.tick([repo]);expect(service.view().blockers[0].preflightRetry).toMatchObject({failures:1});expect(service.view().blockers[0].preflightRetry?.context).not.toBe(oldContext);expect(service.view().attemptHistory?.recorded.unsuccessful).toBe(2);
+});
 it('drains automatic and manual delivery starts without changing approved policy or releases',async()=>{
   const {service,repo,calls,release}=await fixture();const before=service.view();calls.length=0;service.setDraining(true);
   await expect(service.start(repo)).rejects.toThrow('draining');await service.tick([repo]);expect(calls).toEqual([]);expect(service.view().policy).toEqual(before.policy);expect(service.view().releases).toEqual(before.releases);

@@ -20,7 +20,8 @@ export interface DeliveryRun {
 export interface DeliveryRelease { id: string; repoId: string; head: string; environmentUrl: string; plan: ReleasePlan; planHash: string; createdAt: string; approvedAt?: string; approvedBy?: string;
   architectureReview?: {reviewer:string;artifactSha256:string;decision:'approved'|'rejected';notes:string;reviewedAt:string};
   skillLock?: { id: string; sha256: string; version?: string; file: string }[] }
-export interface DeliveryBlocker { repoId: string; releaseId?: string; owner: string; error: string; recovery: string; at: string }
+export interface DeliveryPreflightRetry {context:string;failures:number;lastFailureAt:string;nextAttemptAt:string|null}
+export interface DeliveryBlocker { repoId: string; releaseId?: string; owner: string; error: string; recovery: string; at: string;preflightRetry?:DeliveryPreflightRetry }
 export interface DeliveryAttempt {id:string;releaseId:string;repoId:string;head:string;environmentUrl:string;runId?:string;evidenceHash?:string;startedAt:string;endedAt?:string;status:'preparing'|'running'|'reviewing'|'successful'|'failed'|'interrupted'|'superseded';reason?:'preflight'|'execution'|'cleanup'|'restart'|'superseded';acceptanceProfile:'production'|'functional-development'}
 export interface DeliveryAttemptHistory {version:1;startedAt:string;legacyRunIds:string[];attempts:DeliveryAttempt[]}
 export interface DeliveryAttemptSummary {scope:'retained-delivery-attempts';observedAt:string;window:{from:string;to:string};coverageStartedAt:string|null;completeWindow:boolean;legacyRunCount:number;recorded:{completed:number;successful:number;unsuccessful:number;active:number;awaitingReview:number;successPercent:number|null};successPercent:number|null;targetPercent:99.5;observedMeetsTarget:boolean|null;reason:string;recent:DeliveryAttempt[]}

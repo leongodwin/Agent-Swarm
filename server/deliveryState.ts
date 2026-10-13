@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { releasePlanSchema,acceptanceScope } from './releasePlan.ts';
 import {architectureReviewSchema} from './architectureGate.ts';
 import type { DeliveryPolicy, DeliveryRun, DeliveryRelease, DeliveryBlocker,DeliveryAttemptHistory } from '../shared/delivery.ts';
+import {preflightRetrySchema} from './deliveryRetry.ts';
 import {attemptHistorySchema} from './deliveryAttempts.ts';
 
 export interface DeliveryStoredState { attemptHistory?:DeliveryAttemptHistory;schemaVersion: 1; policy: DeliveryPolicy | null; runs: DeliveryRun[]; releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number }
@@ -32,7 +33,7 @@ const run = z.object({id:identity,repoId:repo,head:z.string().min(1).max(128),en
 }).strict();
 const schema = z.object({schemaVersion:z.literal(1).optional(),policy:z.object({enabled:z.boolean(),environmentUrl:https,approvedAt:when,copilotPaused:z.boolean().optional()}).strict().nullable(),
   attemptHistory:attemptHistorySchema.optional(),
-  runs:z.array(run).max(10000),releases:z.array(release).max(10000).optional(),blockers:z.array(z.object({repoId:repo,releaseId:identity.optional(),owner:text,error:z.string().max(4000),recovery:text,at:when}).strict()).max(10000).optional(),revision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  runs:z.array(run).max(10000),releases:z.array(release).max(10000).optional(),blockers:z.array(z.object({repoId:repo,releaseId:identity.optional(),owner:text,error:z.string().max(4000),recovery:text,at:when,preflightRetry:preflightRetrySchema.optional()}).strict()).max(10000).optional(),revision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 }).strict();
 
 /** Validate raw objects without normalizing approved plans or reordering their

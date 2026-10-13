@@ -14,6 +14,7 @@ import { HttpError } from './httpError.ts';
 import type { RepoView } from '../shared/types.ts';
 import type { DeliveryRun, DeliveryView, DeliveryRelease,DeliveryAttempt } from '../shared/delivery.ts';
 import {deliveryAttemptSummary} from './deliveryAttempts.ts';
+import {nextPreflightRetry,preflightContext,preflightDeferred} from './deliveryRetry.ts';
 
 import { releasePlanSchema, acceptanceScope } from './releasePlan.ts';
 import {architectureReviewSchema,verifyCommittedArchitecture,requireArchitectureReview} from './architectureGate.ts';
@@ -218,13 +219,14 @@ export class DeliveryService {
     if (this.active || this.demo || !this.state.policy) throw new HttpError(409, 'Configure delivery and wait for the active run before changing platform scope');
     this.state.policy.copilotPaused = paused; await this.changed(); return this.view();
   }
-  private async blocker(repoId: string, error: unknown, release?: DeliveryRelease) {
+  private async blocker(repoId: string, error: unknown, release?: DeliveryRelease,preflight=false) {
     const message = String((error as Error).message ?? error).slice(0, 4000);
     const prior = this.state.blockers.find((b) => b.repoId === repoId);
-    if (prior?.error === message && prior.releaseId === release?.id) return;
+    if (!preflight&&prior?.error === message && prior.releaseId === release?.id) return;
+    const preflightRetry=preflight?nextPreflightRetry(prior?.preflightRetry,preflightContext(release,this.state.policy!.environmentUrl)):undefined;
     this.state.blockers = this.state.blockers.filter((b) => b.repoId !== repoId);
     this.state.blockers.push({ repoId, releaseId: release?.id, owner: release && !release.approvedAt ? release.plan.qaOwner : release?.plan.owner ?? 'CEO', error: message,
-      recovery: 'Resolve the stated prerequisite, then run this release again. For interrupted imports inspect PAC import history before creating a new release.', at: new Date().toISOString() });
+      recovery: 'Resolve the stated prerequisite, then run this release again. For interrupted imports inspect PAC import history before creating a new release.', at: new Date().toISOString(),...(preflightRetry?{preflightRetry}:{}) });
     await this.changed();
   }
   async createRelease(repo: RepoView, input: unknown) {
@@ -341,7 +343,7 @@ export class DeliveryService {
         await this.save().catch(()=>{});console.warn(run.error);
       }).finally(async () => { this.active = null; this.pending = null; });
       return this.view(repo.id);
-    } catch (err) { this.active = null;if(attempt){attempt.status='failed';attempt.reason='preflight';attempt.endedAt=new Date().toISOString();await this.save();}await this.blocker(repo.id, err, release); throw err; }
+    } catch (err) { this.active = null;if(attempt){attempt.status='failed';attempt.reason='preflight';attempt.endedAt=new Date().toISOString();await this.save();}await this.blocker(repo.id, err, release,true); throw err; }
     finally { prepared(); this.preparing = null; }
   }
   async tick(repos: RepoView[]) {
@@ -349,6 +351,8 @@ export class DeliveryService {
     for (const repo of repos) {
       const latest = this.state.runs.find((r) => r.repoId === repo.id && r.environmentUrl === this.state.policy?.environmentUrl);
       if (latest?.phase === 'complete' && latest.health && Date.parse(latest.health.nextCheckAt) <= Date.now()) { await this.monitor(repo, latest.id); return; }
+      const release=this.state.releases.find(row=>row.repoId===repo.id);
+      if(preflightDeferred(this.state.blockers.find(row=>row.repoId===repo.id)?.preflightRetry,preflightContext(release,this.state.policy.environmentUrl)))continue;
       try { await this.start(repo); } catch { /* Persisted blocker is visible and triggers one review per change. */ }
       if (this.active) break;
     }
