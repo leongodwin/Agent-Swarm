@@ -1,5 +1,13 @@
 # Reliability priorities 5–8
 
+## Policy reader request ownership
+
+Each standard-policy refresh now has a unique request ID, and each reader process has an independent generation. The PowerShell response echoes the request ID through a strict envelope; warm refreshes carry it in a JSON command. Unsupported/malformed commands terminate the loop. Callbacks from replaced processes, earlier requests or duplicate replies cannot complete or fail a newer request for the same tenant/account.
+
+Reader termination is registered before launch completes, so synchronous termination cannot retain an invalid handle. Expiry, identity changes and shutdown revoke process ownership before stop. Evidence persistence checks the owning request/process before committing the temporary file; stale failures cannot clear replacement work. A filesystem rename already issued is not physically cancelled. This does not persist the authenticated PowerShell process across an office reload or certify full tenant DLP/schema compliance.
+
+Regression evidence includes the actual PowerShell protocol loop using synthetic account/provider functions (no Microsoft sign-in or tenant requests), existing actual pager tests, stale callbacks with the replacement request ID, warm-request replay, synchronous termination and expiry during queued persistence. No fresh tenant inventory or authenticated restart claim is made. Evidence: `.swarm-reliability/policy-reader-ownership-coverage-2026-10-13.txt`, `policy-reader-ownership-coverage-exit-2026-10-13.txt`, `policy-reader-ownership-api-e2e-2026-10-13.txt` and `policy-reader-ownership-live-runtime-2026-10-13.json`.
+
 ## Commercial scenarios and evidence boundaries
 
 The proposal generator now uses explicit user-supplied commercial inputs instead of fictional licence prices, automatic SKU allocations, minimum populations, fixed schedules and positive ROI floors. Missing prices, implementation costs, operating costs and benefit assumptions remain unknown. Zero values remain explicit assumptions. Complete scenarios retain negative ROI; incomplete or zero cost bases receive no ROI. Decimal monetary products round half up to two decimals, and financial/percentage precision overflow is rejected by the shared API/UI schema. GBP, USD and EUR are display currencies, without a price feed or exchange conversion.

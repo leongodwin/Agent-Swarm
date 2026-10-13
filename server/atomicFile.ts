@@ -12,12 +12,13 @@ export class SerialWriter {
   }
   drain() { return this.pending; }
 }
-export async function atomicWrite(file: string, data: string): Promise<void> {
+export async function atomicWrite(file: string, data: string, canCommit: () => boolean = () => true): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${crypto.randomUUID()}.tmp`;
   try {
     await fs.writeFile(tmp, data);
     for (let attempt = 0; ; attempt++) {
+      if (!canCommit()) throw new Error('Write owner is no longer current');
       try { await fs.rename(tmp, file); break; }
       catch (err) {
         if (attempt >= 5 || !['EBUSY', 'EPERM', 'EACCES'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;

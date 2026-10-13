@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][Guid]$TenantId,
-    [Parameter(Mandatory=$true)][string]$ExpectedUser
+    [Parameter(Mandatory=$true)][string]$ExpectedUser,
+    [Parameter(Mandatory=$true)][Guid]$RequestId
 )
 $ErrorActionPreference = 'Stop'
 Import-Module Microsoft.PowerApps.Administration.PowerShell -RequiredVersion 2.0.219 -DisableNameChecking -WarningAction SilentlyContinue
@@ -41,6 +42,13 @@ do {
         # Authentication tokens, request headers and raw server errors never leave the reader.
         $result = @{status='unavailable';reason='The authenticated policy request failed or returned an incomplete inventory.'}
     }
-    [Console]::Out.WriteLine('SWARM_DLP ' + ($result | ConvertTo-Json -Depth 100 -Compress))
+    [Console]::Out.WriteLine('SWARM_DLP ' + (@{requestId=$RequestId.ToString();result=$result} | ConvertTo-Json -Depth 100 -Compress))
     $nextCommand = [Console]::In.ReadLine()
-} while ($nextCommand -eq 'refresh')
+    if ($nextCommand -eq 'close' -or $null -eq $nextCommand) { break }
+    try {
+        $command = $nextCommand | ConvertFrom-Json
+        if ($command.command -ne 'refresh' -or @($command.PSObject.Properties.Name).Count -ne 2 -or $null -eq $command.requestId) { break }
+        $RequestId = [Guid]::Parse($command.requestId)
+        if ($RequestId -eq [Guid]::Empty) { break }
+    } catch { break }
+} while ($true)
