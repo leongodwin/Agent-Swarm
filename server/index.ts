@@ -10,6 +10,7 @@ import { setOfficeUrl,runtimeCleanupView,onRuntimeCleanupChanged } from './cliRu
 import { createDemoBackend } from './demo.ts';
 import { underLauncher } from './officeUpdate.ts';
 import { HttpError, Swarm } from './swarm.ts';
+import {selectSynthesisSkills} from './synthesisSkills.ts';
 import { FeatureStore } from './features.ts';
 import { CapabilityService, capabilityBlocker } from './capabilityChecks.ts';
 import { DeliveryService } from './delivery.ts';
@@ -26,7 +27,7 @@ import { parseBody } from './requestSchemas.ts';
 import { OfficeMaintenance } from './officeMaintenance.ts';
 import {createDeclaredSchemaObserver} from './declaredSchema.ts';
 import {HldSynthesisService} from './hldSynthesis.ts';
-import {discoverSkills,selectSkills} from './skillRegistry.ts';
+import {discoverSkills} from './skillRegistry.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
 const runtimeStartedAt = new Date().toISOString();
@@ -109,7 +110,7 @@ swarm.requestDeliveryReview = async (id) => {
 const synthesis=new HldSynthesisService(path.join(HOME_DIR,backend.demo?'demo-architecture':'architecture'),{
   reserve:(repoId,jobId)=>swarm.reserveArchitectureSession(repoId,jobId),
   assertOpen(){if(backend.demo)throw new HttpError(409,'Demo cannot synthesize with a live model');if(officeShutdown.closed)throw new HttpError(503,'Office is shutting down');if(swarm.isDraining)throw new HttpError(409,'Office maintenance pauses new architecture jobs');},
-  context(repoId){const repo=swarm.snapshot().repos.find(item=>item.id===repoId);if(!repo?.checkoutPath)throw new HttpError(404,'Architecture project checkout is unavailable');const catalogue=discoverSkills();return {checkoutPath:repo.checkoutPath,fingerprint:JSON.stringify([repo.id,repo.localPath,repo.targetTenancy,repo.mission,catalogue.fingerprint,delivery.view().policy?.copilotPaused]),copilotPaused:!!delivery.view().policy?.copilotPaused,skills:selectSkills(catalogue,`${repo.mission} ${repo.summary}`).map(({id,name,platform,sha256,version,description,toolStatus})=>({id,name,platform,sha256,version,description,toolStatus}))};},
+  context(repoId,input){const repo=swarm.snapshot().repos.find(item=>item.id===repoId);if(!repo?.checkoutPath)throw new HttpError(404,'Architecture project checkout is unavailable');const catalogue=discoverSkills(),copilotPaused=!!delivery.view().policy?.copilotPaused;return {checkoutPath:repo.checkoutPath,fingerprint:JSON.stringify([repo.id,repo.localPath,repo.targetTenancy,repo.mission,catalogue.fingerprint,copilotPaused]),copilotPaused,skills:selectSynthesisSkills(catalogue,`${repo.mission} ${repo.summary}`,input,copilotPaused).map(({id,name,platform,sha256,version,description,toolStatus})=>({id,name,platform,sha256,version,description,toolStatus}))};},
   admission:repoId=>swarm.capabilityPreflight(repoId,'codex'),start:(options,callbacks)=>backend.startSession(options,callbacks),
 });
 let synthesisUnavailableReason:string|undefined;

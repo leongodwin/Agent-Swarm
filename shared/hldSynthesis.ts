@@ -7,6 +7,7 @@ export const synthesisOutputSchema=z.strictObject({
   risks:z.array(z.strictObject({risk:detail,mitigation:detail})).min(1).max(30),
   requirements:z.array(z.strictObject({requirementId:label,sourceSha256:z.string().regex(/^[a-f0-9]{64}$/),planStepIds:z.array(label).min(1).max(104),requirement:detail,design:detail,acceptance:detail})).min(1).max(1000),
   missingEvidence:z.array(label).min(1).max(100),
+  skillBindings:z.array(z.strictObject({skillId:label,sourceSha256:z.string().regex(/^[a-f0-9]{64}$/),planStepIds:z.array(label).min(1).max(104),rationale:detail,toolStatus:z.literal('unverified')})).max(100),
   implementationPlan:hldResultSchema.shape.implementationPlan.min(3),mermaidDiagrams:hldResultSchema.shape.mermaidDiagrams,
 });
 export const synthesisJobSchema=z.strictObject({id:z.uuid(),repoId:z.string().min(1).max(8000),status:z.enum(['queued','checking','running','saving','completed','blocked','failed','cancelled']),
