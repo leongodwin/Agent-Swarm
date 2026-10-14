@@ -119,7 +119,8 @@ export class RuntimeCleanupStore {
   }
   private acquire():()=>void{
     const file=this.file+'.lock',queue=file+'.queue',allocator=file+'.queue-lock';
-    const deadline=performance.now()+250;
+    const started=performance.now(),maximum=started+1000;
+    let deadline=started+250;
     type Ticket=z.infer<typeof queueRecord>;
     const invalid=()=>Object.assign(new Error('Cleanup queue evidence is invalid'),{code:'CLEANUP_EVIDENCE'});
     // Queue allocation/inspection is short; the main transaction never holds this gate.
@@ -170,6 +171,7 @@ export class RuntimeCleanupStore {
     const remove=(limit=deadline)=>{assertTicket(limit);fs.unlinkSync(ticketFile);};
     try{
       for(;;){
+        if(performance.now()>=maximum)throw Object.assign(new Error('Cleanup writer unavailable'),{code:'CLEANUP_BUSY'});
         let release:(()=>void)|undefined;
         // The known head is only a readiness hint. Avoid reopening every immutable
         // ticket on each poll; validate the entire queue under the allocator before admission.
@@ -177,6 +179,9 @@ export class RuntimeCleanupStore {
           const gate=this.exclusive(allocator,deadline);
           try{
             assertTicket();const rows=liveQueue();if(!rows.some(row=>row.token===mine.token))throw invalid();
+            // Slow but advancing native writers are not a dead owner. Extend
+            // only after an observed head change, with a one-second hard cap.
+            if(predecessor&&rows[0]?.token!==predecessor.token)deadline=Math.min(maximum,Math.max(deadline,performance.now()+250));
             if(rows[0]?.token===mine.token)release=this.exclusive(file,deadline);else predecessor=rows[0];
           }
           finally{gate();}

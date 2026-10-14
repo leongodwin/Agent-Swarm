@@ -192,7 +192,7 @@ it.each(['missing','oversized','duplicate','non-file'])('quarantines %s evidence
   if(kind==='non-file'){fs.unlinkSync(file);fs.mkdirSync(file);}
   expect(store.view().unavailableReason).toContain('quarantined');expect(store.view().records).toHaveLength(1);
 });
-it.each([{writers:2,count:20,delay:0},{writers:3,count:20,delay:10}])('serializes $writers native processes with $delay ms flush latency',async({writers,count,delay})=>{
+it.each([{writers:2,count:20,delay:0},{writers:3,count:20,delay:10},{writers:3,count:20,delay:30}])('serializes $writers native processes with $delay ms flush latency',async({writers,count,delay})=>{
   const file=fixture(),script=path.join(path.dirname(file),'writer.mjs');
   const module=new URL('./runtimeCleanup.ts',import.meta.url).href;
   fs.writeFileSync(script,`import fs from 'node:fs';import {RuntimeCleanupStore} from ${JSON.stringify(module)};

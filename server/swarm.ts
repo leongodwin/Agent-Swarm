@@ -1,4 +1,5 @@
 import {runtimeModelError} from '../shared/runtimePolicy.ts';
+import {z} from 'zod';
 import { deliveryCapabilitiesPrompt } from './deliveryCapabilities.ts';
 import type { SessionAuthorization } from './toolGovernance.ts';
 import { DELIVERY_ENGINEERING } from '../shared/delivery.ts';
@@ -117,6 +118,7 @@ interface PersistedAgent {
   sessionId: string | null;
   sessionCli: AgentCli | null; // the CLI whose session sessionId is: only it can resume it
   lastError: string | null;
+  modelBlock?:{fingerprint:string;reason:string};
   logTail: LogLine[];
 }
 
@@ -488,6 +490,7 @@ export class Swarm {
           task: a.task ?? (a.issueNumber ? 'issue' : null),
           cli: isCli(a.cli) ? a.cli : '',
           sessionCli: isCli(a.sessionCli) ? a.sessionCli : null,
+          modelBlock:a.modelBlock===undefined?undefined:z.object({fingerprint:z.string().regex(/^[a-f0-9]{64}$/),reason:z.string().min(1).max(1000)}).strict().parse(a.modelBlock),
         })),
         qa: (loaded.qa ?? []).map((q) => ({
           ...q,
@@ -1533,6 +1536,7 @@ export class Swarm {
       this.emitCeo();
     }
     if (a.role !== 'ceo') {
+      this.workerModelHold(a,(a.cli||this.state.settings.defaultCli) as AgentCli);
       if (patch.title !== undefined) a.title = String(patch.title).trim().slice(0, 60);
       if (patch.specialty !== undefined) a.specialty = specialtySlug(patch.specialty);
       if (patch.brief !== undefined) a.brief = String(patch.brief).trim().slice(0, 2500);
@@ -1733,6 +1737,15 @@ export class Swarm {
   private modelFor(a: PersistedAgent, cli: AgentCli | undefined) {
     return effectiveModel(a.model, cli ?? 'codex', this.state.settings, DEFAULT_MODEL);
   }
+  private workerModelFingerprint(cli:AgentCli,model:string){return crypto.createHash('sha256').update(JSON.stringify([cli,model])).digest('hex');}
+  private workerModelHold(a:PersistedAgent,cli:AgentCli){
+    if(!a.modelBlock)return null;
+    if(a.modelBlock.fingerprint===this.workerModelFingerprint(cli,this.modelFor(a,cli)))return a.modelBlock.reason;
+    delete a.modelBlock;this.save();return null;
+  }
+  private workerModelBlockedForScheduling(a:PersistedAgent){
+    return !!a.modelBlock&&[(a.cli||this.state.settings.defaultCli) as AgentCli,a.sessionCli].some(cli=>!!cli&&a.modelBlock!.fingerprint===this.workerModelFingerprint(cli,this.modelFor(a,cli)));
+  }
   /** Admit the model that dispatch will use; explicit prohibited values cannot hide behind fallback. */
   private configuredModelError(cli:AgentCli,model:string,ceo=false):string|null{
     if(typeof model!=='string')return 'Model must be a string';
@@ -1917,6 +1930,7 @@ export class Swarm {
     const context = this.workerContext(a, repo, resume, retainedCli);
     if (context === null) return 'Execution context is unavailable; restore configuration before retrying';
     const cli = retainedCli ?? (resume && a.sessionCli && a.role !== 'ceo' ? a.sessionCli : a.cli || this.state.settings.defaultCli);
+    const held=this.workerModelHold(a,cli);if(held)return held;
     const projects = [repo, ...this.linkedRepos(repo)];
     if (projects.length !== repo.links.length + 1) return 'A linked project is no longer connected';
     const blocker = await this.projectReadiness(projects, cli, this.taskStops.get(a.id)?.signal);
@@ -2011,12 +2025,13 @@ export class Swarm {
       return authority() ?? blocker;
     };
     this.emitAgent(a);
+    const launchedModel=this.modelFor(a,how.cli);
     const handle = this.backend.startSession(
       {
         cwd,
         prompt,
         systemAppend,
-        model: this.modelFor(a, how.cli),
+        model: launchedModel,
         effort: a.effort || this.state.settings.defaultEffort,
         browserTesting: repo.browserTesting,
         additionalDirectories: this.linkedRepos(repo).map((r) => this.backend.mainDir(r.fullName)),
@@ -2063,7 +2078,7 @@ export class Swarm {
         },
         limited: (at) => {if (live()) this.pauseForLimit(at);},
         usageWarning: (info) => {if (live()) this.paceForWarning(info);},
-        finished: (result) => {if (!live()) return; const fallbackAuthorized=authority()===null;completed = true; return this.onFinished(a, repo, result, generation,how.cli,fallbackAuthorized).catch(()=>{
+        finished: (result) => {if (!live()) return; const fallbackAuthorized=authority()===null;completed = true; return this.onFinished(a, repo, result, generation,how.cli,fallbackAuthorized,launchedModel).catch(()=>{
           if(!this.ownsTask(a,generation))return;
           rt.session=null;rt.currentTool=null;a.status='error';a.endedAt=Date.now();
           a.lastError='Completion processing failed; reconcile artifacts and external actions before retrying';
@@ -2076,7 +2091,7 @@ export class Swarm {
     return true;
   }
 
-  private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a),sessionCli?:AgentCli,fallbackAuthorized=false) {
+  private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a),sessionCli?:AgentCli,fallbackAuthorized=false,launchedModel?:string) {
     const rt = this.agentRt.get(a.id);
     if (!rt || !this.ownsTask(a, generation)) return;
     if (this.officeUpdate.handedOver) return; // stopped for the office's update: recovered like after a restart
@@ -2085,6 +2100,11 @@ export class Swarm {
     a.endedAt = Date.now();
     a.costUsd += result.costUsd;
     a.turns += result.turns;
+    const modelError=result.configurationError;
+    if(!result.ok&&sessionCli&&modelError?.cli===sessionCli&&modelError.model===launchedModel){
+      const reason=modelError.kind==='unverified-model'?'The worker model is not advertised in verified native metadata. Select a listed model, clear its override or change the runtime; retries remain held for this runtime/model.':'The native runtime rejected the worker model. Select an available model, clear its override or change the runtime; retries remain held for this runtime/model.';
+      a.modelBlock={fingerprint:this.workerModelFingerprint(sessionCli,launchedModel!),reason};
+    }
     // Dev servers the agent forgot to stop would otherwise keep its port and lock its desk folder.
     const slug = this.agentSlug(a);
     void this.deskOperation(a, async () => {if (this.ownsTask(a, generation)) await this.backend.releaseDesk(repo.fullName, slug, this.port(a));}).catch(() => undefined);
@@ -2710,7 +2730,7 @@ export class Swarm {
   private available(repo: PersistedRepo, role: AgentRole) {
     const now = Date.now();
     return this.state.agents
-      .filter((a) => a.repoId === repo.id && a.role === role && (FREE.includes(a.status) || (a.status === 'error' && now - (a.endedAt ?? 0) >= ERROR_COOLDOWN_MS)))
+      .filter((a) => a.repoId === repo.id && a.role === role && !this.workerModelBlockedForScheduling(a) && (FREE.includes(a.status) || (a.status === 'error' && now - (a.endedAt ?? 0) >= ERROR_COOLDOWN_MS)))
       .sort((x, y) => x.desk - y.desk);
   }
 
@@ -3140,9 +3160,9 @@ export class Swarm {
 
   private ceoCli(a:PersistedAgent):AgentCli{return isCli(a.cli)?a.cli:'codex';}
   private ceoModelFingerprint(model:string,cli:AgentCli='codex'){return crypto.createHash('sha256').update(JSON.stringify([cli,'unsupported-model',model])).digest('hex');}
-  private holdCeoModel(model:string){
+  private holdCeoModel(model:string,unverified=false){
     const selected=this.state.agents.find(agent=>agent.id===CEO_ID);
-    const reason='The coding runtime rejected the configured CEO model. Select an available model, clear the override, or select a compatible coding agent; queued work is held until the model changes or its coding agent changes.';
+    const reason=(unverified?'The configured CEO model is not advertised in verified native metadata.':'The coding runtime rejected the configured CEO model.')+' Select an available model, clear the override, or select a compatible coding agent; queued work is held until the model changes or its coding agent changes.';
     this.state.ceo.modelBlock={fingerprint:this.ceoModelFingerprint(model,selected?this.ceoCli(selected):'codex'),reason};
     this.state.ceo.blockedReason=reason;this.state.ceo.retryAt=null;
   }
@@ -3348,8 +3368,8 @@ export class Swarm {
     } else if (!result.ok) {
       a.status = 'error';
       a.lastError = result.errors.join('; ') || 'Session failed';
-      if(result.configurationError?.cli===sessionCli&&result.configurationError.kind==='unsupported-model'){
-        if(sessionCli===this.ceoCli(a))this.holdCeoModel(result.configurationError.model);
+      if(result.configurationError?.cli===sessionCli){
+        if(sessionCli===this.ceoCli(a))this.holdCeoModel(result.configurationError.model,result.configurationError.kind==='unverified-model');
         this.enqueueCeo(job);
       }
       this.appendLog(a, [{ kind: 'error', text: `✗ ${a.lastError}` }]);

@@ -58,6 +58,20 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it('holds an unadvertised worker pin across retry, cosmetic edits and restart until its effective model changes',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const agent=swarm.hireAgent('synthetic/repo',{cli:'codex',model:'gpt-not-listed'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  await fake.startSession.mock.calls[0][1].finished({ok:false,text:'',costUsd:0,turns:0,errors:['Model is not advertised'],configurationError:{kind:'unverified-model',cli:'codex',model:'gpt-not-listed'}});
+  swarm.updateRepo('synthetic/repo',{autoAssign:true});const preparationCalls=fake.prepareDesk.mock.calls.length;await vi.advanceTimersByTimeAsync(180000);expect(fake.prepareDesk).toHaveBeenCalledTimes(preparationCalls);expect(fake.startSession).toHaveBeenCalledOnce();swarm.updateRepo('synthetic/repo',{autoAssign:false});
+  swarm.updateAgent(agent.id,{name:'Cosmetic rename',effort:'high'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.lastError).toContain('retries remain held'));expect(fake.startSession).toHaveBeenCalledOnce();
+  vi.useRealTimers();await swarm.shutdown(true);vi.useFakeTimers();const restoredBackend=backend();restoredBackend.terminals=true;const restored=new Swarm(restoredBackend as unknown as Backend);offices.push(restored);restored.capabilityPreflight=vi.fn(async()=>null);await restored.init();
+  await restored.assign(agent.id,1);await vi.waitFor(()=>expect(restored.snapshot().agents.find(row=>row.id===agent.id)?.lastError).toContain('retries remain held'));expect(restoredBackend.startSession).not.toHaveBeenCalled();expect(restored.capabilityPreflight).not.toHaveBeenCalled();
+  restored.updateAgent(agent.id,{model:''});await restored.assign(agent.id,1);await vi.waitFor(()=>expect(restoredBackend.startSession).toHaveBeenCalledOnce());expect(restored.capabilityPreflight).toHaveBeenCalled();
+});
+it.each(['wrong-runtime','wrong-model'])('does not persist an unrelated %s model rejection on the worker',async mode=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const agent=swarm.hireAgent('synthetic/repo',{cli:'codex',model:'gpt-selected'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  await fake.startSession.mock.calls[0][1].finished({ok:false,text:'',costUsd:0,turns:0,errors:['Synthetic model error'],configurationError:{kind:'unverified-model',cli:mode==='wrong-runtime'?'gemini':'codex',model:mode==='wrong-model'?'gpt-other':'gpt-selected'}});
+  await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+});
 it('holds a pending assignment when drain begins during capability readiness and rechecks on explicit retry',async()=>{
   const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Drain race worker'});let ready!:(value:string|null)=>void;
   const checks=vi.fn(()=>new Promise<string|null>(resolve=>{ready=resolve;}));swarm.capabilityPreflight=checks;

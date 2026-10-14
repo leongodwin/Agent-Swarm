@@ -1,4 +1,5 @@
 import {prepareCodexHooks} from './codexHookTrust.ts';
+import {CodexModelNotAdvertisedError} from './codexModelMetadata.ts';
 import {geminiSettings,GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
 import {runtimeModelError} from '../shared/runtimePolicy.ts';
 import { playwrightMcp } from './browserTools.ts';
@@ -776,7 +777,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     remember(live);
     if (live.resumeId) cb.sessionId(live.resumeId);
     const resumeTurn=()=>{if(done)return;if(live){live.governanceReady=true;remember(live);}if(opts.typed||opts.reattach)busy();else handle.send(opts.prompt);recoveryPending=!!opts.reattach;};
-    if(cli==='codex'){live.governanceReady=false;remember(live);void verifyCodex().then(resumeTurn,()=>finish({ok:false,text:'',errors:['Retained Codex hook trust could not be verified; follow-up denied']}));}else resumeTurn();
+    if(cli==='codex'){live.governanceReady=false;remember(live);void verifyCodex().then(resumeTurn,error=>finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Retained Codex hook trust could not be verified; follow-up denied'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})}));}else resumeTurn();
     recoveryPending = !!opts.reattach;
     shotTimer = setInterval(collectShots, 2000);
     monitorCapacity();
@@ -948,7 +949,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const begin=()=>{void replaced.then(()=>{if(done)return;const blocker=cleanupBlocker();if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}beginAfterCleanup();});};
   // Codex won't resume a thread the office archived (see codexThread): it's unarchived first.
   if(cli==='codex'){
-    void verifyCodex().then(async verified=>{if(done)return;codexTrustReady=true;log([{kind:'system',text:`Verified native trust for ${verified.verified} generated office hooks.`}]);if(opts.resumeSessionId)await codexThread('unarchive',opts.resumeSessionId);if(!done)begin();},()=>{if(!done)finish({ok:false,text:'',errors:['Codex office hook trust could not be verified; no task was sent. Inspect native hook policy and source integrity.']});});
+    void verifyCodex().then(async verified=>{if(done)return;codexTrustReady=true;log([{kind:'system',text:`Verified native trust for ${verified.verified} generated office hooks.`}]);if(opts.resumeSessionId)await codexThread('unarchive',opts.resumeSessionId);if(!done)begin();},error=>{if(!done)finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Codex office hook trust could not be verified; no task was sent. Inspect native hook policy and source integrity.'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})});});
   }
   else if(cli==='gemini')void verifyGeminiProfile(cmd,opts.browserTesting).then(blocker=>{if(done)return;if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}begin();},()=>finish({ok:false,text:'',errors:['Gemini protected-profile validation failed; execution denied']}));
   else begin();

@@ -28,6 +28,7 @@ import { setToolGovernanceGate } from './toolGovernance.ts';
 import {OPENCODE_PLUGIN_SOURCE} from './clis.ts';
 import {GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
 import {prepareCodexHooks} from './codexHookTrust.ts';
+import {CodexModelNotAdvertisedError} from './codexModelMetadata.ts';
 import crypto from 'node:crypto';
 
 afterEach(async () => {native.exit?.(0);native.autoExit=true;await releaseClis(false); vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs(); setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'})); });
@@ -82,6 +83,12 @@ it('denies an actual CLI hook when task authority is revoked during asynchronous
   active=false;finish();
   expect(await pending).toMatchObject({hookSpecificOutput:{permissionDecision:'deny'}});
   handle.stop();
+});
+it('reports the native metadata blocker separately from hook trust without sending a task',async()=>{
+  vi.mocked(prepareCodexHooks).mockRejectedValueOnce(new CodexModelNotAdvertisedError('gpt-not-listed'));native.write.mockClear();
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal,finished=vi.fn();
+  const handle=await startCliSession({cwd:HOME_DIR,prompt:'No task may be sent',systemAppend:'',model:'gpt-not-listed',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+  await vi.waitFor(()=>expect(finished).toHaveBeenCalledOnce());expect(finished.mock.calls[0][0]).toMatchObject({ok:false,configurationError:{kind:'unverified-model',cli:'codex',model:'gpt-not-listed'},errors:[expect.stringContaining('not advertised')]});expect(native.write).not.toHaveBeenCalled();handle.stop();
 });
 
 it('carries an OpenCode pre-tool request through live session authority and denies cancellation before returning a grant',async()=>{
