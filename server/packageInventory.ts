@@ -157,9 +157,10 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
             if(!connector||connector!==expected||typeof host.operationId!=='string')throw new Error('Unresolved flow operation connection');record.connector=connector;record.operationId=host.operationId;
             if(connector==='shared_commondataserviceforapps'){
               const schema=inspectFlowSchemaReferences(host.operationId,operation.inputs?.parameters);
-              if(schema.entitySet){if(resource.schemaReferences!.length<300)resource.schemaReferences!.push({resource:id,entitySet:schema.entitySet,columns:schema.columns});else issue(`Flow ${id}: explicit schema references exceed their inventory bound`);}
+              if(schema.unavailable.length)resource.complete=false;
+              if(schema.entitySet){if(resource.schemaReferences!.length<300)resource.schemaReferences!.push({resource:id,entitySet:schema.entitySet,columns:schema.columns});else {resource.complete=false;issue(`Flow ${id}: explicit schema references exceed their inventory bound`);}}
               for(const reason of schema.unavailable)issue(`Flow ${id}: ${reason}`);
-            }else if(connector==='shared_commondataservice')issue(`Flow ${id}: legacy Dataverse connector requires an independent schema and environment adapter`);
+            }else if(connector==='shared_commondataservice'){resource.complete=false;issue(`Flow ${id}: legacy Dataverse connector requires an independent schema and environment adapter`);}
           } else if(!['Recurrence','Scope','Foreach','Until','If','Switch','Compose','ParseJson','InitializeVariable','SetVariable','AppendToArrayVariable','AppendToStringVariable','IncrementVariable','DecrementVariable','Select','Query','Table','Join','Terminate','Wait','Response'].includes(type)) {resource.complete=false;issue(`Flow ${id} uses unsupported operation type ${type}`);}
           resource.operations.push(record);
           if(operation.actions)walk(operation.actions,depth+1);if(operation.else?.actions)walk(operation.else.actions,depth+1);if(operation.default?.actions)walk(operation.default.actions,depth+1);

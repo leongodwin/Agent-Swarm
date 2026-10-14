@@ -12,6 +12,12 @@ export function inspectFlowSchemaReferences(operationId:string,parameters:unknow
   if(!['ListRecords','GetItem','CreateRecord','UpdateOnlyRecord','UpdateRecord','DeleteRecord'].includes(operationId)){unknown('Dataverse operation requires a schema-effect adapter');return result;}
   const parsed=z.record(z.string(),z.unknown()).safeParse(parameters);if(!parsed.success){unknown('Dataverse table parameters are unavailable');return result;}
   const fields=parsed.data,table=logical.safeParse(fields.entityName);
+  const write=['CreateRecord','UpdateOnlyRecord','UpdateRecord'].includes(operationId);
+  const allowed=new Set(['entityName','organization','x-ms-odata-metadata-full',...(['GetItem','ListRecords'].includes(operationId)?['$select','$expand']:[]),...(operationId==='ListRecords'?['$filter','$orderby','fetchXml','$top','$skiptoken','partitionId']:[]),...(operationId==='GetItem'||['UpdateOnlyRecord','UpdateRecord','DeleteRecord'].includes(operationId)?['recordId','partitionId']:[]),...(write?['item']:[])]);
+  for(const key of Object.keys(fields))if(!allowed.has(key)&&!(write&&key.startsWith('item/')))unknown('Dataverse operation includes an unrecognized parameter; schema effects are unverified');
+  if(fields['x-ms-odata-metadata-full']!==undefined&&fields['x-ms-odata-metadata-full']!==false)unknown('Expanded Dataverse metadata response scope requires independent resolution');
+  if(fields.$top!==undefined&&(!Number.isSafeInteger(fields.$top)||Number(fields.$top)<0))unknown('Dataverse row-count parameter is malformed or dynamic');
+  for(const key of ['recordId','partitionId','$skiptoken'])if(fields[key]!==undefined&&(typeof fields[key]!=='string'||!fields[key]))unknown('Dataverse row/paging parameter is malformed');
   if(table.success)result.entitySet=table.data;else unknown('Dataverse table identity is dynamic or unsupported');
   if(fields.organization!==undefined)unknown('Cross-environment Dataverse operation requires independent target binding');
   const columns=new Set<string>();
@@ -22,8 +28,8 @@ export function inspectFlowSchemaReferences(operationId:string,parameters:unknow
   }
   else if(['ListRecords','GetItem'].includes(operationId))unknown('Dataverse read does not declare an explicit selected-column scope');
   for(const [key,value] of Object.entries(fields)){
-    if(key.startsWith('item/'))column(key.slice(5));
-    if(key==='item'){
+    if(write&&key.startsWith('item/'))column(key.slice(5));
+    if(write&&key==='item'){
       const body=z.record(z.string(),z.unknown()).safeParse(value);if(!body.success)unknown('Dataverse row fields are dynamic or unavailable');else for(const name of Object.keys(body.data))column(name);
     }
   }

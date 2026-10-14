@@ -6,12 +6,16 @@ import {dataverseGuid} from './targetOperations.ts';
 /** Resolve explicit resource references through metadata. Never guess a logical name by singularizing an entity set. */
 export async function verifyResourceSchemaReferences(input:ResourceSchemaReference[],tables:TargetComponent[],actions:TargetAction[],request:Request){
   const refs=z.array(resourceSchemaReference).max(300).parse(input),resolved=new Map<string,string>();
+  const identities=new Map<string,string>(),names=new Map<string,string>();
   for(const reference of refs){
     let logicalName=reference.logicalName;
     if(reference.entitySet){
       if(!resolved.has(reference.entitySet)){
         const value=z.object({value:z.array(z.object({LogicalName:z.string().regex(/^[a-z_][a-z0-9_]*$/),EntitySetName:z.string(),MetadataId:dataverseGuid})).length(1),'@odata.nextLink':z.never().optional()}).parse(await request('GET',`EntityDefinitions?$select=LogicalName,EntitySetName,MetadataId&$filter=${encodeURIComponent(`EntitySetName eq '${reference.entitySet}'`)}`)).value[0];
         if(value.EntitySetName!==reference.entitySet)throw new Error('Resource table metadata differs from the referenced entity set');
+        const id=value.MetadataId.toLowerCase(),name=value.LogicalName;
+        if(identities.has(id)&&identities.get(id)!==name||names.has(name)&&names.get(name)!==id||[...resolved].some(([set,logical])=>logical===name&&set!==reference.entitySet))throw new Error('Resource table metadata identities are contradictory');
+        identities.set(id,name);names.set(name,id);
         resolved.set(reference.entitySet,value.LogicalName);
       }
       logicalName=resolved.get(reference.entitySet)!;

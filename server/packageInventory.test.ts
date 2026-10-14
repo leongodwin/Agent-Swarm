@@ -16,6 +16,10 @@ it('derives actual flow references and operations from a checksum-verified packa
   expect(report.resources[0]).toMatchObject({id,complete:true,connectors:['shared_commondataserviceforapps'],operations:[{type:'Recurrence'},{type:'OpenApiConnection',connector:'shared_commondataserviceforapps',operationId:'ListRecords'}]});
   expect(report.packageSha256).toBe(crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex'));expect(report.files).toHaveLength(3);expect(await fs.readdir(root)).toEqual(['solution.zip']);
 });
+it('keeps an unrecognized Dataverse parameter incomplete at both resource and package scope',async()=>{
+  const definition=JSON.parse(flow());definition.properties.definition.actions.query.inputs.parameters.savedQuery='private saved query';const {file}=await fixture({'solution.xml':solution(),'customizations.xml':custom(),'Workflows/flow.json':JSON.stringify(definition)});
+  const report=await inspectSolutionPackage(file);expect(report.archiveComplete).toBe(true);expect(report.resourceInventoryComplete).toBe(false);expect(report.resources[0].complete).toBe(false);expect(report.issues.join(' ')).toContain('unrecognized parameter');expect(JSON.stringify(report)).not.toContain('private saved query');
+});
 it('reports unknown operations, opaque components, undeclared files and missing root counterparts as incomplete',async()=>{
   const {file}=await fixture({'solution.xml':solution(`<RootComponent type="29" id="{${id}}"/><RootComponent type="91" id="{22222222-2222-4222-8222-222222222222}"/><RootComponent type="1" schemaName="exp_missing"/>`),'customizations.xml':custom(),'Workflows/flow.json':flow('Http'),'extra.js':'fetch("https://outside.test")'});
   const report=await inspectSolutionPackage(file);expect(report.archiveComplete).toBe(true);expect(report.resourceInventoryComplete).toBe(false);expect(report.resources[0].complete).toBe(false);for(const finding of ['type 91','unsupported operation','extra.js','declared table'])expect(report.issues.join(' ')).toContain(finding);
