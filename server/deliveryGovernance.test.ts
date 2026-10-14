@@ -4,7 +4,9 @@ import {createDeliveryGovernance} from './deliveryGovernance.ts';
 import type {LifecycleRequest} from './lifecycleGovernance.ts';
 import {manifestDigest} from './lifecycleGovernance.ts';
 import type {DeclaredSchemaObservation} from './declaredSchema.ts';
+import {declaredSchemaObservation} from './declaredSchema.ts';
 import type {AdvancedPolicyObservation,AdvancedPolicyRequest} from './advancedPolicy.ts';
+import {advancedPolicyObservation} from './advancedPolicy.ts';
 import type {ConnectorCatalogueObservation,ConnectorCatalogueRequest} from './connectorCatalogue.ts';
 const guid='11111111-1111-4111-8111-111111111111';
 const manifest={schemaVersion:1,solutionUniqueName:'Expenses',solutionVersion:'1.0.0.0',solutionZip:'release.zip',hasUi:false,recovery:{runbook:'recovery.md',rehearsalReport:'drill.json'},documentation:['one.md','two.md','three.md'],build:[{executable:'node',args:['build.js']}],test:[{executable:'node',args:['test.js']}],verify:[{executable:'node',args:['verify.js']}],targetBinding:{organizationId:guid,userId:guid},platformIdentity:{tenantId:guid,username:'tester@company.test',environmentId:guid},targetComponents:[{key:'dataverse',kind:'connection-reference',logicalName:'exp_dataverse'}],postDeployActions:[{id:'binding',type:'connection-reference-check',component:'dataverse',connectionId:'approved',connectorId:'shared_commondataserviceforapps'}]};
@@ -49,6 +51,30 @@ it('retains a known advanced constraint denial when classic policy discovery fai
   const input=await packaged(),value=connectorConstraints(false),check=createDeliveryGovernance({observation:()=>{throw new Error('private classic detail');}},undefined,async()=>value);
   const result=await check(input);expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('outside observed policy');expect(JSON.stringify(result)).not.toContain('private classic');
   const tampered=await check({...input,packageSha256:'f'.repeat(64)});expect(tampered.status).toBe('unavailable');expect(tampered.reasons.join(' ')).not.toContain('outside observed policy');
+});
+for(const classicFails of [false,true])it.each(['build','test','import','post-deploy','verify','health'] as const)(`retains a validated denial after publication fails (classic failure ${classicFails}) at %s`,async phase=>{
+  const input=await packaged(),value=connectorConstraints(false),file=`advanced-policy-${crypto.createHash('sha256').update(JSON.stringify(advancedPolicyObservation.parse(value),null,2)).digest('hex')}.json`;
+  await fs.mkdir(path.join(input.evidenceDirectory!,file),{recursive:true});
+  const source={observation:()=>{if(classicFails)throw new Error('private classic detail');return observation();}};
+  const result=await createDeliveryGovernance(source,undefined,async()=>value)({...input,phase});
+  expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('SendEmailV2');expect(result.reasons.join(' ')).toContain('outside observed policy');
+  expect(result.reasons.join(' ')).toContain('could not be bound to this stage or persisted');expect(result.advancedPolicyFile).toBeUndefined();
+  expect(JSON.stringify(result)).not.toContain('private classic detail');expect((await fs.stat(path.join(input.evidenceDirectory!,file))).isDirectory()).toBe(true);
+});
+it.each(['build','test','import','post-deploy','verify','health'] as const)('never advertises unpublished matched advanced evidence at %s',async phase=>{
+  const input=await packaged(),value=connectorConstraints(true),file=`advanced-policy-${crypto.createHash('sha256').update(JSON.stringify(advancedPolicyObservation.parse(value),null,2)).digest('hex')}.json`;
+  await fs.mkdir(path.join(input.evidenceDirectory!,file),{recursive:true});
+  const result=await createDeliveryGovernance({observation:()=>observation()},undefined,async()=>value)({...input,phase});
+  expect(result.status).toBe('unavailable');expect(result.advancedPolicyFile).toBeUndefined();expect(result.reasons.join(' ')).toContain('could not be bound to this stage or persisted');
+});
+it.each(['build','test','import','post-deploy','verify','health'] as const)('never advertises unpublished schema evidence at %s',async phase=>{
+  const input=await packaged(),schema=async(value:LifecycleRequest):Promise<DeclaredSchemaObservation>=>{
+    const receipt:DeclaredSchemaObservation={scope:'declared-target-schema',complete:false,status:'observed',phase:value.phase,sourceCommit:value.sourceCommit,releaseId:value.releaseId,environmentUrl:value.environmentUrl,manifestSha256:manifestDigest(value.manifest),checkedAt:new Date().toISOString(),reason:'Synthetic observed columns',identity:manifest.platformIdentity,binding:manifest.targetBinding,tables:['exp_report'],observations:[{resource:'EntityDefinitions',value:{}}]};
+    const file=`declared-schema-${crypto.createHash('sha256').update(JSON.stringify(declaredSchemaObservation.parse(receipt),null,2)).digest('hex')}.json`;
+    await fs.mkdir(path.join(input.evidenceDirectory!,file));return receipt;
+  };
+  const result=await createDeliveryGovernance({observation:()=>observation()},schema)({...input,phase});
+  expect(result.status).toBe('unavailable');expect(result.declaredSchemaFile).toBeUndefined();expect(result.reasons.join(' ')).toContain('Declared schema evidence could not be bound to this stage or persisted');
 });
 async function packaged(customizationExtra='',rootExtra='',unknownParameter=false,ambiguousJson=false) {
   const checkout=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-governed-package-'));directories.push(checkout);const evidenceDirectory=path.join(checkout,'evidence');

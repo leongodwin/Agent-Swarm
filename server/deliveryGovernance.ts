@@ -67,15 +67,15 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
       if(request.signal?.aborted||value.tenantId.toLowerCase()!==identity.tenantId.toLowerCase()||value.caller.toLowerCase()!==identity.caller.toLowerCase()||value.environmentId.toLowerCase()!==platformIdentity.environmentId.toLowerCase()||age>60_000||age < -30_000)throw new Error('Advanced policy context differs');
       advancedReason=value.reason;
       if(advancedResources){const comparison=compareAdvancedConnectorConstraints(value,{...identity,environmentId:platformIdentity.environmentId},advancedResources);advancedConflict=comparison.status==='conflict';advancedReasons=comparison.reasons;}
-      if(request.evidenceDirectory){const content=JSON.stringify(value,null,2);advancedPolicyFile=`advanced-policy-${crypto.createHash('sha256').update(content).digest('hex')}.json`;await atomicWrite(path.join(request.evidenceDirectory,advancedPolicyFile),content);}
-    }catch{advancedConflict=false;advancedReasons=[];advancedReason='Advanced policy observation could not be bound to this stage or persisted';}};
+      if(request.evidenceDirectory){const content=JSON.stringify(value,null,2),file=`advanced-policy-${crypto.createHash('sha256').update(content).digest('hex')}.json`;await atomicWrite(path.join(request.evidenceDirectory,file),content);advancedPolicyFile=file;}
+    }catch{advancedReason='Advanced policy observation could not be bound to this stage or persisted';}};
     let schemaReason='Fresh identity-bound declared target schema evidence is unavailable';
     const schemaWork=async()=>{if(observeSchema)try{
       const schema=declaredSchemaObservation.parse(await observeSchema({...request,resourceSchemaReferences}));
       const age=Date.now()-Date.parse(schema.checkedAt);
       if(request.signal?.aborted||schema.phase!==request.phase||schema.sourceCommit!==request.sourceCommit||schema.releaseId!==request.releaseId||schema.environmentUrl!==request.environmentUrl||schema.manifestSha256!==manifestDigest(request.manifest)||age>60_000||age < -30_000||(schema.status==='observed'&&(schema.identity?.tenantId.toLowerCase()!==identity.tenantId.toLowerCase()||schema.identity?.username.toLowerCase()!==identity.caller.toLowerCase()||schema.identity?.environmentId.toLowerCase()!==platformIdentity.environmentId.toLowerCase()||schema.binding?.organizationId.toLowerCase()!==manifest.targetBinding?.organizationId.toLowerCase()||schema.binding?.userId.toLowerCase()!==manifest.targetBinding?.userId.toLowerCase())))throw new Error('Schema context differs');
       schemaReason=schema.reason;
-      if(request.evidenceDirectory){const content=JSON.stringify(schema,null,2);declaredSchemaFile=`declared-schema-${crypto.createHash('sha256').update(content).digest('hex')}.json`;await atomicWrite(path.join(request.evidenceDirectory,declaredSchemaFile),content);}
+      if(request.evidenceDirectory){const content=JSON.stringify(schema,null,2),file=`declared-schema-${crypto.createHash('sha256').update(content).digest('hex')}.json`;await atomicWrite(path.join(request.evidenceDirectory,file),content);declaredSchemaFile=file;}
     }catch{schemaReason='Declared schema evidence could not be bound to this stage or persisted';}};
     let snapshot:unknown;
     const [,policy]=await Promise.allSettled([schemaWork(),Promise.resolve().then(()=>source.ensureObservation?source.ensureObservation(identity,{signal:request.signal,force:true,timeoutMs:45_000}):source.observation(identity)),advancedWork(),catalogueWork()]);
