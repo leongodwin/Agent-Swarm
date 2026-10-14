@@ -3,11 +3,47 @@ import {OPENCODE_PLUGIN_SOURCE} from './clis.ts';
 import {evaluateToolRequest} from './toolGovernance.ts';
 import {hookDecision} from '../shared/hookDecision.ts';
 
-afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();});
-async function plugin(){
+afterEach(()=>{vi.useRealTimers();vi.unstubAllEnvs();vi.unstubAllGlobals();});
+async function plugin(messages:(options?:any)=>Promise<any>=async()=>({data:[]})){
   const factory=new Function(`return (${OPENCODE_PLUGIN_SOURCE.replace('export default async function','async function')});`)();
-  return factory({client:{session:{messages:async()=>({data:[]})}}});
+  return factory({client:{session:{messages}}});
 }
+function completedMessages(user='msg_user') {return [{info:{id:user,sessionID:'root',role:'user',time:{created:10}},parts:[]},{info:{id:'msg_assistant',sessionID:'root',role:'assistant',parentID:user,time:{created:11,completed:12}},parts:[{type:'text',text:'Verified synthetic answer',sessionID:'root',messageID:'msg_assistant'}]}];}
+function captureOutcomes(){endpoint();vi.stubEnv('CUBEFARM_OPENCODE_SESSION_ID','root');const bodies:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_url,options)=>{bodies.push(JSON.parse(options.body));return {ok:true};}));return bodies;}
+async function observeUser(hooks:any,id='msg_user'){await hooks.event({event:{type:'message.updated',properties:{info:{sessionID:'root',id,role:'user'}}}});}
+it('verifies the latest completed assistant belongs to the latest user before reporting success',async()=>{
+  const bodies=captureOutcomes(),hooks=await plugin(async()=>({data:completedMessages()}));await observeUser(hooks);await hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});
+  expect(bodies.at(-1)).toMatchObject({hook_event_name:'TurnComplete',failed:false,last_assistant_message:'Verified synthetic answer'});
+});
+it.each(['wrong-parent','wrong-session','pending','reversed-time','wrong-part','empty','oversized','provider-error','invalid-error','duplicate','unordered','unavailable'] as const)('does not report successful idle completion from %s reply evidence',async mode=>{
+  const bodies=captureOutcomes(),messages:any[]=completedMessages();
+  if(mode==='wrong-parent')messages[1].info.parentID='msg_older';if(mode==='wrong-session')messages[1].info.sessionID='another';if(mode==='pending')delete messages[1].info.time.completed;if(mode==='reversed-time')messages[1].info.time.completed=1;if(mode==='wrong-part')messages[1].parts[0].messageID='another';if(mode==='empty')messages[1].parts=[];if(mode==='oversized')messages[1].parts[0].text='x'.repeat(256*1024+1);if(mode==='provider-error')messages[1].info.error={name:'APIError',data:{message:'Provider rate limited',statusCode:429,isRetryable:true}};
+  if(mode==='invalid-error')messages[1].info.error=false;if(mode==='duplicate')messages.push(messages[1]);if(mode==='unordered')messages.reverse();
+  const hooks=await plugin(async()=>{if(mode==='unavailable')throw new Error('offline');return {data:messages};});await observeUser(hooks);await hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});
+  expect(bodies.at(-1)).toMatchObject({hook_event_name:'TurnComplete',failed:true});expect(bodies.at(-1)).not.toHaveProperty('last_assistant_message');
+  if(mode==='provider-error')expect(bodies.at(-1).native_error.data.statusCode).toBe(429);
+});
+it('carries a lost error notification into idle completion and clears it only for a new user message',async()=>{
+  const bodies=captureOutcomes();vi.stubGlobal('fetch',vi.fn(async(_url,options)=>{const body=JSON.parse(options.body);bodies.push(body);if(body.hook_event_name==='TurnError')throw new Error('lost notification');return {ok:true};}));let user='msg_user';const hooks=await plugin(async()=>({data:completedMessages(user)}));
+  const updated=()=>hooks.event({event:{type:'message.updated',properties:{info:{sessionID:'root',id:user,role:'user'}}}});
+  await updated();await hooks.event({event:{type:'session.error',properties:{sessionID:'root',error:{name:'ProviderAuthError',data:{message:'Authentication unavailable'}}}}});await updated();await hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});expect(bodies.at(-1)).toMatchObject({failed:true,error:'Authentication unavailable'});
+  user='msg_next';await updated();await hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});expect(bodies.at(-1)).toMatchObject({failed:false});
+});
+it('discards an old idle observation when a new user message arrives during its API read',async()=>{
+  const bodies=captureOutcomes();let resolve!:(value:any)=>void;const read=vi.fn(()=>new Promise<any>(done=>{resolve=done;})),hooks=await plugin(read);
+  await observeUser(hooks);
+  const idle=hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});for(let i=0;i<20&&!resolve;i++)await Promise.resolve();expect(read).toHaveBeenCalledOnce();
+  await hooks.event({event:{type:'message.updated',properties:{info:{sessionID:'root',id:'msg_next',role:'user'}}}});resolve({data:completedMessages()});await idle;expect(bodies.filter(row=>row.hook_event_name==='TurnComplete')).toEqual([]);
+});
+it('bounds a stalled native message read and never publishes its late result as successful completion',async()=>{
+  vi.useFakeTimers();const bodies=captureOutcomes();let resolve!:(value:any)=>void,signal:AbortSignal|undefined;const hooks=await plugin(options=>{signal=options?.signal;return new Promise<any>(done=>{resolve=done;});});
+  await observeUser(hooks);
+  const idle=hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});for(let i=0;i<20&&!resolve;i++)await Promise.resolve();
+  await vi.advanceTimersByTimeAsync(3001);await idle;expect(signal?.aborted).toBe(true);expect(bodies.at(-1)).toMatchObject({failed:true});resolve({data:completedMessages()});await Promise.resolve();expect(bodies.filter(row=>row.failed===false)).toEqual([]);
+});
+it('does not reuse a retained reply before observing the current user prompt',async()=>{
+  const bodies=captureOutcomes(),read=vi.fn(async()=>({data:completedMessages()})),hooks=await plugin(read);await hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});expect(read).not.toHaveBeenCalled();expect(bodies.at(-1)).toMatchObject({failed:true});
+});
 function endpoint(){vi.stubEnv('CUBEFARM_NOTIFY_URL','http://127.0.0.1:4499/api/hooks/synthetic');}
 it('announces the root before forwarding bounded native failures, excluding child and unbound sessions',async()=>{
   endpoint();vi.stubEnv('CUBEFARM_OPENCODE_SESSION_ID','');const bodies:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_url,options)=>{bodies.push(JSON.parse(options.body));return {ok:true};}));

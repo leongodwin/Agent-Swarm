@@ -674,6 +674,10 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
         return {};
       // Codex's notify program and the OpenCode plugin
       case 'TurnComplete': {
+        if(cli==='opencode'&&(b.failed!==false||typeof b.last_assistant_message!=='string'||!b.last_assistant_message.trim()||Buffer.byteLength(b.last_assistant_message)>256*1024)){
+          finish({ok:false,text:'',errors:[b.failed===true?`OpenCode: ${clip(String(b.error??'Provider failure'),200)}`:'OpenCode completion did not include a verified outcome'],...(b.failed===true&&openCodeRateLimited(b.native_error)?{opencodeLimit:true}:{})});
+          return {};
+        }
         const thread = typeof b.session_id === 'string' ? b.session_id : '';
         if (cli === 'codex' && thread !== mainThread) {
           // Codex also runs side threads (it titles each task in one): the main thread is the one given our prompt.

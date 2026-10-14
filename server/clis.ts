@@ -359,6 +359,10 @@ export default async function CubefarmPlugin({ client } = {}) {
   } catch { throw new Error('Office governance endpoint is unavailable; OpenCode execution denied'); }
   let root = process.env.CUBEFARM_OPENCODE_SESSION_ID || undefined;
   let announcement;
+  let failure;
+  let userMessage;
+  let turnEpoch=0;
+  const nativeFailure = (error) => ({error:String(error?.data?.message??error?.message??error?.name??'Provider failure').slice(0,1000),native_error:{name:error?.name,data:{statusCode:error?.data?.statusCode,isRetryable:error?.data?.isRetryable}}});
   const names = {read:'Read',glob:'Glob',grep:'Grep',write:'Write',edit:'Edit',multiedit:'MultiEdit',bash:'Bash',apply_patch:'apply_patch'};
   const normalize = (name,args) => {
     const fields = {...args};
@@ -381,13 +385,32 @@ export default async function CubefarmPlugin({ client } = {}) {
   };
   const post = (body) =>
     fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) }).catch(() => {});
-  const lastReply = async (id) => {
+  const lastReply = async (id,currentUser) => {
+    let timer;
     try {
-      const res = await client.session.messages({ path: { id } });
-      const reply = (res?.data ?? []).filter((m) => m?.info?.role === 'assistant').pop();
-      return (reply?.parts ?? []).filter((p) => p?.type === 'text').map((p) => p.text).join('\n').trim();
+      if(!currentUser)throw new Error('Current prompt identity is unverified');
+      const controller=new AbortController();
+      const expired=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('Message observation expired'));},3000);});
+      const res = await Promise.race([client.session.messages({ path: { id },signal:controller.signal }),expired]);
+      const messages=res?.data;
+      if(!Array.isArray(messages)||!messages.length||messages.length>128)throw new Error();
+      const ids=new Set();let created=-1;
+      for(const message of messages){const info=message?.info;if(!info||!['user','assistant'].includes(info.role)||info.sessionID!==id||typeof info.id!=='string'||!info.id||ids.has(info.id)||!Number.isFinite(info.time?.created)||info.time.created<created)throw new Error();ids.add(info.id);created=info.time.created;}
+      const user=messages.filter(m=>m?.info?.role==='user').pop();
+      const reply=messages.filter(m=>m?.info?.role==='assistant').pop();
+      if(!user||!reply||user.info.sessionID!==id||reply.info.sessionID!==id||typeof user.info.id!=='string'||!user.info.id||typeof reply.info.id!=='string'||!reply.info.id||reply.info.id===user.info.id||currentUser&&currentUser!==user.info.id||reply.info.parentID!==user.info.id)throw new Error();
+      if(!Number.isFinite(user.info.time?.created)||user.info.time.created<0||!Number.isFinite(reply.info.time?.created)||!Number.isFinite(reply.info.time?.completed)||reply.info.time.created<user.info.time.created||reply.info.time.completed<reply.info.time.created)throw new Error();
+      if(Object.prototype.hasOwnProperty.call(reply.info,'error'))return {failed:true,...nativeFailure(reply.info.error)};
+      if(!Array.isArray(reply.parts)||reply.parts.length>200||reply.parts.some(p=>p?.sessionID!==id||p?.messageID!==reply.info.id))throw new Error();
+      const textParts=reply.parts.filter(p=>p?.type==='text');
+      if(textParts.some(p=>typeof p.text!=='string'))throw new Error();
+      const text=textParts.map(p=>p.text).join('\n').trim();
+      if(!text||Buffer.byteLength(text)>256*1024)throw new Error();
+      return {failed:false,last_assistant_message:text};
     } catch {
-      return '';
+      return {failed:true,error:'Current OpenCode message completion could not be verified'};
+    } finally {
+      clearTimeout(timer);
     }
   };
   return {
@@ -399,13 +422,18 @@ export default async function CubefarmPlugin({ client } = {}) {
     event: async ({ event }) => {
       const props = event?.properties ?? {};
       if (event?.type === 'session.created' && !props.info?.parentID && !root && typeof props.info?.id==='string') root = props.info.id;
-      const sessionID = props.sessionID ?? props.info?.id;
+      const sessionID = props.sessionID ?? (event?.type==='message.updated'?props.info?.sessionID:props.info?.id);
       if(!root||sessionID!==root)return;
+      if(event?.type==='message.updated'&&props.info?.role==='user'&&typeof props.info.id==='string'&&props.info.id&&props.info.id!==userMessage){userMessage=props.info.id;failure=undefined;turnEpoch++;}
+      if(event?.type==='session.error')failure=nativeFailure(props.error);
+      const epoch=turnEpoch;
       await (announcement ??= post({hook_event_name:'OpenCodeSessionStart',session_id:root}));
       if (event?.type === 'session.idle') {
-        await post({ hook_event_name: 'TurnComplete', session_id: root, last_assistant_message: await lastReply(root) });
+        const outcome=await lastReply(root,userMessage);
+        if(epoch!==turnEpoch)return;
+        await post({ hook_event_name: 'TurnComplete', session_id: root, ...(failure?{failed:true,...failure}:outcome) });
       }
-      if (event?.type === 'session.error') await post({ hook_event_name: 'TurnError', session_id: root, error: String(props.error?.data?.message ?? props.error?.message ?? props.error?.name ?? 'error').slice(0,1000), native_error:{name:props.error?.name,data:{statusCode:props.error?.data?.statusCode,isRetryable:props.error?.data?.isRetryable}} });
+      if (event?.type === 'session.error'&&epoch===turnEpoch) await post({ hook_event_name: 'TurnError', session_id: root, ...failure });
     },
   };
 }
