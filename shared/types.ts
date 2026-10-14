@@ -165,6 +165,13 @@ export type TermServerMessage =
 /** Browser to server: keystrokes go to the running CLI; the size is the viewer's fitted terminal. */
 export type TermClientMessage = { t: 'input'; data: string } | { t: 'resize'; cols: number; rows: number };
 
+export interface AgentRecovery {
+  kind: 'model' | 'preflight';
+  reason: string;
+  nextAttemptAt: string | null;
+  failures?: number;
+}
+
 export interface AgentView {
   id: string;
   name: string;
@@ -199,6 +206,7 @@ export interface AgentView {
   hasScreenshot: boolean;
   screenshotAt: number | null;
   lastError: string | null;
+  recovery?: AgentRecovery | null;
   log: LogLine[]; // tail of the terminal log (full buffer on snapshot)
 }
 

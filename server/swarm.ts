@@ -722,6 +722,7 @@ export class Swarm {
       hasScreenshot: !!rt.screenshot,
       screenshotAt: rt.screenshot?.at ?? null,
       lastError: a.lastError,
+      recovery: this.workerRecovery(a),
       log: withLog ? rt.log : [],
     };
   }
@@ -1758,6 +1759,15 @@ export class Swarm {
   }
   private workerPreflightDeferred(a:PersistedAgent,repo:PersistedRepo){
     return [(a.cli||this.state.settings.defaultCli) as AgentCli,a.sessionCli].some(cli=>!!cli&&preflightDeferred(a.preflightRetry,this.workerPreflightContext(a,repo,cli)));
+  }
+  /** Expose current recovery advice without persisting changes or leaking context fingerprints. */
+  private workerRecovery(a:PersistedAgent): AgentView['recovery'] {
+    if(a.role==='ceo'||BUSY.includes(a.status))return null;
+    if(this.workerModelBlockedForScheduling(a))return {kind:'model',reason:a.modelBlock!.reason,nextAttemptAt:null};
+    const repo=this.state.repos.find(row=>row.id===a.repoId),retry=a.preflightRetry;
+    if(!repo||!retry)return null;
+    const current=[(a.cli||this.state.settings.defaultCli) as AgentCli,a.sessionCli].some(cli=>!!cli&&retry.context===this.workerPreflightContext(a,repo,cli));
+    return current?{kind:'preflight',reason:a.lastError||'Readiness checks failed',nextAttemptAt:retry.nextAttemptAt,failures:retry.failures}:null;
   }
   /** Admit the model that dispatch will use; explicit prohibited values cannot hide behind fallback. */
   private configuredModelError(cli:AgentCli,model:string,ceo=false):string|null{

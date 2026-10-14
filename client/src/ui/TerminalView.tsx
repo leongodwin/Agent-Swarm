@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import {AgentRecovery} from './AgentRecovery';
 import { isBusy, kanbanFor, agentsOnRepo, useStore } from '../store';
 import { confirmDialog } from './Confirm';
 import { LiveTerminal } from './LiveTerminal';
@@ -146,7 +147,7 @@ export function TerminalView({ agentId }: { agentId: string }) {
         {agent.turns > 0 && <span className="muted">{agent.turns} turns</span>}
         {agent.costUsd > 0 && <span className="muted" title="API-equivalent cost reported by the coding agent; subscription usage is billed by plan">≈${agent.costUsd.toFixed(2)}</span>}
       </div>
-      {agent.lastError && agent.status !== 'working' && <div className="term-error">⚠️ {agent.lastError}</div>}
+      {agent.recovery ? <AgentRecovery recovery={agent.recovery} /> : agent.lastError && agent.status !== 'working' && <div className="term-error">⚠️ {agent.lastError}</div>}
       {agent.brief && (
         <details className="small job-brief">
           <summary>Job description{agent.hiredBy === 'ceo' ? ' (from the CEO)' : ''}</summary>
