@@ -105,6 +105,14 @@ it('quarantines a closed launcher when process-family cleanup was not verified',
   await expect(f.service.start('synthetic/project',input)).rejects.toThrow('cleanup remains unverified');
   await f.service.close();const restored=new HldSynthesisService(f.root,f.deps);await expect(restored.init()).rejects.toThrow('lacks completion acknowledgement');await restored.close();
 });
+it('rejects successful output with unverified cleanup and ignores duplicate completion acknowledgements',async()=>{
+  const f=await fixture(),job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
+  f.callbacks.finished({...success(),cleanupVerified:false});f.callbacks.finished(success());f.callbacks.log([{kind:'system',text:'Late completion progress'}]);
+  await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('failed'));
+  const saved=f.service.view('synthetic/project',job.id)[0];expect(saved.error).toContain('draft publication is blocked');expect(saved.runtimeCleanup).toBe('awaiting-completion');expect(saved.events.some(event=>event.text==='Late completion progress')).toBe(false);
+  expect(f.lease.release).not.toHaveBeenCalled();expect(await fs.readdir(f.checkout)).toEqual([]);await expect(f.service.result('synthetic/project',job.id)).rejects.toThrow('no completed');
+  f.callbacks.finished(success());expect(f.lease.release).not.toHaveBeenCalled();await expect(f.service.start('synthetic/project',input)).rejects.toThrow('cleanup remains unverified');
+});
 it('preserves and denies a cold restart with unacknowledged model cleanup',async()=>{
   const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());f.service.cancel('synthetic/project',job.id);await f.service.close();
   const file=path.join(f.root,'architecture-synthesis.json'),before=await fs.readFile(file,'utf8');const restored=new HldSynthesisService(f.root,f.deps);
