@@ -1,3 +1,4 @@
+import type {DeliveryRecoveryInspection} from '../../shared/deliveryRecovery';
 import type { DeliveryView } from '../../shared/delivery';
 import type {HealthEvidenceView} from '../../shared/healthEvidence';
 import type {GovernanceEvidenceView} from '../../shared/governanceEvidence';
@@ -54,6 +55,8 @@ export const api = {
   delivery: (repoId?: string) => call<DeliveryView>('GET', `/api/delivery${scope(repoId)}`,undefined,true),
   healthEvidence:(run:string)=>call<HealthEvidenceView>('GET',`/api/delivery/runs/${encodeURIComponent(run)}/health-evidence`,undefined,true),
   governanceEvidence:(run:string)=>call<GovernanceEvidenceView>('GET',`/api/delivery/runs/${encodeURIComponent(run)}/governance-evidence`,undefined,true),
+  deliveryRecovery:()=>call<DeliveryRecoveryInspection>('GET','/api/delivery/recovery',undefined,true),
+  recoverDelivery:(snapshotSha256:string)=>call<DeliveryView>('POST','/api/delivery/recovery',{snapshotSha256}),
   configureDelivery: (enabled: boolean) => call<DeliveryView>('POST', '/api/delivery/configure', { enabled }),
   reviewRelease: (id: string) => call('POST', `/api/delivery/releases/${encodeURIComponent(id)}/review`, {}),
   createRelease: (repoId: string, plan: unknown) => call('POST', `${r(repoId)}/delivery/releases`, plan),

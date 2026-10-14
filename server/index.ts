@@ -42,13 +42,13 @@ const swarm = new Swarm(backend);
 swarm.runtimeCleanup=runtimeCleanupView;
 onRuntimeCleanupChanged(()=>swarm.runtimeCleanupChanged());
 if(maintenance.draining)swarm.setDraining(true);
-swarm.taskPaused = (title) => !!delivery.view().policy?.copilotPaused && /\bcopilot\b|\bpva\b/i.test(title);
+swarm.taskPaused = (title) => !delivery.available||!!delivery.view().policy?.copilotPaused && /\bcopilot\b|\bpva\b/i.test(title);
 const features = new FeatureStore(path.join(HOME_DIR, backend.demo ? 'demo-features.json' : 'features.json'), backend.demo, process.env.TEAMS_INCOMING_WEBHOOK_URL);
 await features.init();
 const delivery = new DeliveryService(HOME_DIR, backend.demo, undefined, RESOURCE_LEASE_ROOT);
-await delivery.init();
+await delivery.init({allowUnavailable:true});
 if(maintenance.draining)delivery.setDraining(true);
-const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'), () => !!delivery.view().policy?.copilotPaused);
+const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'), () => (!delivery.available||!!delivery.view().policy?.copilotPaused));
 await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
 await tenantDlp.init();
@@ -66,8 +66,9 @@ swarm.engineeringTools = authorize => createEngineeringTools(swarm.capabilitySta
   }, release: (token) => canvasOwnership.release(token),
 }, authorize);
 swarm.capabilityFingerprint = () => JSON.stringify(capabilities.view().results.map((r) => [r.repoId, r.status, r.configHash, r.checks]));
-swarm.workerAdmissionContext = repoIds => JSON.stringify([capabilities.configurationFingerprint(repoIds), delivery.view().policy]);
+swarm.workerAdmissionContext = repoIds => JSON.stringify([capabilities.configurationFingerprint(repoIds), delivery.view().policy,delivery.available]);
 swarm.capabilityPreflight = async (repoId, cli) => {
+  if(!delivery.available)return 'Delivery initialization is unavailable; inspect recovery before starting agent work';
   const repo = swarm.snapshot().repos.find((r) => r.id === repoId);
   if (!repo) return 'Project not connected';
   const result = await capabilities.check(repoId, repo.checkoutPath, repo.targetTenancy?.environmentUrl ?? (fs.existsSync(path.join(repo.checkoutPath, 'cubefarm.delivery.json')) ? delivery.view().policy?.environmentUrl : undefined), cli);
@@ -75,6 +76,7 @@ swarm.capabilityPreflight = async (repoId, cli) => {
 };
 delivery.checkCapabilities = (repoId, cwd, environment, force) => capabilities.check(repoId, cwd, environment, 'git', force);
 swarm.ceoPreflight = async (repoIds,cli) => {
+  if(!delivery.available)return 'Delivery initialization is unavailable; inspect recovery before starting agent work';
   const host = capabilityBlocker(await capabilities.check('__office__', HOME_DIR, undefined, cli));
   if (host) return `Office runtime: ${host}`;
   const results = await Promise.all(repoIds.map(async id => {
@@ -113,8 +115,8 @@ swarm.requestDeliveryReview = async (id) => {
 };
 const synthesis=new HldSynthesisService(path.join(HOME_DIR,backend.demo?'demo-architecture':'architecture'),{
   reserve:(repoId,jobId)=>swarm.reserveArchitectureSession(repoId,jobId),
-  assertOpen(){if(backend.demo)throw new HttpError(409,'Demo cannot synthesize with a live model');if(officeShutdown.closed)throw new HttpError(503,'Office is shutting down');if(swarm.isDraining)throw new HttpError(409,'Office maintenance pauses new architecture jobs');},
-  context(repoId,input){const repo=swarm.snapshot().repos.find(item=>item.id===repoId);if(!repo?.checkoutPath)throw new HttpError(404,'Architecture project checkout is unavailable');const catalogue=discoverSkills(),copilotPaused=!!delivery.view().policy?.copilotPaused;return {checkoutPath:repo.checkoutPath,fingerprint:JSON.stringify([repo.id,repo.localPath,repo.targetTenancy,repo.mission,catalogue.fingerprint,copilotPaused]),copilotPaused,skills:selectSynthesisSkills(catalogue,`${repo.mission} ${repo.summary}`,input,copilotPaused).map(({id,name,platform,sha256,version,description,toolStatus})=>({id,name,platform,sha256,version,description,toolStatus}))};},
+  assertOpen(){if(backend.demo)throw new HttpError(409,'Demo cannot synthesize with a live model');if(officeShutdown.closed)throw new HttpError(503,'Office is shutting down');if(!delivery.available)throw new HttpError(409,'Delivery initialization is unavailable; inspect recovery before architecture execution');if(swarm.isDraining)throw new HttpError(409,'Office maintenance pauses new architecture jobs');},
+  context(repoId,input){const repo=swarm.snapshot().repos.find(item=>item.id===repoId);if(!repo?.checkoutPath)throw new HttpError(404,'Architecture project checkout is unavailable');const catalogue=discoverSkills(),copilotPaused=(!delivery.available||!!delivery.view().policy?.copilotPaused);return {checkoutPath:repo.checkoutPath,fingerprint:JSON.stringify([repo.id,repo.localPath,repo.targetTenancy,repo.mission,catalogue.fingerprint,copilotPaused]),copilotPaused,skills:selectSynthesisSkills(catalogue,`${repo.mission} ${repo.summary}`,input,copilotPaused).map(({id,name,platform,sha256,version,description,toolStatus})=>({id,name,platform,sha256,version,description,toolStatus}))};},
   admission:repoId=>swarm.capabilityPreflight(repoId,'codex'),start:(options,callbacks)=>backend.startSession(options,callbacks),
 });
 let synthesisUnavailableReason:string|undefined;

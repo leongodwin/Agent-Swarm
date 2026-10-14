@@ -25,7 +25,7 @@ export interface DeliveryBlocker { repoId: string; releaseId?: string; owner: st
 export interface DeliveryAttempt {id:string;releaseId:string;repoId:string;head:string;environmentUrl:string;runId?:string;evidenceHash?:string;startedAt:string;endedAt?:string;status:'preparing'|'running'|'reviewing'|'successful'|'failed'|'interrupted'|'superseded';reason?:'preflight'|'execution'|'cleanup'|'restart'|'superseded';acceptanceProfile:'production'|'functional-development'}
 export interface DeliveryAttemptHistory {version:1;startedAt:string;legacyRunIds:string[];attempts:DeliveryAttempt[]}
 export interface DeliveryAttemptSummary {scope:'retained-delivery-attempts';observedAt:string;window:{from:string;to:string};coverageStartedAt:string|null;completeWindow:boolean;legacyRunCount:number;recorded:{completed:number;successful:number;unsuccessful:number;active:number;awaitingReview:number;successPercent:number|null};successPercent:number|null;targetPercent:99.5;observedMeetsTarget:boolean|null;reason:string;recent:DeliveryAttempt[]}
-export interface DeliveryView { attemptHistory?:DeliveryAttemptSummary;releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number; policy: DeliveryPolicy | null; running: boolean; runs: DeliveryRun[]; message: string }
+export interface DeliveryView { availability?:'ready'|'unavailable';attemptHistory?:DeliveryAttemptSummary;releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number; policy: DeliveryPolicy | null; running: boolean; runs: DeliveryRun[]; message: string }
 
 /** Included in every engineering and QA task, not dependent on an optional specialty. */
 export const DELIVERY_ENGINEERING = `Delivery contract for Power Platform projects:

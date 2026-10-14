@@ -34,7 +34,7 @@ afterEach(async () => {
 afterAll(async () => fs.rm(HOME_DIR, { recursive: true, force: true }));
 const tenantId='11111111-1111-4111-8111-111111111111';
 const environment='https://synthetic.crm4.dynamics.com';
-async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload']) {
+async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload'],interruptedDelivery=false) {
   await fs.writeFile(STATE_FILE, JSON.stringify({ version: 2, settings: { runtime: 'sdk', ceoHeartbeatMin: 0, autoUpdate: false },
     repos: [{ id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,color:'#000',description:'',url:'',autoAssign:false,autoMerge:false,browserTesting:false,addedAt:1 }] }));
   const tenancy = {status:'connected', user:'synthetic@example.com', environments:[{name:'Synthetic',url:environment,active:true}], isReal:true};
@@ -57,7 +57,8 @@ async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliab
     const root=path.join(HOME_DIR,'delivery-runs','synthetic-run','evidence');await fs.mkdir(root,{recursive:true});await fs.writeFile(path.join(root,'proof.txt'),'synthetic evidence bytes');
     await fs.writeFile(path.join(HOME_DIR,'delivery.json'),JSON.stringify({policy:null,releases:[],blockers:[],revision:0,runs:[{id:'synthetic-run',repoId:'synthetic/repo',head:'synthetic-commit',environmentUrl:environment,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:['proof.txt'],log:[]}]}));
   }
-  const delivery=new DeliveryService(HOME_DIR,false);await delivery.init();cleanup.push(()=>delivery.close());
+  if(interruptedDelivery){await fs.writeFile(path.join(HOME_DIR,'delivery.lock'),JSON.stringify({schemaVersion:1,pid:2147483647,token:crypto.randomUUID(),acquiredAt:new Date().toISOString()}));await fs.writeFile(path.join(HOME_DIR,'delivery.json'),JSON.stringify({schemaVersion:1,policy:null,runs:[],releases:[],blockers:[],revision:0}));}
+  const delivery=new DeliveryService(HOME_DIR,false);await delivery.init({allowUnavailable:interruptedDelivery});cleanup.push(()=>delivery.close());
   if(maintenance.draining)delivery.setDraining(true);
   const toolGovernance=new ToolGovernanceService(path.join(HOME_DIR,'governance'),()=>true);await toolGovernance.init();
   const reader=vi.fn<StartPolicyReader>(()=>({pid:123,refresh(){},stop(){}}));
@@ -308,4 +309,20 @@ it('restores maintenance before office admission and fails a resume when storage
   vi.spyOn(maintenance,'change').mockRejectedValueOnce(new Error('synthetic storage failure'));
   expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:false})).status).toBe(500);
   expect(swarm.isDraining).toBe(true);expect(delivery.isDraining).toBe(true);expect(JSON.parse(await fs.readFile(path.join(HOME_DIR,'maintenance.json'),'utf8')).draining).toBe(true);
+});
+
+it('keeps authenticated workspace diagnostics open while interrupted delivery and mutations remain held',async()=>{
+  const f=await office(false,undefined,undefined,undefined,true);
+  expect((await fetch(f.url+'/api/delivery/recovery')).status).toBe(401);
+  expect((await f.request('/api/runtime')).status).toBe(200);expect((await f.request('/api/state')).status).toBe(200);
+  const status=await (await f.request('/api/delivery')).json();expect(status).toMatchObject({availability:'unavailable',policy:null,running:false});
+  const response=await f.request('/api/delivery/recovery');expect(response.headers.get('cache-control')).toBe('no-store');const recovery=await response.json();expect(recovery.canRecover).toBe(true);
+  expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:recovery.snapshotSha256})).status).toBe(409);
+  expect((await f.request('/api/delivery/platforms','POST',{copilotPaused:false})).status).toBe(409);
+  expect((await f.request('/api/office/drain','POST',{expectedPid:process.pid,draining:true})).status).toBe(200);
+  expect((await f.request('/api/office/drain','POST',{expectedPid:process.pid,draining:false})).status).toBe(409);expect(f.maintenance.draining).toBe(true);
+  expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:recovery.snapshotSha256,force:true})).status).toBe(400);
+  expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:'a'.repeat(64)})).status).toBe(409);
+  expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:recovery.snapshotSha256})).status).toBe(200);
+  expect(f.delivery.available).toBe(true);expect(f.delivery.isDraining).toBe(true);expect(f.swarm.isDraining).toBe(true);expect(f.external.startSession).not.toHaveBeenCalled();
 });

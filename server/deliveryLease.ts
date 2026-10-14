@@ -22,6 +22,8 @@ export async function acquireDeliveryLease(root:string):Promise<DeliveryLease> {
     } catch {/* Never expose raw lease contents or treat an unreadable owner as dead. */}
     throw new HttpError(409,'Delivery lease is missing or invalid; inspect ownership before recovery');
   };
+  await fs.mkdir(guard).catch(()=>{throw new HttpError(409,'Delivery ownership recovery or release is already in progress');});
+  try {
   try {
     const handle=await fs.open(file,'wx');
     try {await handle.writeFile(JSON.stringify(record));}finally{await handle.close();}
@@ -49,4 +51,5 @@ export async function acquireDeliveryLease(root:string):Promise<DeliveryLease> {
       return releaseWork;
     },
   };
+  }finally{await fs.rmdir(guard);}
 }

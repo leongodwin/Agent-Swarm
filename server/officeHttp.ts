@@ -105,7 +105,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.get('/api/state', route(() => swarm.snapshot()));
   app.get('/api/capabilities', route(() => capabilities.view()));
   app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
-  app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+  app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, deliveryAvailability:delivery.available?'ready':'unavailable', draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
   app.post('/api/office/reload',route(async(req,res)=>{
     const {expectedPid}=parseBody(z.object({expectedPid:z.number().int().positive()}).strict(),req.body);
     const ready=()=>{
@@ -128,6 +128,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     const {expectedPid,draining}=parseBody(z.object({expectedPid:z.number().int().positive(),draining:z.boolean()}).strict(),req.body);
     if(expectedPid!==process.pid)throw new HttpError(409,'Office process changed; inspect the current runtime before drain');
     if(backend.demo)throw new HttpError(409,'Demo cannot drain a working office');
+    if(!draining&&!delivery.available)throw new HttpError(409,'Delivery recovery is required before leaving maintenance');
     const apply=()=>{requireOpen();delivery.setDraining(draining);swarm.setDraining(draining);};
     if(services.changeDrain)await services.changeDrain(draining,apply);else apply();
     return {pid:process.pid,draining};
@@ -168,6 +169,12 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.post('/api/repos/:repo/implementation-templates/:template', route((req) => { if (backend.demo) throw new HttpError(409, 'Demo cannot install into a real project'); return installTemplate(connectedRepo(repoId(req)).checkoutPath, String(req.params.template) as TemplateId); }));
   app.post('/api/repos/:repo/delivery/monitor/:run', route(async (req) => { await delivery.monitor(connectedRepo(repoId(req)), String(req.params.run)); return delivery.view(repoId(req)); }));
   app.get('/api/delivery', route((req) => delivery.view(typeof req.query.repo === 'string' ? req.query.repo : undefined)));
+  app.get('/api/delivery/recovery',route(async(_req,res)=>{res.set('Cache-Control','no-store');return delivery.recoveryInspection();}));
+  app.post('/api/delivery/recovery',route(async(req)=>{
+    const {snapshotSha256}=parseBody(z.strictObject({snapshotSha256:z.string().regex(/^[a-f0-9]{64}$/)}),req.body);
+    if(!swarm.isDraining||!delivery.isDraining)throw new HttpError(409,'Office maintenance is required for delivery recovery');
+    return delivery.recoverStartup(snapshotSha256);
+  }));
   app.post('/api/delivery/platforms', route((req) => {
     const { copilotPaused } = parseBody(z.object({ copilotPaused: z.boolean() }).strict(), req.body);
     return delivery.pauseCopilot(copilotPaused);

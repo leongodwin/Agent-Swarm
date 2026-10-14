@@ -1,3 +1,4 @@
+import {DeliveryRecovery} from './DeliveryRecovery';
 import { useEffect, useState,useRef } from 'react';
 import {currentEnvironment} from '../../../shared/tenancy';
 import type {DeliveryView} from '../../../shared/delivery';
@@ -26,17 +27,18 @@ export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
   if(resource.error||observed.current?.key!==selected)observed.current=undefined;
   if(resource.value)observed.current={key:selected,value:resource.value};
   const data=resource.value??(resource.loading?observed.current?.value:undefined);
-  const locked=busy||resource.loading||!data;
+  const locked=busy||resource.loading||!data||data.availability==='unavailable';
   const target = currentEnvironment(tenancy.value);
   const action = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); resource.refresh(); capabilities.refresh(); } catch { /* API displays the failure */ } finally { setBusy(false); } };
   return <Panel title="Solution delivery" wide onClose={onClose}>
+    {data?.availability==='unavailable'&&<DeliveryRecovery onRecovered={resource.refresh}/>}
     <p>Build, test, deploy and verify your solution in its approved development environment.</p>
     <div className="row wrap">
       <label>Project <select value={selected} onChange={(event) => setSelected(event.target.value)}><option value="">All projects</option>{repos.map((repo) => <option key={repo.id} value={repo.id}>{repo.fullName}</option>)}</select></label>
       <button className="btn" disabled={locked || data?.running || (!data?.policy?.enabled && (!target || tenancy.value?.status !== 'connected'))} onClick={() => void action(() => api.configureDelivery(!data?.policy?.enabled))}>{data?.policy?.enabled ? 'Pause automatic delivery' : 'Enable delivery to connected development environment'}</button>
       <button className="btn btn-ghost" disabled={locked || data?.running || !data?.policy?.enabled || !selected} onClick={() => void action(() => api.runDelivery(selected))}>Run / resume latest release</button>
     </div>
-    <p><strong>Deployment target:</strong> {data?.policy?.environmentUrl ?? target?.url ?? 'Connect a development environment first'}</p>
+    <p><strong>Deployment target:</strong> {data?.availability==='unavailable'?'Unverified while delivery initialization is unavailable':data?.policy?.environmentUrl ?? target?.url ?? 'Connect a development environment first'}</p>
     {tenancy.error&&<p role="alert">Connected environment discovery is unavailable. Refresh authentication before enabling delivery.</p>}
     {data?.policy?.copilotPaused && <p>Copilot Studio delivery is paused. Other solution components can continue through their own approved release.</p>}
     <p className="muted">{resource.error ?? data?.message ?? 'Loading delivery status…'}</p>

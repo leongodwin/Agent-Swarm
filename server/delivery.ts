@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { atomicWrite, SerialWriter } from './atomicFile.ts';
 import { readBoundedJson } from './boundedJson.ts';
 import { validateDeliveryState, type DeliveryStoredState } from './deliveryState.ts';
+import {inspectDeliveryRecovery,recoverEmptyDelivery} from './deliveryRecovery.ts';
 import {acquireDeliveryLease,type DeliveryLease} from './deliveryLease.ts';
 import {connectOwnedFlowAdapter} from './ownedFlowAdapter.ts';
 import { resolveTenancyCommand } from './tenancy.ts';
@@ -158,7 +159,12 @@ export class DeliveryService {
   private closed = false;
   private draining = false;
   get isDraining(){return this.draining;}
-  setDraining(value:boolean){this.requireReady();this.draining=value;}
+  setDraining(value:boolean){if(!value)this.requireReady();this.draining=value;}
+  get available(){return this.ready&&!this.closed&&!this.stateFailed&&!this.ownershipLost;}
+  private startupUnavailable=false;
+  private permanentlyClosed=false;
+  private recovering=false;
+  private recoveryWork:Promise<DeliveryView>|null=null;
   private stateFailed = false;
   private ownershipLost = false;
   private ready = false;
@@ -166,10 +172,28 @@ export class DeliveryService {
   private preparing: Promise<void> | null = null;
   private pending: Promise<void> | null = null;
   constructor(private root: string, private demo: boolean, private deps = deliveryCommands, private resourceLeaseRoot = path.join(root, 'resource-leases')) {}
-  init(): Promise<void> {
+  init(options?:{allowUnavailable?:boolean}): Promise<void> {
     if (this.closed || this.ready || this.initializing) return Promise.reject(new HttpError(409, 'Delivery lifecycle already started or stopped'));
-    this.initializing = this.initialize().finally(() => { this.initializing = null; });
+    this.initializing = this.initialize().catch(error=>{if(!options?.allowUnavailable)throw error;this.startupUnavailable=true;}).finally(() => { this.initializing = null; });
     return this.initializing;
+  }
+  async recoveryInspection(){if(this.demo||!this.startupUnavailable||this.permanentlyClosed)throw new HttpError(409,'Startup recovery is not available');return inspectDeliveryRecovery(this.root);}
+  recoverStartup(expectedSha256:string):Promise<DeliveryView>{
+    if(this.demo||!this.startupUnavailable||this.permanentlyClosed||this.recovering||!this.draining)return Promise.reject(new HttpError(409,'Startup recovery requires an unavailable delivery service in maintenance mode'));
+    this.recovering=true;
+    const assertOpen=()=>{if(this.permanentlyClosed||!this.draining)throw new HttpError(409,'Delivery closed or maintenance changed during recovery');};
+    this.recoveryWork=(async()=>{
+      try{
+        await recoverEmptyDelivery(this.root,expectedSha256,assertOpen);
+        assertOpen();
+        this.closed=false;this.stateFailed=false;this.ownershipLost=false;this.startupUnavailable=false;
+        await this.init({allowUnavailable:true});
+        if(!this.available)throw new HttpError(409,'Recovery preserved the marker, but startup remains unavailable');
+        try{this.onChange();}catch(error){console.warn('Delivery recovery notification failed',error);}
+        return this.view();
+      }finally{this.recovering=false;this.recoveryWork=null;}
+    })();
+    return this.recoveryWork;
   }
   private async initialize() {
     if (this.demo) { this.ready = true; return; }
@@ -217,9 +241,10 @@ export class DeliveryService {
   }
   private requireReady() { if (this.closed || !this.ready) throw new HttpError(409, 'Delivery service is not ready or is closed'); }
   view(repoId?: string): DeliveryView {
+    if(this.startupUnavailable)return {availability:'unavailable',policy:null,releases:[],runs:[],blockers:[],revision:0,running:false,message:'Delivery initialization is unavailable. History and policy are unverified; inspect recovery before starting work. Copilot Studio remains paused.'};
     if(this.ownershipLost)throw new HttpError(409,'Delivery ownership lost; inspect the current owner before restarting');
     if (this.stateFailed || !this.ready) throw new HttpError(409, 'Delivery state is unavailable; preserve and repair it before restarting');
-    return structuredClone({ ...this.state, running: !!this.active, releases: this.state.releases.filter((r) => !repoId || r.repoId === repoId), blockers: this.state.blockers.filter((r) => !repoId || r.repoId === repoId), runs: this.state.runs.filter((r) => !repoId || r.repoId === repoId).map((r) => ({ ...r, evidenceDirectory: path.join(this.root, 'delivery-runs', r.id, 'evidence') })),
+    return structuredClone({ ...this.state, availability:'ready' as const, running: !!this.active, releases: this.state.releases.filter((r) => !repoId || r.repoId === repoId), blockers: this.state.blockers.filter((r) => !repoId || r.repoId === repoId), runs: this.state.runs.filter((r) => !repoId || r.repoId === repoId).map((r) => ({ ...r, evidenceDirectory: path.join(this.root, 'delivery-runs', r.id, 'evidence') })),
       attemptHistory:deliveryAttemptSummary(this.state.attemptHistory,this.state.runs,repoId),message: this.demo ? 'Real delivery is disabled in demo mode.' : !this.state.policy?.enabled ? 'Choose the development environment to enable real delivery.' : 'A scoped, QA-approved release pins the commit, target and acceptance tests. Missing evidence blocks completion.' });
   }
   async configure(environmentUrl: string, enabled: boolean) {
@@ -434,7 +459,7 @@ export class DeliveryService {
     })().finally(() => { this.active = null; this.pending = null; });
     await this.pending;
   }
-  async close() { this.closed = true; this.active?.abort(); await this.initializing?.catch(() => {}); await this.preparing; await this.pending; await this.writer.drain(); await this.releaseLease(); }
+  async close() { this.permanentlyClosed=true; this.closed = true; this.active?.abort(); await this.recoveryWork?.catch(()=>{}); await this.initializing?.catch(() => {}); await this.preparing; await this.pending; await this.writer.drain(); await this.releaseLease(); }
   async waitForIdle() { await this.pending; }
   private async governance(run:DeliveryRun,manifest:unknown,phase:GovernancePhase) {
     const releaseId=run.releaseId;
