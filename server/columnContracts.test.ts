@@ -12,6 +12,34 @@ it('validates declared size/format and metadata API access without ignoring fals
   expect(()=>compareColumn(title,actual)).not.toThrow();
   for(const changed of [{...actual,MaxLength:99},{...actual,Format:'Email'},{...actual,IsSecured:true},{...actual,IsValidForUpdate:false},{...actual,IsValidForRead:undefined},{...actual,SourceType:1},{...actual,LogicalName:'other'}])expect(()=>compareColumn(title,changed)).toThrow();
 });
+it.each([false,true])('rejects contradictory base and named metadata types with migration=%s before typed reads',async migration=>{
+  const request=vi.fn<Request>(async()=>actual);
+  for(const row of [{...actual,AttributeTypeName:{Value:'IntegerType'}},{...actual,AttributeTypeName:{Value:'UnknownType'}},{...actual,AttributeTypeName:{Value:''}}]){
+    await expect(verifyColumns([title],'exp_report',[row],request,migration)).rejects.toThrow('inconsistent');
+  }
+  expect(request).not.toHaveBeenCalled();
+  const file:ColumnContract={name:'exp_receipt',type:'File',required:'None'};
+  expect(()=>compareColumn(file,{LogicalName:file.name,AttributeType:'String',AttributeTypeName:{Value:'FileType'},RequiredLevel:{Value:'None'}},migration)).toThrow('conflicting');
+  expect(()=>compareColumn(file,{LogicalName:file.name,AttributeType:'Virtual',AttributeTypeName:{Value:'FileType'},RequiredLevel:{Value:'None'}},migration)).not.toThrow();
+});
+it('rejects a changed type-name in typed detail even when ID, base type and declared constraints match',async()=>{
+  const request=vi.fn<Request>(async()=>({...actual,AttributeTypeName:{Value:'MemoType'}}));
+  await expect(verifyColumns([title],'exp_report',[actual],request)).rejects.toThrow('inconsistent');expect(request).toHaveBeenCalledOnce();
+});
+it.each([-1,0,1.5])('rejects malformed observed size %s even when an additive migration would widen it',size=>{
+  expect(()=>compareColumn({...title,constraints:{maxLength:200}},{...actual,MaxLength:size},true)).toThrow();
+  expect(()=>compareColumn({name:'exp_receipt',type:'File',required:'None',constraints:{maxSizeInKB:4096}},{LogicalName:'exp_receipt',AttributeType:'Virtual',AttributeTypeName:{Value:'FileType'},RequiredLevel:{Value:'None'},MaxSizeInKB:size},true)).toThrow();
+});
+it.each([-1,1.5,11])('rejects malformed observed precision %s instead of certifying migration compatibility',precision=>{
+  expect(()=>compareColumn({name:'exp_amount',type:'Decimal',required:'None',constraints:{precision:10}},{LogicalName:'exp_amount',AttributeType:'Decimal',RequiredLevel:{Value:'None'},Precision:precision},true)).toThrow();
+});
+it('rejects fractional Integer bounds and reversed native ranges during migration checks',()=>{
+  const integer:ColumnContract={name:'exp_count',type:'Integer',required:'None',constraints:{minValue:0,maxValue:100}};
+  expect(columnContract.safeParse({...integer,constraints:{minValue:0.5}}).success).toBe(false);
+  expect(()=>compareColumn(integer,{LogicalName:integer.name,AttributeType:'Integer',RequiredLevel:{Value:'None'},MinValue:0.5,MaxValue:50},true)).toThrow();
+  expect(()=>compareColumn(integer,{LogicalName:integer.name,AttributeType:'Integer',RequiredLevel:{Value:'None'},MinValue:50,MaxValue:10},true)).toThrow('reversed');
+  expect(()=>compareColumn(integer,{LogicalName:integer.name,AttributeType:'Integer',RequiredLevel:{Value:'None'},MinValue:1,MaxValue:50},true)).not.toThrow();
+});
 it('permits additive range/length migrations but denies narrowing and applies exact post-import equality',()=>{
   expect(()=>compareColumn({...title,constraints:{maxLength:200}},actual,true)).not.toThrow();expect(()=>compareColumn({...title,constraints:{maxLength:200}},actual)).toThrow();
   expect(()=>compareColumn({...title,constraints:{maxLength:50}},actual,true)).toThrow();

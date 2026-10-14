@@ -11,11 +11,20 @@ export const columnContract=z.object({name:logical,type:z.enum(['String','Memo',
   const allowed:Record<string,string[]>={String:['maxLength','format'],Memo:['maxLength','format'],Integer:['minValue','maxValue','format'],Decimal:['minValue','maxValue','precision'],Money:['minValue','maxValue','precision','precisionSource'],DateTime:['format','dateTimeBehavior'],Lookup:['targets'],Picklist:['options'],File:['maxSizeInKB'],Boolean:[],Uniqueidentifier:[]};
   for(const key of Object.keys(column.constraints??{}))if(key!=='access'&&!allowed[column.type].includes(key))ctx.addIssue({code:'custom',message:`Constraint ${key} is invalid for ${column.type}`});
   const c=column.constraints;if(c?.minValue!==undefined&&c.maxValue!==undefined&&c.minValue>c.maxValue)ctx.addIssue({code:'custom',message:'Column numeric bounds are reversed'});
+  if(column.type==='Integer'&&[c?.minValue,c?.maxValue].some(value=>value!==undefined&&!Number.isInteger(value)))ctx.addIssue({code:'custom',message:'Integer bounds require whole numbers'});
   for(const values of [c?.targets,c?.options])if(values&&new Set<string|number>(values).size!==values.length)ctx.addIssue({code:'custom',message:'Constraint values must be unique'});
 });
 export type ColumnContract=z.infer<typeof columnContract>;
 export const baseAttribute=z.object({LogicalName:logical,AttributeType:z.string(),AttributeTypeName:z.object({Value:z.string()}).optional(),RequiredLevel:z.object({Value:z.string()}),MetadataId:z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i).optional()}).passthrough();
-export const attributeType=(value:z.infer<typeof baseAttribute>)=>value.AttributeTypeName?.Value==='FileType'?'File':value.AttributeType;
+export const attributeType=(value:z.infer<typeof baseAttribute>)=>{
+  const named=value.AttributeTypeName?.Value;
+  if(named==='FileType'){
+    if(value.AttributeType!=='Virtual')throw new Error('File metadata has a conflicting base attribute type');
+    return 'File';
+  }
+  if(named!==undefined&&named!==`${value.AttributeType}Type`)throw new Error('Attribute type metadata is inconsistent');
+  return value.AttributeType;
+};
 const set=(values:unknown)=>z.array(z.union([z.string(),z.number()])).parse(values).map(String).sort().join('\n');
 const common='LogicalName,MetadataId,AttributeType,AttributeTypeName,RequiredLevel,IsValidForCreate,IsValidForRead,IsValidForUpdate,IsSecured,IsLogical,SourceType';
 const fields:Record<string,string>={String:'MaxLength,Format',Memo:'MaxLength,Format',Integer:'MinValue,MaxValue,Format',Decimal:'MinValue,MaxValue,Precision',Money:'MinValue,MaxValue,Precision,PrecisionSource',DateTime:'Format,DateTimeBehavior',Lookup:'Targets',Picklist:'',File:'MaxSizeInKB',Boolean:'',Uniqueidentifier:''};
@@ -28,10 +37,16 @@ export function compareColumn(column:ColumnContract,input:unknown,migration=fals
   if(actual.LogicalName!==column.name||attributeType(actual)!==column.type||actual.RequiredLevel.Value!==column.required)throw new Error(`Schema mismatch for ${column.name}`);
   if(!c)return;
   const numeric=(key:keyof typeof c,property:string,direction?:'upper'|'lower')=>{
-    const expected=c[key];if(expected===undefined)return;const observed=z.number().finite().parse(actual[property]);
+    const expected=c[key];if(expected===undefined)return;let schema=z.number().finite();
+    if(key==='maxLength'||key==='maxSizeInKB')schema=schema.int().positive();
+    else if(key==='precision')schema=schema.int().min(0).max(10);
+    else if(key==='precisionSource')schema=schema.int().min(0).max(2);
+    else if(column.type==='Integer')schema=schema.int();
+    const observed=schema.parse(actual[property]);
     if(migration&&direction?(direction==='upper'?Number(expected)<observed:Number(expected)>observed):expected!==observed)throw new Error(`Schema ${property} differs for ${column.name}`);
   };
   numeric('maxLength','MaxLength','upper');numeric('minValue','MinValue','lower');numeric('maxValue','MaxValue','upper');numeric('precision','Precision','upper');numeric('precisionSource','PrecisionSource');numeric('maxSizeInKB','MaxSizeInKB','upper');
+  if(c.minValue!==undefined&&c.maxValue!==undefined&&Number(actual.MinValue)>Number(actual.MaxValue))throw new Error(`Schema numeric bounds are reversed for ${column.name}`);
   if(c.format!==undefined&&z.string().parse(actual.Format)!==c.format)throw new Error(`Schema Format differs for ${column.name}`);
   if(c.dateTimeBehavior!==undefined&&z.object({Value:z.string()}).parse(actual.DateTimeBehavior).Value!==c.dateTimeBehavior)throw new Error(`Schema DateTimeBehavior differs for ${column.name}`);
   if(c.targets&&set(z.array(logical).parse(actual.Targets))!==set(c.targets))throw new Error(`Lookup targets differ for ${column.name}`);
