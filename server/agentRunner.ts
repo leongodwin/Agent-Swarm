@@ -51,6 +51,8 @@ export interface LogEntry {
 }
 
 export interface SessionResult {
+  /** False means process-family termination is unverified even if the launcher closed. */
+  cleanupVerified?:boolean;
   ok: boolean;
   text: string;
   costUsd: number;

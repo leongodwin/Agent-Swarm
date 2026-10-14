@@ -16,6 +16,14 @@ function fixture(){
   const callback=vi.fn(finished),log=vi.fn();const handle=startCodexPlanning(options,{log,tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:callback});
   return {proc,result,handle,callback,log};
 }
+it('waits for the Windows tree-stop helper and quarantines a failed stop after launcher close',async()=>{
+  vi.spyOn(process,'platform','get').mockReturnValue('win32');const run=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
+  Object.assign(run.proc,{pid:12345});const helper=new EventEmitter();native.spawn.mockReturnValueOnce(helper);
+  run.handle.stop();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledTimes(2));
+  expect(native.spawn.mock.calls[1]).toEqual(['taskkill',['/PID','12345','/T','/F'],{windowsHide:true,stdio:'ignore',shell:false}]);
+  run.proc.emit('close',null);await Promise.resolve();expect(run.callback).not.toHaveBeenCalled();helper.emit('close',1);
+  expect(await run.result).toMatchObject({ok:false,cleanupVerified:false});expect(run.callback).toHaveBeenCalledOnce();
+});
 it('streams bounded status metadata before close without exposing native reasoning, prompt or draft text',async()=>{
   const run=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
   run.proc.stdout.write(JSON.stringify({type:'thread.started',thread_id:'private-session'})+'\n'+JSON.stringify({type:'turn.started'})+'\n'+JSON.stringify({type:'item.completed',item:{type:'reasoning',text:'private native reasoning'}})+'\n');

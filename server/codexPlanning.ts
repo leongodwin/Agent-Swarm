@@ -12,6 +12,23 @@ export function startCodexPlanning(opts:SessionOptions,cb:SessionCallbacks):Sess
   if(!opts.noTools||!opts.outputSchema)throw new Error('Nonterminal execution requires structured planning');
   let child:ReturnType<typeof spawn>|undefined,stopped=false;
   let delivered=false;
+  let stopping:Promise<void>|undefined,stopFailed=false;
+  const stopTree=()=>{
+    if(stopping)return stopping;
+    if(!child||child.exitCode!==null&&child.exitCode!==undefined||child.signalCode!==null&&child.signalCode!==undefined)return Promise.resolve();
+    const owned=child,pid=owned.pid;
+    if(!owned.pid){try{owned.kill();stopping=Promise.resolve();}catch{stopFailed=true;stopping=Promise.reject(new Error('Planning stop failed'));void stopping.catch(()=>{});}return stopping;}
+    stopping=Promise.resolve().then(async()=>{
+      if(process.platform==='win32'){
+        await new Promise<void>((resolve,reject)=>{
+          const task=spawn('taskkill',['/PID',String(pid),'/T','/F'],{windowsHide:true,stdio:'ignore',shell:false});
+          task.once('error',()=>reject(new Error('Planning process-tree stop failed')));task.once('close',code=>code===0?resolve():reject(new Error('Planning process-tree stop failed')));
+        });
+      }else process.kill(-pid!,'SIGKILL');
+    });
+    // Signal failure is not allowed to throw through stream callbacks.
+    const pending=stopping;void pending.then(()=>{stopFailed=false;},()=>{stopFailed=true;if(stopping===pending)stopping=undefined;});return pending;
+  };
   const finished=(result:SessionResult)=>{if(delivered)return;delivered=true;terminalCallback(cb.finished,result,()=>console.warn('Planning completion callback failed; result was not redelivered'));};
   void (async()=>{
     let dir:string|undefined;
@@ -24,12 +41,12 @@ export function startCodexPlanning(opts:SessionOptions,cb:SessionCallbacks):Sess
       if(stopped){finished({ok:false,text:'',errors:['Cancelled before launch'],turns:0,costUsd:0});return;}
       const disabled=['shell_tool','unified_exec','apps','browser_use','browser_use_external','computer_use','image_generation','multi_agent','memories','hooks','skill_search','workspace_dependencies','code_mode_host','view_image'];
       const args=[...command.args,'exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',path.join(dir,'schema.json'),'-c','web_search="disabled"',...disabled.flatMap(feature=>['--disable',feature]),'-'];
-      child=spawn(command.file,args,{cwd:dir,windowsHide:true,shell:false,stdio:['pipe','pipe','pipe']});
+      child=spawn(command.file,args,{cwd:dir,windowsHide:true,shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
       let stdout='',stderr='',failure='',bytes=0,text='',turns=0;
       const outDecoder=new TextDecoder('utf-8',{fatal:true}),errDecoder=new TextDecoder('utf-8',{fatal:true});
       // Data/error handlers must not throw through the EventEmitter if the OS
       // rejects a stop signal. Completion still waits for the child's close.
-      const stopAfterFailure=()=>{try{child?.kill();}catch{failure='Codex planning stop could not be signalled; await process completion';}};
+      const stopAfterFailure=()=>{void stopTree().catch(()=>{failure='Codex planning stop could not be signalled; await process completion';});};
       const progress=(message:string)=>{if(!stopped&&!delivered)terminalCallback(cb.log,[{kind:'system',text:message}],()=>console.warn('Planning progress callback failed'));};
       const eventLine=(line:string)=>{
         if(failure||!line.trim())return;
@@ -64,15 +81,17 @@ export function startCodexPlanning(opts:SessionOptions,cb:SessionCallbacks):Sess
       child.stdin?.on('error',error=>{failure=error.message;stopAfterFailure();});
       child.stdin?.end(`${opts.systemAppend}\n\n${opts.prompt}`);
       const code=await new Promise<number|null>(resolve=>child!.once('close',resolve));
+      try{await stopping;}catch{stopFailed=true;failure='Codex planning stop could not be signalled; await process completion';}
+      if(stopFailed)failure='Codex planning stop could not be signalled; await process completion';
       try {
         // Flush a trailing partial character as an error rather than silently
         // publishing replacement characters in the generated architecture.
         stdoutText(outDecoder.decode());stderr+=errDecoder.decode();if(stdout)eventLine(stdout);
         const structured=code===0&&!stopped&&!failure?JSON.parse(text):undefined;
-        finished({ok:code===0&&!stopped&&!failure,text,structured,turns,costUsd:0,errors:failure||code!==0||stopped?[failure||(stopped?'Cancelled':stderr.slice(-4000)||`Codex exited ${code}`)]:[]});
-      }catch(error){finished({ok:false,text:'',turns,costUsd:0,errors:[String(error)]});}
-    }catch(error){finished({ok:false,text:'',turns:0,costUsd:0,errors:[String(error)]});}
+        finished({ok:code===0&&!stopped&&!failure,text,structured,turns,costUsd:0,cleanupVerified:!stopFailed,errors:failure||code!==0||stopped?[failure||(stopped?'Cancelled':stderr.slice(-4000)||`Codex exited ${code}`)]:[]});
+      }catch(error){finished({ok:false,text:'',turns,costUsd:0,cleanupVerified:!stopFailed,errors:[String(error)]});}
+    }catch(error){finished({ok:false,text:'',turns:0,costUsd:0,cleanupVerified:!child||child.exitCode!==null&&child.exitCode!==undefined&&!stopFailed,errors:[String(error)]});}
     finally{if(dir)await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
   })();
-  return {send(){throw new Error('Planning input is immutable');},stop(){stopped=true;child?.kill();}};
+  return {send(){throw new Error('Planning input is immutable');},stop(){stopped=true;void stopTree().catch(()=>{});}};
 }

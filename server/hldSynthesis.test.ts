@@ -94,8 +94,16 @@ it('denies concurrent model jobs and late output from cancelled ownership',async
 it('keeps cancelled capacity occupied until the exact model callback acknowledges completion',async()=>{
   const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
   f.service.cancel('synthetic/project',job.id);expect(f.lease.stopping).toHaveBeenCalledOnce();expect(f.lease.release).not.toHaveBeenCalled();
-  expect(f.service.view('synthetic/project',job.id)[0].runtimeCleanup).toBe('awaiting-completion');await expect(f.service.start('synthetic/project',input)).rejects.toThrow('already running');
+  expect(f.service.view('synthetic/project',job.id)[0].runtimeCleanup).toBe('awaiting-completion');await expect(f.service.start('synthetic/project',input)).rejects.toThrow('cleanup remains unverified');
   f.callbacks.finished(success());expect(f.lease.release).toHaveBeenCalledOnce();expect(f.service.view('synthetic/project',job.id)[0].runtimeCleanup).toBe('released');f.callbacks.finished(success());expect(f.lease.release).toHaveBeenCalledOnce();
+});
+it('quarantines a closed launcher when process-family cleanup was not verified',async()=>{
+  const f=await fixture(),job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
+  f.callbacks.finished({...success(),ok:false,cleanupVerified:false,errors:['Process-tree stop failed']});
+  await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('failed'));
+  expect(f.lease.release).not.toHaveBeenCalled();expect(f.service.view('synthetic/project',job.id)[0].runtimeCleanup).toBe('awaiting-completion');
+  await expect(f.service.start('synthetic/project',input)).rejects.toThrow('cleanup remains unverified');
+  await f.service.close();const restored=new HldSynthesisService(f.root,f.deps);await expect(restored.init()).rejects.toThrow('lacks completion acknowledgement');await restored.close();
 });
 it('preserves and denies a cold restart with unacknowledged model cleanup',async()=>{
   const f=await fixture();const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());f.service.cancel('synthetic/project',job.id);await f.service.close();
