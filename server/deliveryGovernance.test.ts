@@ -50,12 +50,12 @@ it('retains a known advanced constraint denial when classic policy discovery fai
   const result=await check(input);expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('outside observed policy');expect(JSON.stringify(result)).not.toContain('private classic');
   const tampered=await check({...input,packageSha256:'f'.repeat(64)});expect(tampered.status).toBe('unavailable');expect(tampered.reasons.join(' ')).not.toContain('outside observed policy');
 });
-async function packaged(customizationExtra='',rootExtra='') {
+async function packaged(customizationExtra='',rootExtra='',unknownParameter=false) {
   const checkout=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-governed-package-'));directories.push(checkout);const evidenceDirectory=path.join(checkout,'evidence');
   const definition = {
     triggers: { tick: { type: 'Recurrence' } },
     actions: {
-      query: { type: 'OpenApiConnection', inputs: { host: { connectionName: 'dv', apiId: 'shared_commondataserviceforapps', operationId: 'ListRecords' },parameters:{entityName:'exp_reports',$select:'exp_title'} } },
+      query: { type: 'OpenApiConnection', inputs: { host: { connectionName: 'dv', apiId: 'shared_commondataserviceforapps', operationId: 'ListRecords' },parameters:{entityName:'exp_reports',$select:'exp_title',...(unknownParameter?{savedQuery:'unresolved query'}:{})} } },
       mail: { type: 'OpenApiConnection', inputs: { host: { connectionName: 'mail', apiId: 'shared_office365', operationId: 'SendEmailV2' } } },
     },
   };
@@ -71,6 +71,12 @@ async function packaged(customizationExtra='',rootExtra='') {
   const archive=new ZipFile();const chunks:Buffer[]=[];const bytes=new Promise<Buffer>((resolve,reject)=>{archive.outputStream.on('data',chunk=>chunks.push(chunk));archive.outputStream.on('end',()=>resolve(Buffer.concat(chunks)));archive.outputStream.on('error',reject);});for(const [name,body] of Object.entries(entries))archive.addBuffer(Buffer.from(body),name,{compress:false});archive.end();const buffer=await bytes;await fs.writeFile(path.join(checkout,'release.zip'),buffer);
   return {...request,phase:'import' as const,checkout,evidenceDirectory,packageSha256:crypto.createHash('sha256').update(buffer).digest('hex'),manifest:{...manifest,targetComponents:[...manifest.targetComponents,{key:'outlook',kind:'connection-reference',logicalName:'exp_outlook'},{key:'flow',kind:'cloud-flow',logicalName:guid}],postDeployActions:[...manifest.postDeployActions,{id:'outlook-binding',type:'connection-reference-check',component:'outlook',connectionId:'approved-mail',connectorId:'shared_office365'}]}};
 }
+it.each(['build','test','import','post-deploy','verify','health'] as const)('retains known DLP denials in a schema-incomplete package at %s',async phase=>{
+  const input=await packaged('','',true),policy={name:'mail-blocked',environmentType:'AllEnvironments',environments:[],defaultConnectorsClassification:'General',connectorGroups:[{classification:'Blocked',connectors:[{id:'shared_office365'}]}]};
+  const result=await createDeliveryGovernance({observation:()=>observation([policy])})({...input,phase});expect(result.status).toBe('blocked');expect(result.reasons[0]).toContain('blocks shared_office365');
+  const inventory=JSON.parse(await fs.readFile(path.join(input.evidenceDirectory!,result.packageInventoryFile!),'utf8'));expect(inventory.resourceInventoryComplete).toBe(false);expect(inventory.resources[0].complete).toBe(false);
+});
+it('does not authorize a schema-incomplete package when its known connectors have no standard denial',async()=>{const input=await packaged('','',true),result=await createDeliveryGovernance({observation:()=>observation()}) (input);expect(result.status).toBe('unavailable');expect(result.reasons.join(' ')).toContain('Resource inventory is incomplete');});
 it('refreshes advanced assignments at all six stages and persists partial evidence without authorizing execution',async()=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-advanced-policy-stage-'));directories.push(directory);const read=vi.fn(async(_input:AdvancedPolicyRequest)=>advanced());
   const check=createDeliveryGovernance({observation:()=>observation()},undefined,read);

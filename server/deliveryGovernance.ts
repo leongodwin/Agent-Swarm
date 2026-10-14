@@ -21,7 +21,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     const manifest=deliveryManifest.parse(request.manifest);
     let packageInventoryFile:string|undefined;
     let packageInventorySha256:string|undefined;
-    let resources:{id:string;complete:true;connectors:string[]}[]|undefined;
+    let resources:{id:string;complete:boolean;connectors:string[]}[]|undefined;
     let packageIssues:string[]=[];
     let resourceSchemaReferences:LifecycleRequest['resourceSchemaReferences'];
     let advancedResources:PackageResource[]|undefined;
@@ -40,7 +40,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
       advancedResources=inventory.resources;
       if(packageSchema.status==='blocked')return {...base,status:'blocked',reasons:packageSchema.reasons};
       packageIssues.push(...packageSchema.reasons);
-      resources=inventory.resources.filter(resource=>resource.complete).map(resource=>({id:resource.id,complete:true,connectors:resource.connectors}));
+      resources=inventory.resources.map(resource=>({id:resource.id,complete:resource.complete,connectors:resource.connectors}));
       if(!inventory.resourceInventoryComplete)packageIssues.push(...inventory.issues.slice(0,15).map(issue=>issue.slice(0,1000)));
       if(!resources.length)return {...base,reasons:['No fully inspectable app/flow resource connector inventory is available',...packageIssues]};
       for(const reference of inventory.connections)if(!manifest.postDeployActions.some(action=>action.type==='connection-reference-check'&&manifest.targetComponents.some(component=>component.key===action.component&&component.logicalName.toLowerCase()===reference.name)&&action.connectorId.replace(/^\/providers\/Microsoft.PowerApps\/apis\//i,'').toLowerCase()===reference.connector))return {...base,status:'blocked',reasons:[`Package connection reference ${reference.name} lacks its exact approved connector/binding declaration`]};
@@ -85,6 +85,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     if(!(resources??declared).length)return {...unavailable(['No independently complete app/flow connector inventory is available; advanced policy and comprehensive schema evidence are also required',schemaReason,advancedReason,catalogueReason]),declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
     const standard=evaluateStandardPolicies(snapshot,identity,manifest.platformIdentity.environmentId,resources??declared);
     const reasons=standard.status==='clear'?[resources?'Inspectable package resources passed standard classification; advanced policies, remaining opaque resources and comprehensive schemas are unverified':'Declared reference IDs passed standard classification; full package resource inventory, advanced policies and comprehensive schemas remain unverified']:standard.reasons.slice(0,20).map(reason=>reason.slice(0,1000));
-    return {...unavailableGovernance(request,[...[...advancedReasons,...reasons,...packageIssues].slice(0,27),schemaReason,advancedReason,catalogueReason]),status:advancedConflict||standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,packageInventorySha256,declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
+    const ordered=standard.status==='blocked'?[...reasons,...advancedReasons,...packageIssues]:[...advancedReasons,...reasons,...packageIssues];
+    return {...unavailableGovernance(request,[...ordered.slice(0,27),schemaReason,advancedReason,catalogueReason]),status:advancedConflict||standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,packageInventorySha256,declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
   };
 }

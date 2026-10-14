@@ -43,3 +43,15 @@ it('bounds evaluation work and retained diagnostics instead of blocking the even
   const result=evaluateStandardPolicies(snapshot([policy()]),identity,environment,resources.map(resource=>({...resource,connectors:['shared_dropbox']})),now);
   expect(result.status).toBe('blocked');expect(result.reasons).toHaveLength(30);
 });
+it('finds known denials in incomplete resources without authorizing a partial inventory',()=>{
+  const partial=[{id:'partial-flow',complete:false,connectors:['shared_dropbox']}];expect(evaluateStandardPolicies(snapshot([policy()]),identity,environment,partial,now).status).toBe('blocked');
+  const noDeny=evaluateStandardPolicies(snapshot([]),identity,environment,partial,now);expect(noDeny.status).toBe('unavailable');expect(noDeny.reasons.join(' ')).toContain('incomplete');expect(noDeny.complianceVerified).toBe(false);
+});
+it.each(['scope','group','classification'] as const)('preserves an independent valid denial before and after ambiguous %s policy data',async fault=>{
+  const malformed=policy({name:'malformed',...(fault==='scope'?{environments:[{name:environment}]}:fault==='group'?{connectorGroups:[{classification:'General',connectors:[]},{classification:'General',connectors:[]}]}:{connectorGroups:[{classification:'General',connectors:[{id:'shared_outlook'},{id:'SHARED_OUTLOOK'}]}]})});
+  for(const policies of [[policy(),malformed],[malformed,policy()]]){const result=evaluate(policies,['shared_dropbox']);expect(result.status).toBe('blocked');expect(result.reasons[0]).toContain('blocks shared_dropbox');expect(result.appliedPolicies).not.toContain('malformed');}
+});
+it('keeps confirmed denial reasons visible when unknown-policy diagnostics reach their bound',()=>{
+  const unknown=Array.from({length:40},(_,index)=>policy({name:`unsupported-${index}`,connectorGroups:[{classification:'General',connectors:[{id:'Http'}]}]}));
+  const result=evaluate([...unknown,policy()],['shared_dropbox']);expect(result.status).toBe('blocked');expect(result.reasons).toHaveLength(30);expect(result.reasons[0]).toContain('blocks shared_dropbox');
+});
