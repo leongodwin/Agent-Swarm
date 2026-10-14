@@ -3,6 +3,19 @@ import { activeEnvironment, createTenancyService, parsePacProfiles, resolveTenan
 import { loginSchema, parseBody, selectSchema } from './requestSchemas.ts';
 
 const profiles = '[1] * UNIVERSAL Dev Sandbox https://org.crm.dynamics.com/ user@example.com Public User';
+it.each([
+  `${profiles}\n${profiles}`,
+  `${profiles}\n[2] * UNIVERSAL Other https://other.crm.dynamics.com/ user@example.com`,
+  profiles.replace('[1]','[0]'),profiles.replace('[1]','[9007199254740992]'),
+  profiles.replace('https://org.crm.dynamics.com/','https://org.crm.dynamics.com/path'),
+  profiles.replace('https://org.crm.dynamics.com/','https://user:secret@org.crm.dynamics.com/'),
+  profiles.replace('https://org.crm.dynamics.com/','https://org.crm.dynamics.com/?token=value'),
+  profiles.replace('https://org.crm.dynamics.com/','https://org.crm.dynamics.com:444/'),
+  profiles+'\n'+'x'.repeat(65536),
+])('rejects ambiguous or unsafe PAC discovery %#',output=>{expect(()=>parsePacProfiles(output)).toThrow();});
+it('recognizes the active marker only immediately after the profile index',()=>{
+  const info=parsePacProfiles(profiles.replace('[1] *','[1]')+' * starred profile label');expect(info.isReal).toBe(false);expect(info.environments[0].active).toBe(false);
+});
 it('accepts an existing absolute executable without searching PATH', () => {
   expect(resolveTenancyCommand(process.execPath)).toEqual({ file: process.execPath, args: [] });
 });
@@ -18,6 +31,15 @@ function runner() {
   return { run, start, stop, output: (text: string) => output(text), ended: (error?: string) => ended(error) };
 }
 describe('Tenancy service', () => {
+  it('confirms selected account and environment with a fresh profile read',async()=>{
+    const r=runner(),service=make(r);await service.info();await expect(service.select(1)).resolves.toMatchObject({ok:true});
+    expect(r.run.mock.calls.map(([,args])=>args)).toEqual([['auth','list'],['auth','select','--index','1'],['auth','list']]);
+  });
+  it.each(['other-index','other-account','other-environment','no-active','malformed'])('does not certify profile selection when post-selection discovery shows %s',async mode=>{
+    const r=runner(),service=make(r);await service.info();const confirmation=mode==='other-index'?profiles.replace('[1]','[2]'):mode==='other-account'?profiles.replace('user@example.com','other@example.com'):mode==='other-environment'?profiles.replace('org.crm','other.crm'):mode==='no-active'?profiles.replace('*',''):profiles+'\n'+profiles;
+    r.run.mockImplementation(async(_name,args)=>args.includes('select')?'Error: selection denied':confirmation);
+    await expect(service.select(1)).rejects.toThrow();expect((await service.info()).isReal).toBe(mode!=='no-active'&&mode!=='malformed');
+  });
   it('defaults to interactive sign-in and only requests device code explicitly', () => {
     const r = runner(); const service = make(r);
     service.login({ interactive: true });

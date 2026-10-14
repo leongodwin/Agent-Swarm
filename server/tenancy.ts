@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { resolveCommand, unwrapCmdShim } from './clis.ts';
 import { HttpError } from './httpError.ts';
 import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../shared/tenancy.ts';
+import {identityRoot} from './identityContracts.ts';
 export type { TenancyInfo, TenancyEnvironment } from '../shared/tenancy.ts';
 
 /** Resolve CLI shims to programs so values never pass through a shell. */
@@ -62,15 +63,19 @@ const disconnected = (): TenancyInfo => ({ tenantName: '', tenantDomain: '', ten
 
 /** PAC profiles are the authority; an unrelated Azure account is never substituted. */
 export function parsePacProfiles(output: string): TenancyInfo {
+  if(Buffer.byteLength(output)>64*1024)throw new Error('PAC profile inventory exceeds its bound');
   const info = disconnected();
   for (const line of output.split(/\r?\n/)) {
     const index = line.match(/^\s*\[(\d+)\]/)?.[1];
     const url = line.match(/https:\/\/[^\s]+/)?.[0];
     if (!index || !url) continue;
+    const number=Number(index);if(!Number.isSafeInteger(number)||number<1||info.environments.some(environment=>environment.index===number))throw new Error('PAC profile identity is invalid or ambiguous');
+    const root=identityRoot(url);
     const user = line.match(/[\w.%+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] ?? '';
-    const name = new URL(url).hostname.split('.')[0];
-    info.environments.push({ index: Number(index), name, url, user, active: line.includes('*') });
+    const name = new URL(root).hostname.split('.')[0];
+    info.environments.push({ index: number, name, url:root+'/', user, active: /^\s*\[\d+\]\s+\*(?:\s|$)/.test(line) });
   }
+  if(info.environments.filter(environment=>environment.active).length>1)throw new Error('PAC active profile is ambiguous');
   const active = info.environments.find((env) => env.active);
   info.user = active?.user ?? ''; info.isReal = !!active;
   info.status = active ? 'connected' : 'disconnected';
@@ -128,11 +133,18 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       if (!Number.isInteger(index) || index < 1) throw new HttpError(400, 'Profile index must be a positive integer');
       const current=generation,observed=await info();assertOpen();assertProfileIdle();
       if(generation!==current||observed.status==='stale')throw new HttpError(409,'Authentication discovery changed or is stale; refresh before selecting');
-      if (!observed.environments.some((env) => env.index === index)) throw new HttpError(404, 'Authentication profile not found');
+      const expected=observed.environments.find((env)=>env.index===index);
+      if (!expected) throw new HttpError(404, 'Authentication profile not found');
       selecting=true;invalidate();
       try {
         if (!demo) await runner.run('pac', ['auth', 'select', '--index', String(index)]);
-        assertOpen();invalidate();
+        assertOpen();
+        if(!demo){
+          const confirmed=parsePacProfiles(await runner.run('pac',['auth','list']));assertOpen();
+          const active=confirmed.environments.find(environment=>environment.active);
+          if(!active||active.index!==index||active.url!==expected.url||active.user.toLowerCase()!==expected.user.toLowerCase())throw new HttpError(409,'Selected authentication profile was not confirmed; refresh the current account and environment before retrying');
+        }
+        invalidate();
         return { ok: true, message: `${demo ? 'Demo: ' : ''}Selected profile [${index}]` };
       } finally {selecting=false;}
     },
