@@ -19,8 +19,9 @@ responses and browser configuration request bodies. Existing per-consumer size
 limits remain in force. The settings depth limit remains 64; package/response
 parsing permits 256 containers so it preserves the previously supported 32-level
 flow-operation nesting even when Switch wrappers use multiple JSON containers.
-Agent hook and MCP transport envelopes retain their existing parsing paths; this
-change is not a claim that all JSON interfaces or governance semantics are complete.
+Agent hook and MCP transport envelopes now use the same structure verifier;
+see [Agent JSON boundaries](AGENT-JSON-BOUNDARIES.md). These changes do not establish
+that all JSON interfaces or governance semantics are complete.
 
 Actual ZIP fixtures verify that ambiguous flow/Canvas metadata cannot produce a
 complete inventory. All six lifecycle gates retain unavailable package evidence

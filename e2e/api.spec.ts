@@ -12,6 +12,11 @@ test('browser API enforces sessions, schemas and connected repository IDs', asyn
   expect((await request.post('/api/governance/tenant/refresh', {data:{tenantId:'5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c'}})).status()).toBe(409);
   const missingHook = await (await request.post('/api/hooks/test-missing-session', { data: { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'pac copilot publish' } } })).json();
   expect(missingHook.hookSpecificOutput.permissionDecision).toBe('deny');
+  for (const url of ['/api/hooks/test-missing-session', '/api/mcp/test-missing-session']) {
+    const ambiguous = await request.post(url, {headers:{'Content-Type':'application/json'},data:'{"tool_input":{},"tool_\\u0069nput":{}}'});
+    expect(ambiguous.status()).toBe(400);
+    expect(await ambiguous.json()).toEqual({error:'Invalid or ambiguous request JSON'});
+  }
   expect((await request.get('/api/state', { headers: { Origin: 'https://evil.example' } })).status()).toBe(403);
   for (const url of ['/api/proposals/generate', '/api/hld/generate', '/api/tenancy/login', '/api/tenancy/select']) {
     const data = url.endsWith('/login') ? { interactive: false, clientSecret: 'invalid' } : { unknown: true };

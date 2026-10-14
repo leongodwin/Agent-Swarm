@@ -1,4 +1,4 @@
-import {parseUnambiguousJson} from './unambiguousJson.ts';
+import {verifyJsonStructure} from './unambiguousJson.ts';
 import path from 'node:path';
 import {currentEnvironment} from '../shared/tenancy.ts';
 import fs from 'node:fs';
@@ -51,15 +51,16 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   let closed = false;
   let reloadPending = false;
   const requireOpen = () => { if (closed) throw new HttpError(503, 'Office is shutting down; retry after restart'); };
+  const jsonBody=(maxBytes:number)=>express.json({limit:maxBytes,verify:(_req,_res,bytes,encoding)=>{try{verifyJsonStructure(new TextDecoder(encoding,{fatal:true}).decode(bytes),{maxBytes});}catch{throw new HttpError(400,'Invalid or ambiguous request JSON');}}});
   app.use('/api', (req, _res, next) => { try { requireOpen();if(reloadPending&&req.method!=='GET')throw new HttpError(503,'Office reload is pending; inspect runtime before changing the office');next(); } catch (error) { next(error); } });
   // Agent CLIs calling back: hooks (a tool result can be a large screenshot, hence the limit) and the CEO's office tools.
   // The token in the path is the session's; unknown tokens get an empty answer.
-  app.post('/api/hooks/:token', express.json({ limit: '64mb' }), (req, res, next) => void handleHook(String(req.params.token), req.body).then((answer) => { requireOpen(); res.json(answer); }).catch(next));
-  app.post('/api/mcp/:token', express.json({ limit: '4mb' }), (req, res, next) => void handleMcp(String(req.params.token), req, res).catch(next));
+  app.post('/api/hooks/:token', jsonBody(64*1024*1024), (req, res, next) => void handleHook(String(req.params.token), req.body).then((answer) => { requireOpen(); res.json(answer); }).catch(next));
+  app.post('/api/mcp/:token', jsonBody(4*1024*1024), (req, res, next) => void handleMcp(String(req.params.token), req, res).catch(next));
   app.all('/api/mcp/:token', (_req, res) => void res.status(405).set('Allow', 'POST').end());
   const browserAuth = createBrowserAuth();
   browserAuth.install(app);
-  app.use(express.json({limit:'1mb',verify:(_req,_res,bytes,encoding)=>{try{parseUnambiguousJson(new TextDecoder(encoding,{fatal:true}).decode(bytes),{maxBytes:1024*1024});}catch{throw new HttpError(400,'Invalid or ambiguous request JSON');}}}));
+  app.use(jsonBody(1024*1024));
   app.use('/api', (req, _res, next) => {
     try { requireOpen(); } catch (error) { return next(error); }
     req.body ??= {};

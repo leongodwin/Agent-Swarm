@@ -343,3 +343,13 @@ it.each(['agent','delivery','cleanup'] as const)('holds authentication profile c
 it.each(['{"copilotPaused":true,"copilotPaused":false}','{"copilotPaused":true,"copilot\\u0050aused":false}'])('rejects ambiguous browser configuration before a platform-policy mutation',async body=>{
   const f=await office(),pause=vi.spyOn(f.delivery,'pauseCopilot');const response=await fetch(f.url+'/api/delivery/platforms',{method:'POST',headers:{Cookie:f.cookie,Origin:f.url,'Content-Type':'application/json'},body});expect(response.status).toBe(400);expect(await response.json()).toEqual({error:'Invalid or ambiguous request JSON'});expect(pause).not.toHaveBeenCalled();
 });
+
+it.each(['/api/hooks/missing-session','/api/mcp/missing-session'])('rejects duplicate literal and escaped agent request fields before handling %s',async resource=>{
+  const f=await office();for(const body of ['{"tool_input":{"command":"private-command"},"tool_input":{"command":"safe"}}','{"params":{"private":"value"},"par\\u0061ms":{}}']){const response=await fetch(f.url+resource,{method:'POST',headers:{'Content-Type':'application/json'},body});expect(response.status).toBe(400);expect(await response.json()).toEqual({error:'Invalid or ambiguous request JSON'});}
+});
+it('retains the large hook-body contract and still denies an unknown session',async()=>{
+  const f=await office(),body=JSON.stringify({hook_event_name:'PreToolUse',tool_name:'Bash',tool_input:{command:'synthetic'},screenshot:'A'.repeat(33*1024*1024)});const response=await fetch(f.url+'/api/hooks/missing-session',{method:'POST',headers:{'Content-Type':'application/json'},body});expect(response.status).toBe(200);expect((await response.json()).hookSpecificOutput.permissionDecision).toBe('deny');
+},15000);
+it('keeps native JSON grammar validation after structural inspection',async()=>{
+  const f=await office(),response=await fetch(f.url+'/api/hooks/missing-session',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"tool_input":invalid}'});expect(response.status).toBe(400);expect(await response.json()).toEqual({error:'Invalid request body'});
+});
