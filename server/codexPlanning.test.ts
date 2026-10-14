@@ -13,9 +13,25 @@ afterEach(()=>{vi.clearAllMocks();vi.restoreAllMocks();native.commandFor.mockRes
 function fixture(){
   const proc=Object.assign(new EventEmitter(),{stdout:new PassThrough(),stderr:new PassThrough(),stdin:new PassThrough(),kill:vi.fn()});
   native.spawn.mockReturnValue(proc);let finished!:(value:SessionResult)=>void;const result=new Promise<SessionResult>(resolve=>{finished=resolve;});
-  const callback=vi.fn(finished);const handle=startCodexPlanning(options,{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:callback});
-  return {proc,result,handle,callback};
+  const callback=vi.fn(finished),log=vi.fn();const handle=startCodexPlanning(options,{log,tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:callback});
+  return {proc,result,handle,callback,log};
 }
+it('streams bounded status metadata before close without exposing native reasoning, prompt or draft text',async()=>{
+  const run=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
+  run.proc.stdout.write(JSON.stringify({type:'thread.started',thread_id:'private-session'})+'\n'+JSON.stringify({type:'turn.started'})+'\n'+JSON.stringify({type:'item.completed',item:{type:'reasoning',text:'private native reasoning'}})+'\n');
+  expect(run.log.mock.calls.flatMap(([entries])=>entries).map(entry=>entry.text)).toEqual(['Codex planning session opened','Codex architecture generation in progress']);expect(run.callback).not.toHaveBeenCalled();
+  run.proc.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{"draft":"private draft"}'}})+'\n');expect(JSON.stringify(run.log.mock.calls)).not.toContain('private');expect(run.callback).not.toHaveBeenCalled();run.proc.emit('close',0);expect(await run.result).toMatchObject({ok:true,structured:{draft:'private draft'}});
+  const calls=run.log.mock.calls.length;run.proc.stdout.write(JSON.stringify({type:'turn.started'})+'\n');expect(run.log).toHaveBeenCalledTimes(calls);
+});
+it.each(['invalid-json','invalid-event','forbidden-start'] as const)('stops on %s streaming evidence before process close while retaining completion ownership',async mode=>{
+  const run=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
+  const line=mode==='invalid-json'?'private malformed JSON':mode==='invalid-event'?'null':JSON.stringify({type:'item.started',item:{type:'command_execution',command:'private forbidden command'}});
+  expect(()=>run.proc.stdout.write(line+'\n')).not.toThrow();expect(run.proc.kill).toHaveBeenCalledOnce();expect(run.callback).not.toHaveBeenCalled();run.proc.emit('close',0);const value=await run.result;expect(value.ok).toBe(false);expect(JSON.stringify(value.errors)).not.toContain('private');expect(run.callback).toHaveBeenCalledOnce();
+});
+it('accepts a final unterminated event line and isolates a rejected progress consumer',async()=>{
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{}),run=fixture();run.log.mockImplementation(()=>{throw new Error('private progress callback');});await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
+  run.proc.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{}'}}));run.proc.emit('close',0);expect(await run.result).toMatchObject({ok:true,structured:{}});expect(warn).toHaveBeenCalledOnce();expect(JSON.stringify(warn.mock.calls)).not.toContain('private');
+});
 it('launches without shell interpolation or inherited project config and parses the structured final response',async()=>{
   const {proc,result}=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
   const [file,args,config]=native.spawn.mock.calls[0];expect(file).toBe('synthetic-codex');expect(config).toMatchObject({shell:false,windowsHide:true});expect(config.cwd).not.toBe(options.cwd);
