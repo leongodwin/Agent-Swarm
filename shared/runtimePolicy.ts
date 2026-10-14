@@ -1,4 +1,5 @@
-import type {AgentCli} from './types.ts';
+import type {AgentCli,EffortLevel} from './types.ts';
+export const CODEX_REASONING_EFFORT={low:'low',medium:'medium',high:'high',xhigh:'xhigh',max:'xhigh'} as const satisfies Record<EffortLevel,string>;
 
 export const ALLOWED_RUNTIMES = ['codex','gemini','opencode'] as const;
 export const DEFAULT_RUNTIME = 'codex' as const;

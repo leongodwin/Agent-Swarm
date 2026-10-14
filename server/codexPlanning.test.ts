@@ -10,11 +10,11 @@ import {startCodexPlanning} from './codexPlanning.ts';
 import {HldSynthesisService} from './hldSynthesis.ts';
 const options:SessionOptions={cwd:process.cwd(),prompt:'Synthetic requirements',systemAppend:'No tools',model:'',effort:'medium',browserTesting:false,additionalDirectories:[],role:'dev',noTools:true,outputSchema:{type:'object'}};
 afterEach(()=>{vi.clearAllMocks();vi.restoreAllMocks();native.commandFor.mockReset().mockReturnValue({file:'synthetic-codex',args:[]});});
-function fixture(){
+function fixture(override:Partial<SessionOptions>={}){
   const proc=Object.assign(new EventEmitter(),{stdout:new PassThrough(),stderr:new PassThrough(),stdin:new PassThrough(),kill:vi.fn()});
   native.spawn.mockReturnValue(proc);let finished!:(value:SessionResult)=>void;const result=new Promise<SessionResult>(resolve=>{finished=resolve;});
-  const callback=vi.fn(finished),log=vi.fn();const handle=startCodexPlanning(options,{log,tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:callback});
-  return {proc,result,handle,callback,log};
+  const callback=vi.fn(finished),log=vi.fn(),request={...options,...override};const handle=startCodexPlanning(request,{log,tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:callback});
+  return {proc,result,handle,callback,log,request};
 }
 it('waits for the Windows tree-stop helper and quarantines a failed stop after launcher close',async()=>{
   vi.spyOn(process,'platform','get').mockReturnValue('win32');const run=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
@@ -47,6 +47,19 @@ it('launches without shell interpolation or inherited project config and parses 
   expect(proc.stdin.read()?.toString()).toContain('Synthetic requirements');
   proc.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{"draft":"complete"}'}})+'\n');proc.emit('close',0);
   expect(await result).toMatchObject({ok:true,structured:{draft:'complete'},turns:1});
+});
+it.each(['low','medium','high','xhigh','max'] as const)('honors explicit planning model and %s reasoning effort while retaining isolation',async effort=>{
+ const {proc,result}=fixture({model:'gpt-synthetic-pinned',effort});await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());const args=native.spawn.mock.calls[0][1] as string[];
+ expect(args.slice(args.indexOf('--model'),args.indexOf('--model')+2)).toEqual(['--model','gpt-synthetic-pinned']);expect(args).toContain(`model_reasoning_effort="${effort==='max'?'xhigh':effort}"`);expect(args).toContain('--ignore-user-config');expect(args).toContain('read-only');expect(args).toContain('shell_tool');
+ proc.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{}'}}));proc.emit('close',0);expect(await result).toMatchObject({ok:true});
+});
+it('pins model, effort, schema and prompt before asynchronous preparation',async()=>{
+ const schema={type:'object',description:'Original schema'},run=fixture({model:'gpt-pinned',effort:'low',outputSchema:schema});run.request.model='anthropic/claude';run.request.effort='max';run.request.prompt='Unapproved replacement prompt';schema.description='Unapproved schema';
+ await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());const args=native.spawn.mock.calls[0][1] as string[];expect(args).toContain('gpt-pinned');expect(args).not.toContain('anthropic/claude');expect(args).toContain('model_reasoning_effort="low"');expect(run.proc.stdin.read()?.toString()).toContain('Synthetic requirements');expect(JSON.parse(await fs.readFile(args[args.indexOf('--output-schema')+1],'utf8'))).toEqual({type:'object',description:'Original schema'});
+ run.proc.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{}'}}));run.proc.emit('close',0);expect(await run.result).toMatchObject({ok:true});
+});
+it.each([{model:'anthropic/claude'},{model:'claude-opus'},{model:' gpt-model'},{model:'gpt-model '},{model:'x'.repeat(501)},{effort:'unsupported' as any},{effort:'constructor' as any}])('rejects unsupported planning configuration before discovery or spawn: %#',override=>{
+ expect(()=>fixture(override)).toThrow();expect(native.commandFor).not.toHaveBeenCalled();expect(native.spawn).not.toHaveBeenCalled();
 });
 it('waits for process close after cancellation before reporting completion',async()=>{
   const {proc,handle,callback,result}=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());handle.stop();expect(proc.kill).toHaveBeenCalledOnce();expect(callback).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import {geminiProfilePath} from './geminiBridge.ts';
-import {allowedRuntime,runtimeModelError} from '../shared/runtimePolicy.ts';
+import {allowedRuntime,runtimeModelError,CODEX_REASONING_EFFORT} from '../shared/runtimePolicy.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { run } from './exec.ts';
@@ -124,7 +124,6 @@ export interface Launch {
   env: Record<string, string>;
 }
 
-const EFFORT_CODEX: Record<EffortLevel, string> = { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'xhigh' };
 
 /** Codex hooks the office listens to: its steps, and Esc interrupting a turn. Turn endings come from notify. */
 export const CODEX_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Interrupt'];
@@ -159,7 +158,7 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         '-c',
         `developer_instructions=${toml(ctx.systemAppend)}`,
         ...(ctx.model ? ['-m', ctx.model] : []),
-        ...(ctx.effort ? ['-c', `model_reasoning_effort=${toml(EFFORT_CODEX[ctx.effort])}`] : []),
+        ...(ctx.effort ? ['-c', `model_reasoning_effort=${toml(CODEX_REASONING_EFFORT[ctx.effort])}`] : []),
         ...(ctx.browser ? ['-c', `mcp_servers.playwright={command=${toml(ctx.browser.command)},args=[${ctx.browser.args.map(toml).join(',')}],startup_timeout_sec=60}`] : []),
         ...(ctx.officeUrl ? ['-c', `mcp_servers.office={url=${toml(ctx.officeUrl)}}`] : []),
         ...CODEX_HOOK_EVENTS.flatMap((e) => ['-c', `hooks.${e}=[{hooks=[{type="command",command=${toml(codexHookInvocation(ctx.codexHook,e))},timeout=${e === 'Interrupt' ? 3 : 10}}]}]`]),

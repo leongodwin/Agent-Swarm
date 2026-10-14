@@ -5,10 +5,16 @@ import path from 'node:path';
 import {commandFor} from './clis.ts';
 import type {SessionOptions,SessionCallbacks,SessionHandle,SessionResult} from './agentRunner.ts';
 import {terminalCallback} from './terminalCallbacks.ts';
+import {runtimeModelError,CODEX_REASONING_EFFORT} from '../shared/runtimePolicy.ts';
 
 /** Planning uses a separate empty directory and accepts only a bounded structured final answer. */
 export function startCodexPlanning(opts:SessionOptions,cb:SessionCallbacks):SessionHandle {
+  opts={...opts,outputSchema:opts.outputSchema?structuredClone(opts.outputSchema):undefined,additionalDirectories:[...opts.additionalDirectories]};
   if(opts.cli&&opts.cli!=='codex')throw new Error('Structured synthesis uses Codex; provider substitution is disabled');
+  const policyError=runtimeModelError('codex',opts.model);if(policyError)throw new Error(policyError);
+  if(opts.model!==opts.model.trim()||opts.model.length>500)throw new Error('Planning model must be an exact bounded model identifier');
+  const effort=Object.hasOwn(CODEX_REASONING_EFFORT,opts.effort)?CODEX_REASONING_EFFORT[opts.effort]:undefined;
+  if(!effort)throw new Error('Planning reasoning effort is unsupported');
   if(!opts.noTools||!opts.outputSchema)throw new Error('Nonterminal execution requires structured planning');
   let child:ReturnType<typeof spawn>|undefined,stopped=false;
   let delivered=false;
@@ -40,7 +46,7 @@ export function startCodexPlanning(opts:SessionOptions,cb:SessionCallbacks):Sess
       await fs.writeFile(path.join(dir,'schema.json'),JSON.stringify(opts.outputSchema));
       if(stopped){finished({ok:false,text:'',errors:['Cancelled before launch'],turns:0,costUsd:0});return;}
       const disabled=['shell_tool','unified_exec','apps','browser_use','browser_use_external','computer_use','image_generation','multi_agent','memories','hooks','skill_search','workspace_dependencies','code_mode_host','view_image'];
-      const args=[...command.args,'exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',path.join(dir,'schema.json'),'-c','web_search="disabled"',...disabled.flatMap(feature=>['--disable',feature]),'-'];
+      const args=[...command.args,'exec',...(opts.model?['--model',opts.model]:[]),'-c',`model_reasoning_effort=${JSON.stringify(effort)}`,'--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',path.join(dir,'schema.json'),'-c','web_search="disabled"',...disabled.flatMap(feature=>['--disable',feature]),'-'];
       child=spawn(command.file,args,{cwd:dir,windowsHide:true,shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
       let stdout='',stderr='',failure='',bytes=0,text='',turns=0;
       const outDecoder=new TextDecoder('utf-8',{fatal:true}),errDecoder=new TextDecoder('utf-8',{fatal:true});
