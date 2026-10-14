@@ -8,10 +8,11 @@ function fixture(options:{length?:number;drift?:boolean;truncated?:boolean}={}){
   let identities=0;
   const attribute={LogicalName:'exp_title',MetadataId:metadata,AttributeType:'String',RequiredLevel:{Value:'None'},MaxLength:options.length??100};
   const run=vi.fn(async(command:{executable:string;args:string[]})=>{
-    if(command.executable==='pac')return `Org ID: ${guid}\nUser ID: ${guid}\nOrg URL: ${environment}\nEnvironment ID: ${guid}\nUser Email: ${options.drift&&++identities>1?'other@company.test':'tester@company.test'}`;
-    if(command.args[0]==='auth')return `Tenant: ${guid}\nUser: tester@company.test\nEnvironment: ${environment}`;
+    if(command.executable!=='dataverse')throw new Error('Schema observation must use only Dataverse');
+    if(command.args[0]==='auth')return `Tenant: ${guid}\nUser: ${options.drift&&++identities>1?'other@company.test':'tester@company.test'}\nEnvironment: ${environment}`;
     const resource=command.args[command.args.indexOf('--path')+1];
     if(resource.endsWith('WhoAmI'))return JSON.stringify({OrganizationId:guid,UserId:guid});
+    if(resource.includes('RetrieveCurrentOrganization'))return JSON.stringify({Detail:{OrganizationId:guid,EnvironmentId:guid,TenantId:guid,State:'Enabled'}});
     if(resource.includes('/Attributes('))return JSON.stringify(attribute);
     const next=options.truncated?{'@odata.nextLink':'https://unapproved.test/metadata'}:{};
     if(resource.includes('/Attributes?'))return JSON.stringify({value:[attribute],...next});
@@ -24,7 +25,9 @@ it('reads freshly at all six stages, pins identity before/after and never claims
   for(const phase of ['build','test','import','post-deploy','verify','health'] as const){
     const result=await observe({...input,phase});expect(result).toMatchObject({status:'observed',complete:false,scope:'declared-target-schema',phase,tables:['exp_report']});expect(result.observations).toHaveLength(2);expect(result.reason).toContain('remain unverified');
   }
-  expect(run.mock.calls.filter(([command])=>command.executable==='pac')).toHaveLength(12);
+  expect(run.mock.calls.every(([command])=>command.executable==='dataverse')).toBe(true);
+  expect(run.mock.calls.filter(([command])=>command.args[0]==='auth')).toHaveLength(12);
+  expect(run.mock.calls.filter(([command])=>command.args.some(arg=>arg.includes('RetrieveCurrentOrganization')))).toHaveLength(12);
   for(const [command] of run.mock.calls.filter(([command])=>command.args[0]==='api')){
     expect(command.args[command.args.indexOf('--environment')+1]).toBe(environment);expect(command.args[command.args.indexOf('--method')+1]).toBe('GET');
   }
@@ -53,7 +56,7 @@ it('revokes a pending native observation on cancellation before metadata can be 
   const controller=new AbortController();const {run,observe}=fixture();let resolve!:(text:string)=>void;
   run.mockImplementationOnce(()=>new Promise<string>(yes=>{resolve=yes;}));
   const pending=observe({...input,signal:controller.signal});await Promise.resolve();controller.abort();resolve('private cancelled output');
-  const result=await pending;expect(result.status).toBe('unavailable');expect(result.observations).toEqual([]);expect(run).toHaveBeenCalledOnce();expect(JSON.stringify(result)).not.toContain('private cancelled output');
+  const result=await pending;expect(result.status).toBe('unavailable');expect(result.observations).toEqual([]);expect(run).toHaveBeenCalledTimes(3);expect(run.mock.calls.some(([command])=>command.args.some(arg=>arg.includes('EntityDefinitions')))).toBe(false);expect(JSON.stringify(result)).not.toContain('private cancelled output');
 });
 it('bounds total schema response bytes before parsing and publishing evidence',async()=>{
   const {run,observe}=fixture();const normal=run.getMockImplementation()!;

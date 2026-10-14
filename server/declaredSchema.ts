@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import {deliveryManifest,deliveryCommands,type DeliveryDependencies} from './delivery.ts';
-import {verifyPlatformAuthentication,platformIdentitySchema} from './platformAuth.ts';
+import {platformIdentitySchema} from './platformAuth.ts';
+import {currentOrganizationResource,verifyDataverseIdentity} from './dataverseIdentity.ts';
 import {verifyMigrationCompatibility} from './deploymentAdapters.ts';
 import {baseAttribute,verifyColumns} from './columnContracts.ts';
 import {governancePhase,manifestDigest,type LifecycleRequest} from './lifecycleGovernance.ts';
@@ -40,15 +41,15 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
       const observations:DeclaredSchemaObservation['observations']=[];
       let bytes=0;
       const request:Request=async(method,resource)=>{
-        if(method!=='GET'||!(resource==='WhoAmI'||resource.startsWith('EntityDefinitions')))throw new Error('Schema observer accepts metadata reads only');
+        if(method!=='GET'||!(resource==='WhoAmI'||resource===currentOrganizationResource||resource.startsWith('EntityDefinitions')))throw new Error('Schema observer accepts metadata and fixed identity reads only');
         const output=await command('dataverse',['api','request','--target','dataverse','--environment',url.origin,'--method','GET','--path',`/api/data/v9.2/${resource}`]);
         bytes+=Buffer.byteLength(output);if(bytes>8*1024*1024)throw new Error('Schema observation exceeded its byte bound');
         const value:unknown=JSON.parse(output);
-        if(resource!=='WhoAmI')observations.push({resource,value});
+        if(resource!=='WhoAmI'&&resource!==currentOrganizationResource)observations.push({resource,value});
         if(observations.length>300)throw new Error('Schema observation exceeded its bound');
         return value;
       };
-      await verifyPlatformAuthentication(command,request,url.origin,binding,identity);
+      await verifyDataverseIdentity(command,request,url.origin,binding,identity);
       if(['build','test','import'].includes(input.phase))await verifyMigrationCompatibility(actions,tables,request);
       else for(const table of tables){
         const action=actions.find(action=>action.component===table.key)!;
@@ -56,7 +57,7 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
         await verifyColumns(action.columns,table.logicalName,observed.value,request);
         if(action.structure)await verifyTableStructure(action.structure,table.logicalName,request);
       }
-      await verifyPlatformAuthentication(command,request,url.origin,binding,identity);
+      await verifyDataverseIdentity(command,request,url.origin,binding,identity);
       signal.throwIfAborted();
       return declaredSchemaObservation.parse({...base,status:'observed',checkedAt:new Date().toISOString(),identity,binding,tables:tables.map(table=>table.logicalName),observations,
         reason:['build','test','import'].includes(input.phase)?'Declared target migration compatibility passed identity-bound checks; final columns and comprehensive schema remain unverified':'Declared target columns and any declared structure contracts passed identity-bound checks; complete source/package schemas, undeclared relationships/keys and effective security remain unverified'});
