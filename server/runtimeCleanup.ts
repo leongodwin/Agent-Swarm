@@ -115,12 +115,12 @@ export class RuntimeCleanupStore {
       if(performance.now()>=deadline)throw Object.assign(new Error('Cleanup writer unavailable'),{code:previous.success?'CLEANUP_BUSY':'CLEANUP_EVIDENCE'});
       Atomics.wait(pause,0,0,5);
     }
-    return ()=>{const current=lockRecord.parse(readCoordination(file,performance.now()+250));if(current.token!==owner.token||current.pid!==owner.pid)throw new Error('Cleanup writer ownership lost');fs.unlinkSync(file);};
+    return ()=>{const current=lockRecord.parse(readCoordination(file,performance.now()+1000));if(current.token!==owner.token||current.pid!==owner.pid)throw new Error('Cleanup writer ownership lost');fs.unlinkSync(file);};
   }
   private acquire():()=>void{
     const file=this.file+'.lock',queue=file+'.queue',allocator=file+'.queue-lock';
     const started=performance.now(),maximum=started+1000;
-    let deadline=started+250;
+    const deadline=maximum;
     type Ticket=z.infer<typeof queueRecord>;
     const invalid=()=>Object.assign(new Error('Cleanup queue evidence is invalid'),{code:'CLEANUP_EVIDENCE'});
     // Queue allocation/inspection is short; the main transaction never holds this gate.
@@ -179,15 +179,14 @@ export class RuntimeCleanupStore {
           const gate=this.exclusive(allocator,deadline);
           try{
             assertTicket();const rows=liveQueue();if(!rows.some(row=>row.token===mine.token))throw invalid();
-            // Slow but advancing native writers are not a dead owner. Extend
-            // only after an observed head change, with a one-second hard cap.
-            if(predecessor&&rows[0]?.token!==predecessor.token)deadline=Math.min(maximum,Math.max(deadline,performance.now()+250));
+            // Use the existing full one-second cap: a healthy writer may be
+            // descheduled beyond 250 ms even when the FIFO queue is progressing.
             if(rows[0]?.token===mine.token)release=this.exclusive(file,deadline);else predecessor=rows[0];
           }
           finally{gate();}
         }
         if(release)return ()=>{
-          const limit=performance.now()+250,gate=this.exclusive(allocator,limit);
+          const limit=performance.now()+1000,gate=this.exclusive(allocator,limit);
           try{assertTicket(limit);release!();remove(limit);}finally{gate();}
         };
         if(performance.now()>=deadline)throw Object.assign(new Error('Cleanup writer unavailable'),{code:'CLEANUP_BUSY'});

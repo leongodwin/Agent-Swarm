@@ -9,6 +9,15 @@ const flow=(type='OpenApiConnection',api='shared_commondataserviceforapps')=>JSO
 async function zip(entries:Record<string,string|Buffer>,compress=false){const archive=new ZipFile();const chunks:Buffer[]=[];const ready=new Promise<Buffer>((resolve,reject)=>{archive.outputStream.on('data',chunk=>chunks.push(chunk));archive.outputStream.on('end',()=>resolve(Buffer.concat(chunks)));archive.outputStream.on('error',reject);});for(const [name,body] of Object.entries(entries))archive.addBuffer(Buffer.from(body),name,{compress});archive.end();return ready;}
 async function fixture(entries:Record<string,string|Buffer>={'solution.xml':solution(),'customizations.xml':custom(),'Workflows/flow.json':flow()}){const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-package-inventory-'));roots.push(root);const file=path.join(root,'solution.zip');await fs.writeFile(file,await zip(entries));return {root,file};}
 const limits:ArchiveLimits={compressedBytes:64*1024*1024,entryBytes:32*1024*1024,expandedBytes:256*1024*1024,entries:10000,ratio:1000};
+it.each(['actions','escaped-actions','connector','table'] as const)('refuses a checksum-valid flow with ambiguous %s metadata',async mode=>{
+  let source=flow();if(mode==='actions'||mode==='escaped-actions')source=source.replace('"actions":{',`"actions":{"hidden":{"type":"Http"}},"${mode==='escaped-actions'?'act\\u0069ons':'actions'}":{`);
+  if(mode==='connector')source=source.replace('"apiId":', '"apiId":"shared_dropbox","apiId":');if(mode==='table')source=source.replace('"entityName":', '"entityName":"private_table","entityName":');
+  const {file}=await fixture({'solution.xml':solution(),'customizations.xml':custom(),'Workflows/flow.json':source});const report=await inspectSolutionPackage(file);expect(report.archiveComplete).toBe(false);expect(report.resourceInventoryComplete).toBe(false);expect(report.complianceVerified).toBe(false);expect(JSON.stringify(report)).not.toContain('private_table');
+});
+it('refuses ambiguous nested Canvas datasource JSON without extracting or executing it',async()=>{
+  const msapp=await zip({'References/DataSources.json':'{"DataSources":[{"Type":"NativeCDSDataSourceInfo","LogicalName":"private_table","LogicalName":"exp_report"}]}','Properties.json':'{}'});
+  const {root,file}=await fixture({'solution.xml':solution('<RootComponent type="300" schemaName="exp_app"/>'),'customizations.xml':'<ImportExportXml><CanvasApps><CanvasApp><Name>exp_app</Name><DocumentUri>/CanvasApps/app.msapp</DocumentUri></CanvasApp></CanvasApps></ImportExportXml>','CanvasApps/app.msapp':msapp});const report=await inspectSolutionPackage(file);expect(report.archiveComplete).toBe(false);expect(report.resourceInventoryComplete).toBe(false);expect(JSON.stringify(report)).not.toContain('private_table');expect(await fs.readdir(root)).toEqual(['solution.zip']);
+});
 it('derives actual flow references and operations from a checksum-verified package without extracting files',async()=>{
   const {file,root}=await fixture();const report=await inspectSolutionPackage(file);
   expect(report).toMatchObject({archiveComplete:true,resourceInventoryComplete:true,complianceVerified:false,solution:{name:'Expenses',version:'1.0.0.0',managed:false}});
@@ -57,4 +66,10 @@ it('rejects traversal and special-file ZIP entries without touching the filesyst
 });
 it('handles compressed entries and exposes otherwise hidden customization settings',async()=>{
   const {file}=await fixture();await fs.writeFile(file,await zip({'solution.xml':solution(),'customizations.xml':custom('<OrganizationSettings><SecuritySetting>1</SecuritySetting></OrganizationSettings>'),'Workflows/flow.json':flow()},true));const report=await inspectSolutionPackage(file);expect(report.archiveComplete).toBe(true);expect(report.resourceInventoryComplete).toBe(false);expect(report.issues.join(' ')).toContain('OrganizationSettings');
+});
+
+it('preserves supported flow nesting when JSON containers exceed the settings-file depth bound',async()=>{
+  const definition=JSON.parse(flow());let actions=definition.properties.definition.actions;
+  for(let depth=0;depth<32;depth++)actions={branch:{type:'Switch',cases:{named:{case:'Synthetic',actions}}}};
+  definition.properties.definition.actions=actions;const {file}=await fixture({'solution.xml':solution(),'customizations.xml':custom(),'Workflows/flow.json':JSON.stringify(definition)});const report=await inspectSolutionPackage(file);expect(report.archiveComplete).toBe(true);expect(report.resourceInventoryComplete).toBe(true);expect(report.resources[0].operations).toHaveLength(34);
 });

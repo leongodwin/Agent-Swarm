@@ -1,3 +1,4 @@
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import * as zlib from 'node:zlib';
@@ -66,7 +67,7 @@ function xml(buffer:Buffer) {
   if(/<!\s*(DOCTYPE|ENTITY)\b/i.test(value)||XMLValidator.validate(value)!==true)throw new Error('Unsafe or malformed XML');
   return new XMLParser({ignoreAttributes:false,parseTagValue:false,parseAttributeValue:false,processEntities:false}).parse(value).ImportExportXml;
 }
-function json(buffer:Buffer) {return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(buffer));}
+function json(buffer:Buffer):any {return parseUnambiguousJson(new TextDecoder('utf-8',{fatal:true}).decode(buffer));}
 function packagePath(value:any){const path=text(value).replace(/^\//,'');safeName(path);return path.toLowerCase();}
 
 /** Read-only inspection: no extraction, executable code, tenant calls or formula execution.

@@ -30,5 +30,5 @@ it('stops ordinary native descendants as well as their planning launcher',async(
     await vi.waitFor(async()=>expect(await fs.readFile(heartbeat,'utf8')).toMatch(/^\d+$/),{timeout:5000});
     run.handle.stop();expect(await run.result).toMatchObject({ok:false,cleanupVerified:true,errors:['Cancelled']});
     const stopped=await fs.readFile(heartbeat,'utf8');await new Promise(resolve=>setTimeout(resolve,200));expect(await fs.readFile(heartbeat,'utf8')).toBe(stopped);expect(run.finished).toHaveBeenCalledOnce();
-  }finally{run.handle.stop();await fs.rm(root,{recursive:true,force:true});}
+  }finally{run.handle.stop();await fs.rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});}
 },10000);

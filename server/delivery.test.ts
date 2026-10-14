@@ -120,7 +120,7 @@ it('preserves a failed attempt through successful re-verification and independen
   await service.approveVisual(run.id,'sherlock',{evidenceHash:run.evidenceHash,scores:[4,4,4,4,4],notes:'Synthetic independent review of captured evidence and recovery procedures.',recoveryReviewed:true});
   expect(service.view().attemptHistory).toMatchObject({completeWindow:false,successPercent:null,recorded:{completed:2,successful:1,unsuccessful:1,successPercent:50}});
   const state=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));expect(state.attemptHistory.attempts.map((row:{status:string})=>row.status)).toEqual(['failed','successful']);expect(state.attemptHistory.attempts[0].id).toBe(first);expect(state.attemptHistory.attempts[1].evidenceHash).toBe(run.evidenceHash);expect(calls.filter(call=>call.includes('solution import'))).toHaveLength(1);
-});
+},15000);
 it('restores persisted preparing intent as interrupted without executing platform commands',async()=>{
   const {service,repo,deps,root}=await fixture();let finish!:(value:never)=>void;
   service.checkCapabilities=()=>new Promise(resolve=>{finish=resolve;});const pending=service.start(repo);

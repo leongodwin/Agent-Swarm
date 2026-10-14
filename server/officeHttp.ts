@@ -1,3 +1,4 @@
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 import path from 'node:path';
 import {currentEnvironment} from '../shared/tenancy.ts';
 import fs from 'node:fs';
@@ -58,7 +59,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.all('/api/mcp/:token', (_req, res) => void res.status(405).set('Allow', 'POST').end());
   const browserAuth = createBrowserAuth();
   browserAuth.install(app);
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({limit:'1mb',verify:(_req,_res,bytes,encoding)=>{try{parseUnambiguousJson(new TextDecoder(encoding,{fatal:true}).decode(bytes),{maxBytes:1024*1024});}catch{throw new HttpError(400,'Invalid or ambiguous request JSON');}}}));
   app.use('/api', (req, _res, next) => {
     try { requireOpen(); } catch (error) { return next(error); }
     req.body ??= {};
@@ -315,7 +316,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   }));
   app.post('/api/alm/rollback', route(async (req) => features.release(await featureScope(req), 'rollback')));
   app.get('/api/tenancy', route(() => backend.tenancy.info()));
-  const requireProfileChangeIdle=()=>{if(swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason||delivery.view().running)throw new HttpError(409,'Wait for agent, architecture and delivery work to finish before changing authentication profiles');};
+  const requireProfileChangeIdle=()=>{if(!backend.demo&&(swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason||delivery.view().running))throw new HttpError(409,'Wait for agent, architecture and delivery work to finish before changing authentication profiles');};
   app.post('/api/tenancy/select', route((req) => {const input=parseBody(selectSchema,req.body);requireProfileChangeIdle();return backend.tenancy.select(input.index);}));
   app.post('/api/tenancy/login', route((req) => {const input=parseBody(loginSchema,req.body);requireProfileChangeIdle();return backend.tenancy.login(input);}));
   app.get('/api/tenancy/login/:id', route((req) => backend.tenancy.loginStatus(String(req.params.id))));

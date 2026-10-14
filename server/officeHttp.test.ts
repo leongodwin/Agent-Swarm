@@ -339,3 +339,7 @@ it.each(['agent','delivery','cleanup'] as const)('holds authentication profile c
   const f=await office();if(mode==='delivery')vi.spyOn(f.delivery,'view').mockReturnValue({...f.delivery.view(),running:true});else vi.spyOn(f.swarm,'sessionUsage').mockReturnValue({limit:0,used:mode==='agent'?1:0,agentSessions:mode==='agent'?1:0,freeSlots:null,auxiliary:[],...(mode==='cleanup'?{blockedReason:'Synthetic unresolved cleanup'}:{})});
   expect((await f.request('/api/tenancy/login','POST',{interactive:true})).status).toBe(409);expect((await f.request('/api/tenancy/select','POST',{index:1})).status).toBe(409);expect(f.external.tenancy.login).not.toHaveBeenCalled();expect(f.external.tenancy.select).not.toHaveBeenCalled();
 });
+
+it.each(['{"copilotPaused":true,"copilotPaused":false}','{"copilotPaused":true,"copilot\\u0050aused":false}'])('rejects ambiguous browser configuration before a platform-policy mutation',async body=>{
+  const f=await office(),pause=vi.spyOn(f.delivery,'pauseCopilot');const response=await fetch(f.url+'/api/delivery/platforms',{method:'POST',headers:{Cookie:f.cookie,Origin:f.url,'Content-Type':'application/json'},body});expect(response.status).toBe(400);expect(await response.json()).toEqual({error:'Invalid or ambiguous request JSON'});expect(pause).not.toHaveBeenCalled();
+});

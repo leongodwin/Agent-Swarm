@@ -37,3 +37,7 @@ it('retains connection and cleanup failures together',async()=>{
 it('does not initialize a cancelled or unavailable runtime',async()=>{
   const f=await fixture();f.controller.abort();await expect(f.connect()).rejects.toThrow();expect(state.connect).not.toHaveBeenCalled();vi.stubEnv('SWARM_FLOWAGENT_ENTRY',path.join(f.root,'missing.mjs'));await expect(connectFlowAdapter(f.root,new AbortController().signal)).rejects.toThrow('unavailable');
 });
+
+it.each(['{"success":false,"success":true}','{"identityMismatch":true,"identity\\u004Dismatch":false}','{"properties":{"connectionName":"private-binding","connectionName":"approved"}}'])('rejects duplicate provider fields without accepting or echoing them: %s',async text=>{
+  const f=await fixture(),adapter=await f.connect();try{state.call.mockResolvedValue({content:[{type:'text',text}]});const error=await adapter.call('get_flow',{}).catch(error=>error);expect(error).toBeInstanceOf(Error);expect((error as Error).message).toContain('invalid JSON');expect((error as Error).message).not.toContain('private-binding');}finally{await adapter.close();}
+});

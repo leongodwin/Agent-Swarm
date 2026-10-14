@@ -50,7 +50,7 @@ it('retains a known advanced constraint denial when classic policy discovery fai
   const result=await check(input);expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('outside observed policy');expect(JSON.stringify(result)).not.toContain('private classic');
   const tampered=await check({...input,packageSha256:'f'.repeat(64)});expect(tampered.status).toBe('unavailable');expect(tampered.reasons.join(' ')).not.toContain('outside observed policy');
 });
-async function packaged(customizationExtra='',rootExtra='',unknownParameter=false) {
+async function packaged(customizationExtra='',rootExtra='',unknownParameter=false,ambiguousJson=false) {
   const checkout=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-governed-package-'));directories.push(checkout);const evidenceDirectory=path.join(checkout,'evidence');
   const definition = {
     triggers: { tick: { type: 'Recurrence' } },
@@ -66,7 +66,7 @@ async function packaged(customizationExtra='',rootExtra='',unknownParameter=fals
   const entries = {
     'solution.xml': `<ImportExportXml><SolutionManifest><UniqueName>Expenses</UniqueName><Version>1.0.0.0</Version><Managed>0</Managed><RootComponents><RootComponent type="29" id="{${guid}}"/>${rootExtra}</RootComponents></SolutionManifest></ImportExportXml>`,
     'customizations.xml': `<ImportExportXml><connectionreferences><connectionreference connectionreferencelogicalname="exp_dataverse"><connectorid>shared_commondataserviceforapps</connectorid></connectionreference><connectionreference connectionreferencelogicalname="exp_outlook"><connectorid>shared_office365</connectorid></connectionreference></connectionreferences><Workflows><Workflow WorkflowId="{${guid}}"><Category>5</Category><JsonFileName>/Workflows/flow.json</JsonFileName></Workflow></Workflows>${customizationExtra}</ImportExportXml>`,
-    'Workflows/flow.json': JSON.stringify({ properties: { connectionReferences, definition } }),
+    'Workflows/flow.json': ambiguousJson?JSON.stringify({properties:{connectionReferences,definition}}).replace('"actions":{','"actions":{"hidden":{"type":"Http"}},"act\\u0069ons":{'):JSON.stringify({ properties: { connectionReferences, definition } }),
   };
   const archive=new ZipFile();const chunks:Buffer[]=[];const bytes=new Promise<Buffer>((resolve,reject)=>{archive.outputStream.on('data',chunk=>chunks.push(chunk));archive.outputStream.on('end',()=>resolve(Buffer.concat(chunks)));archive.outputStream.on('error',reject);});for(const [name,body] of Object.entries(entries))archive.addBuffer(Buffer.from(body),name,{compress:false});archive.end();const buffer=await bytes;await fs.writeFile(path.join(checkout,'release.zip'),buffer);
   return {...request,phase:'import' as const,checkout,evidenceDirectory,packageSha256:crypto.createHash('sha256').update(buffer).digest('hex'),manifest:{...manifest,targetComponents:[...manifest.targetComponents,{key:'outlook',kind:'connection-reference',logicalName:'exp_outlook'},{key:'flow',kind:'cloud-flow',logicalName:guid}],postDeployActions:[...manifest.postDeployActions,{id:'outlook-binding',type:'connection-reference-check',component:'outlook',connectionId:'approved-mail',connectorId:'shared_office365'}]}};
@@ -191,4 +191,10 @@ it('rejects conflicting packaged column limits at every stage without granting a
   for(const phase of ['build','test','import','post-deploy','verify','health'] as const){const denied=await check({...input,phase,manifest:approved});expect(denied.status).toBe('blocked');expect(denied.reasons[0]).toContain('constraint');}
   expect(observe).not.toHaveBeenCalled();action.columns[0].constraints.maxLength=200;
   expect((await check({...input,manifest:approved})).status).toBe('unavailable');
+});
+
+it('holds ambiguous packaged JSON at every lifecycle stage before policy observations',async()=>{
+  const input=await packaged('','',false,true),observe=vi.fn(()=>observation()),check=createDeliveryGovernance({observation:observe});
+  for(const phase of ['build','test','import','post-deploy','verify','health'] as const){const result=await check({...input,phase});expect(result.status).toBe('unavailable');expect(result.packageInventoryFile).toBeDefined();const inventory=JSON.parse(await fs.readFile(path.join(input.evidenceDirectory!,result.packageInventoryFile!),'utf8'));expect(inventory.archiveComplete).toBe(false);expect(inventory.resourceInventoryComplete).toBe(false);}
+  expect(observe).not.toHaveBeenCalled();
 });

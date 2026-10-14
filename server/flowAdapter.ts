@@ -1,3 +1,4 @@
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -50,7 +51,7 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
       const content = z.array(z.object({ type: z.string(), text: z.string().optional() })).parse(result.content);
       const text = content.filter((item) => item.type === 'text').map((item) => item.text).join('');
       if (Buffer.byteLength(text,'utf8') > 2 * 1024 * 1024) throw new Error(`FlowAgent ${tool} response is too large`);
-      let value:Record<string,unknown>|unknown[]|string|number|boolean|null;try{value=JSON.parse(text);}catch{throw new Error(`FlowAgent ${tool} returned invalid JSON; response content is withheld`);}
+      let value:Record<string,unknown>|unknown[]|string|number|boolean|null;try{value=parseUnambiguousJson(text,{maxBytes:2*1024*1024}) as typeof value;}catch{throw new Error(`FlowAgent ${tool} returned invalid JSON; response content is withheld`);}
       if (value && typeof value === 'object' && !Array.isArray(value) && (value.success === false || value.found === false || value.error)) throw new Error(`FlowAgent ${tool} returned a blocked outcome`);
       return value;
     } };
