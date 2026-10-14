@@ -39,7 +39,7 @@ async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliab
     repos: [{ id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,color:'#000',description:'',url:'',autoAssign:false,autoMerge:false,browserTesting:false,addedAt:1 }] }));
   const tenancy = {status:'connected', user:'synthetic@example.com', environments:[{name:'Synthetic',url:environment,active:true}], isReal:true};
   const external = {
-    demo:false,terminals:false,tenancy:{info:vi.fn(async()=>tenancy),select:vi.fn(async()=>({status:'connected'})),login:vi.fn(async()=>({status:'pending'})),loginStatus:vi.fn(()=>({status:'pending'})),cancelLogin:vi.fn(()=>({status:'cancelled'})),close:vi.fn()},
+    demo:false,terminals:false,tenancy:{info:vi.fn(async()=>tenancy),select:vi.fn(async()=>({status:'connected'})),login:vi.fn(async()=>({status:'pending'})),loginStatus:vi.fn(()=>({status:'pending'})),cancelLogin:vi.fn(()=>({status:'cancelled'})),close:vi.fn(),shutdown:vi.fn(async()=>{}),activity:vi.fn(()=>({scope:'process-local-tenancy-work',closed:false,profileSelection:false,authenticationRequests:0,awaitingNativeExit:0,nativeCommands:0,busy:false}))},
     user:vi.fn(async()=>'synthetic'),reconnectClis:vi.fn(async()=>[]),hooksReady:vi.fn(),detectClis:vi.fn(async()=>[]),releaseClis:vi.fn(async()=>{}),
     setLocalPath:vi.fn(),ensureClone:vi.fn(async()=>{}),releaseDesk:vi.fn(async()=>{}),removeDesk:vi.fn(async()=>{}),
     listIssues:vi.fn(async()=>[]),listPulls:vi.fn(async()=>[]),syncMain:vi.fn(async()=>null),
@@ -325,4 +325,12 @@ it('keeps authenticated workspace diagnostics open while interrupted delivery an
   expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:'a'.repeat(64)})).status).toBe(409);
   expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:recovery.snapshotSha256})).status).toBe(200);
   expect(f.delivery.available).toBe(true);expect(f.delivery.isDraining).toBe(true);expect(f.swarm.isDraining).toBe(true);expect(f.external.startSession).not.toHaveBeenCalled();
+});
+it.each(['authentication','native-exit','profile-command','profile-selection'] as const)('blocks reload and handoff while %s work remains tracked',async mode=>{
+  const handoff=vi.fn(),prepare=vi.fn(async()=>({operationId:'11111111-1111-4111-8111-111111111111',commit:vi.fn(async()=>'accepted' as const),cancel:vi.fn()}));const f=await office(false,handoff,undefined,{prepare,view:()=>({supported:true,phase:'idle'})});await f.request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});
+  f.external.tenancy.activity.mockReturnValue({scope:'process-local-tenancy-work',closed:false,busy:true,authenticationRequests:mode==='authentication'?1:0,awaitingNativeExit:mode==='native-exit'?1:0,nativeCommands:mode==='profile-command'?1:0,profileSelection:mode==='profile-selection'});
+  expect((await (await f.request('/api/runtime')).json()).authenticationWork.busy).toBe(true);expect((await f.request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(409);expect((await f.request('/api/office/prepare-handoff','POST',{expectedPid:process.pid})).status).toBe(409);expect(prepare).not.toHaveBeenCalled();expect(handoff).not.toHaveBeenCalled();
+});
+it('cancels a prepared reload when authentication starts during launcher preparation',async()=>{
+  const cancel=vi.fn(),commit=vi.fn(async()=>'accepted' as const);let markBusy!:()=>void;const prepare=vi.fn(async()=>{markBusy();return {operationId:'11111111-1111-4111-8111-111111111111',commit,cancel};});const f=await office(false,undefined,undefined,{prepare,view:()=>({supported:true,phase:'idle'})});await f.request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});markBusy=()=>f.external.tenancy.activity.mockReturnValue({scope:'process-local-tenancy-work',closed:false,profileSelection:false,authenticationRequests:1,awaitingNativeExit:1,nativeCommands:0,busy:true});expect((await f.request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(409);expect(cancel).toHaveBeenCalledOnce();expect(commit).not.toHaveBeenCalled();
 });

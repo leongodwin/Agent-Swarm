@@ -33,6 +33,26 @@ function runner() {
   return { run, start, stop, output: (text: string) => output(text), ended: (error?: string) => ended(error) };
 }
 describe('Tenancy service', () => {
+  it('awaits native authentication exit during shutdown and shares one completion promise',async()=>{
+    const r=runner(),service=make(r),job=service.login({interactive:true});const first=service.shutdown(),second=service.shutdown();expect(second).toBe(first);let settled=false;void first.then(()=>{settled=true;});await flush();
+    expect(settled).toBe(false);expect(service.activity()).toMatchObject({closed:true,authenticationRequests:0,awaitingNativeExit:1,busy:true});expect(r.stop).toHaveBeenCalledOnce();expect(()=>service.login({interactive:true})).toThrow('closed');
+    r.ended();await first;expect(service.activity()).toMatchObject({closed:true,awaitingNativeExit:0,busy:false});expect(service.loginStatus(job.id).status).toBe('cancelled');
+  });
+  it('awaits a cancelled verification command and never accepts its late observation',async()=>{
+    const r=runner(),service=make(r);let resolve!:(text:string)=>void;r.run.mockImplementationOnce(()=>new Promise(done=>{resolve=done;}));const job=service.login({interactive:true});r.ended();const shutdown=service.shutdown();let settled=false;void shutdown.then(()=>{settled=true;});await flush();expect(settled).toBe(false);expect(service.activity()).toMatchObject({nativeCommands:1,busy:true});resolve(profiles);await shutdown;await flush();expect(service.loginStatus(job.id)).toMatchObject({status:'cancelled',ok:false});expect(service.loginStatus(job.id).observation).toBeUndefined();expect(r.run).toHaveBeenCalledTimes(1);
+  });
+  it('waits for native profile selection to settle after closing admission',async()=>{
+    const r=runner(),service=make(r);await service.info();let resolve!:(text:string)=>void;r.run.mockImplementation((_name,args)=>args.includes('select')?new Promise(done=>{resolve=done;}):Promise.resolve(profiles));const selection=service.select(1),rejected=expect(selection).rejects.toThrow('closed');await flush();expect(service.activity()).toMatchObject({profileSelection:true,nativeCommands:1,busy:true});const shutdown=service.shutdown();let settled=false;void shutdown.then(()=>{settled=true;});await flush();expect(settled).toBe(false);resolve('selected');await rejected;await shutdown;expect(service.activity().busy).toBe(false);
+  });
+  it('awaits profile discovery already in flight while shutdown blocks fresh commands',async()=>{
+    const r=runner(),service=make(r);let reject!:(error:Error)=>void;r.run.mockImplementation(()=>new Promise((_resolve,done)=>{reject=done;}));const discovery=service.info(),shutdown=service.shutdown();let settled=false;void shutdown.then(()=>{settled=true;});await flush();expect(settled).toBe(false);expect(service.activity().nativeCommands).toBe(1);reject(new Error('native request failed'));expect(await discovery).toMatchObject({status:'disconnected',isReal:false});await shutdown;expect(service.activity().nativeCommands).toBe(0);
+  });
+  it('retains a stop failure until native exit and rejects shared shutdown rather than acknowledging clean cleanup',async()=>{
+    const r=runner(),service=make(r);service.login({interactive:true});r.stop.mockImplementation(()=>{throw new Error('private stop detail');});const shutdown=service.shutdown(),rejected=expect(shutdown).rejects.toThrow('cleanup failed');let settled=false;void shutdown.catch(()=>{settled=true;});await flush();expect(settled).toBe(false);r.ended();await rejected;expect(service.activity().busy).toBe(false);expect(service.shutdown()).toBe(shutdown);
+  });
+  it('reserves shared shutdown before a synchronous native stop reenters it',async()=>{
+    const r=runner(),service=make(r);service.login({interactive:true});let nested:Promise<void>|undefined;r.stop.mockImplementation(()=>{nested=service.shutdown();r.ended();});const shutdown=service.shutdown();expect(nested).toBe(shutdown);await shutdown;expect(r.stop).toHaveBeenCalledOnce();
+  });
   it.each(['cancel','expiry'] as const)('holds profile changes and discovery after %s until native exit is observed',async mode=>{
     vi.useFakeTimers();const r=runner(),service=make(r),job=service.login({interactive:true});
     if(mode==='cancel')service.cancelLogin(job.id);else vi.advanceTimersByTime(600000);

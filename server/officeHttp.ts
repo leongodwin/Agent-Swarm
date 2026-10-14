@@ -105,14 +105,14 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.get('/api/state', route(() => swarm.snapshot()));
   app.get('/api/capabilities', route(() => capabilities.view()));
   app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
-  app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, deliveryAvailability:delivery.available?'ready':'unavailable', draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+  app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, authenticationWork:backend.tenancy.activity(), deliveryAvailability:delivery.available?'ready':'unavailable', draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
   app.post('/api/office/reload',route(async(req,res)=>{
     const {expectedPid}=parseBody(z.object({expectedPid:z.number().int().positive()}).strict(),req.body);
     const ready=()=>{
       requireOpen();
       if(expectedPid!==process.pid)throw new HttpError(409,'Office process changed; inspect runtime before reload');
       if(backend.demo||!services.officeReload)throw new HttpError(409,'This office cannot request an acknowledged launcher reload');
-      if(!swarm.isDraining||!delivery.isDraining||delivery.view().running||swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason)throw new HttpError(409,'Drain both services and wait for all work and cleanup before reload');
+      if(!swarm.isDraining||!delivery.isDraining||delivery.view().running||swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason||backend.tenancy.activity().busy)throw new HttpError(409,'Drain both services and wait for all work, authentication and cleanup before reload');
     };
     ready();
     let handle;
@@ -137,7 +137,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     const {expectedPid}=parseBody(z.object({expectedPid:z.number().int().positive()}).strict(),req.body);
     if(expectedPid!==process.pid)throw new HttpError(409,'Office process changed; inspect the current runtime before handoff');
     if(backend.demo||!services.requestHandoff)throw new HttpError(409,'This office does not support launcher handoff');
-    if(delivery.view().running||swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason)throw new HttpError(409,'Wait for active agent, architecture and delivery work before handoff');
+    if(delivery.view().running||swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason||backend.tenancy.activity().busy)throw new HttpError(409,'Wait for active agent, architecture, authentication and delivery work before handoff');
     res.status(202).json({accepted:true,pid:process.pid,preserveTerminals:true,relaunch:'external-checkout-change'});
     services.requestHandoff();
   }));

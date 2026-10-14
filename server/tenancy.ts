@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { resolveCommand, unwrapCmdShim } from './clis.ts';
 import { HttpError } from './httpError.ts';
-import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../shared/tenancy.ts';
+import type { TenancyInfo, TenancyLogin, TenancyLoginInput,TenancyActivity } from '../shared/tenancy.ts';
 import {identityRoot} from './identityContracts.ts';
 import {currentEnvironment} from '../shared/tenancy.ts';
 import {parsePacIdentity} from './platformAuth.ts';
@@ -90,6 +90,8 @@ export interface TenancyService {
   loginStatus(id: string): TenancyLogin;
   cancelLogin(id: string): void;
   close(): void;
+  activity():TenancyActivity;
+  shutdown():Promise<void>;
 }
 
 export function createTenancyService(demo = false, runner: TenancyRunner = realRunner): TenancyService {
@@ -99,6 +101,11 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
   let refreshing: Promise<TenancyInfo> | null = null;
   let closed=false,selecting=false;
   const jobs = new Map<string, { value: TenancyLogin; stop: () => void; timer?: NodeJS.Timeout }>();
+  const nativeCommands=new Set<object>(),idleWaiters=new Set<()=>void>();
+  let shutdownWork:Promise<void>|undefined,cleanupFailure:Error|undefined;
+  const activity=():TenancyActivity=>{const authenticationRequests=[...jobs.values()].filter(job=>job.value.status==='pending').length,awaitingNativeExit=[...jobs.values()].filter(job=>job.value.nativeCleanup==='awaiting-exit').length;return {scope:'process-local-tenancy-work',closed,profileSelection:selecting,authenticationRequests,awaitingNativeExit,nativeCommands:nativeCommands.size,busy:selecting||authenticationRequests>0||awaitingNativeExit>0||nativeCommands.size>0};};
+  const notify=()=>{for(const waiter of [...idleWaiters])waiter();};
+  const run=async(name:string,args:string[])=>{const ticket={};nativeCommands.add(ticket);try{if(closed)throw new HttpError(503,'Tenancy service is closed');return await runner.run(name,args);}finally{nativeCommands.delete(ticket);notify();}};
   const demoInfo: TenancyInfo = { tenantName: 'Demo tenant', tenantDomain: 'example.com', tenantId: '', user: 'manager@example.com',
     environments: [{ index: 1, name: 'Demo sandbox', url: 'https://demo.example.com', user: 'manager@example.com', active: true }], isReal: false, status: 'demo' };
   const invalidate = () => { cache = null; checkedAt = 0; generation++; refreshing = null; };
@@ -114,7 +121,7 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
     if (!refreshing) {
       const current = generation;
       const previous=cache?structuredClone(cache):null;
-      const request = Promise.resolve().then(()=>runner.run('pac', ['auth', 'list'])).then(parsePacProfiles).catch(() => previous ? { ...previous, status: 'stale' as const,isReal:false } : disconnected());
+      const request = run('pac', ['auth', 'list']).then(parsePacProfiles).catch(() => previous ? { ...previous, status: 'stale' as const,isReal:false } : disconnected());
       refreshing = request.then((result) => {
         if(closed)return disconnected();
         if(generation!==current)return {...structuredClone(result),status:'stale',isReal:false};
@@ -129,8 +136,28 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
     if (!job) throw new HttpError(404, 'Authentication request not found');
     return job;
   };
+  const close=()=>{
+    if(closed)return;closed=true;invalidate();let failed=false;
+    for(const job of jobs.values()){
+      clearTimeout(job.timer);
+      const pending=job.value.status==='pending';
+      if(pending){job.value.status='cancelled';job.value.ok=false;job.value.message='Authentication cancelled because the office is closing';}
+      if(pending||job.value.nativeCleanup==='awaiting-exit'){try{job.stop();}catch{failed=true;}}
+    }
+    if(failed){cleanupFailure=new Error('Tenancy authentication cleanup failed');throw cleanupFailure;}
+  };
   return {
     info,
+    activity,
+    close,
+    shutdown(){
+      if(shutdownWork)return shutdownWork;
+      let resolve!:()=>void,reject!:(error:Error)=>void;
+      shutdownWork=new Promise<void>((yes,no)=>{resolve=yes;reject=no;});
+      try{close();}catch{/* The stop failure remains visible after native work settles. */}
+      const settled=()=>{if(activity().busy)return;idleWaiters.delete(settled);if(cleanupFailure)reject(cleanupFailure);else resolve();};
+      idleWaiters.add(settled);settled();return shutdownWork;
+    },
     async select(index) {
       assertOpen();assertProfileIdle();
       if (!Number.isInteger(index) || index < 1) throw new HttpError(400, 'Profile index must be a positive integer');
@@ -140,16 +167,16 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       if (!expected) throw new HttpError(404, 'Authentication profile not found');
       selecting=true;invalidate();
       try {
-        if (!demo) await runner.run('pac', ['auth', 'select', '--index', String(index)]);
+        if (!demo) await run('pac', ['auth', 'select', '--index', String(index)]);
         assertOpen();
         if(!demo){
-          const confirmed=parsePacProfiles(await runner.run('pac',['auth','list']));assertOpen();
+          const confirmed=parsePacProfiles(await run('pac',['auth','list']));assertOpen();
           const active=confirmed.environments.find(environment=>environment.active);
           if(!active||active.index!==index||active.url!==expected.url||active.user.toLowerCase()!==expected.user.toLowerCase())throw new HttpError(409,'Selected authentication profile was not confirmed; refresh the current account and environment before retrying');
         }
         invalidate();
         return { ok: true, message: `${demo ? 'Demo: ' : ''}Selected profile [${index}]` };
-      } finally {selecting=false;}
+      } finally {selecting=false;notify();}
     },
     login(input) {
       assertOpen();assertProfileIdle();
@@ -168,19 +195,19 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
         if(!verificationActive())return;
         value.phase='verifying';value.message='Sign-in returned. Verifying the active PAC account and environment…';
         try{
-          const discovered=parsePacProfiles(await runner.run('pac',['auth','list']));if(!verificationActive())return;
+          const discovered=parsePacProfiles(await run('pac',['auth','list']));if(!verificationActive())return;
           const expected=currentEnvironment(discovered);
           if(!expected?.index||!expected.user||input.environmentUrl&&identityRoot(input.environmentUrl)!==identityRoot(expected.url))throw new Error('Active profile differs from sign-in target');
-          const identity=parsePacIdentity(await runner.run('pac',['org','who','--environment',identityRoot(expected.url)]));if(!verificationActive())return;
+          const identity=parsePacIdentity(await run('pac',['org','who','--environment',identityRoot(expected.url)]));if(!verificationActive())return;
           if(identity.environmentUrl!==identityRoot(expected.url)||identity.username.toLowerCase()!==expected.user.toLowerCase())throw new Error('Organization identity differs from active profile');
-          const confirmed=currentEnvironment(parsePacProfiles(await runner.run('pac',['auth','list'])));if(!verificationActive())return;
+          const confirmed=currentEnvironment(parsePacProfiles(await run('pac',['auth','list'])));if(!verificationActive())return;
           if(!confirmed||confirmed.index!==expected.index||confirmed.url!==expected.url||confirmed.user.toLowerCase()!==expected.user.toLowerCase())throw new Error('Active profile changed during confirmation');
           clearTimeout(job.timer);value.observation={scope:'pac-profile-and-organization',checkedAt:new Date().toISOString(),profileIndex:expected.index,environmentUrl:identity.environmentUrl,organizationId:identity.organizationId,userId:identity.userId,username:identity.username,environmentId:identity.environmentId};
           value.status='completed';value.ok=true;value.message='PAC account and environment verified. Tenant, licence, connector and deployment readiness checks still apply.';invalidate();
         }catch{
           if(!verificationActive())return;
           clearTimeout(job.timer);value.status='failed';value.ok=false;value.message='Sign-in returned, but the PAC account and environment could not be verified. Refresh connected identity and resolve the mismatch or access failure before retrying.';
-        }
+        }finally{notify();}
       };
       const args = ['auth', 'create'];
       if (input.name) args.push('--name', input.name);
@@ -201,9 +228,10 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
           if (input.interactive !== false) value.message = redact(transcript).slice(-8000);
         }, (error) => {
           value.nativeCleanup='exited';
+          notify();
           if (value.status !== 'pending'||value.phase==='verifying') return;
           if(!error&&!reportedFailure){void verifyCompletion();return;}
-          clearTimeout(job.timer);value.status='failed';value.ok=false;
+          clearTimeout(job.timer);value.status='failed';value.ok=false;notify();
           value.message=/53003|conditional access|blocked.*device.code/i.test(transcript)?'Conditional Access blocked this sign-in. Use interactive sign-in; ask your administrator to inspect the failed policy if it persists.':'PAC authentication failed. Check the profile and credentials.';
         });
         if(closed||value.status==='cancelled'||value.status==='expired')job.stop();
@@ -211,21 +239,13 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
           job.timer = setTimeout(() => { value.status = 'expired'; value.ok = false; value.message = 'Authentication expired. Start a new request.'; job.stop(); }, 10 * 60_000);
           job.timer.unref();
         }
-      } catch { if(value.status==='pending'){value.nativeCleanup='exited';value.status = 'failed'; value.message = 'PAC could not start. Check the CLI installation.';} }
+      } catch { if(value.status==='pending'){value.nativeCleanup='exited';value.status = 'failed'; value.message = 'PAC could not start. Check the CLI installation.';notify();} }
       return { ...value };
     },
     loginStatus: (id) => structuredClone(lookup(id).value),
     cancelLogin(id) {
       const job = lookup(id);
       if (job.value.status === 'pending') { job.value.status = 'cancelled'; job.value.message = 'Authentication cancelled'; clearTimeout(job.timer); job.stop(); }
-    },
-    close() {
-      if(closed)return;closed=true;invalidate();let failed=false;
-      for (const job of jobs.values()) {
-        clearTimeout(job.timer);
-        if(job.value.status==='pending') {job.value.status='cancelled';job.value.ok=false;job.value.message='Authentication cancelled because the office is closing';try {job.stop();}catch {failed=true;}}
-      }
-      if(failed)throw new Error('Tenancy authentication cleanup failed');
     },
   };
 }

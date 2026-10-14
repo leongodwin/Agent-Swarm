@@ -25,7 +25,7 @@ it.each(['dev','built'])('reloads an owned native %s launcher without a source c
     const reload=new OfficeReloadRequester();await reload.probe();
     const swarm={isDraining:maintenance.draining,sessionUsage:()=>({limit:0,used:0,agentSessions:0,freeSlots:null,auxiliary:[]}),snapshot:()=>({settings:{defaultCli:'codex'},agents:[],repos:[],draining:maintenance.draining})};
     const delivery={isDraining:maintenance.draining,view:()=>({running:false,policy:{copilotPaused:true}})};
-    const {app}=createOfficeHttpApp({backend:{demo:false},swarm,delivery,capabilities:{view:()=>({})},features:{},toolGovernance:{},tenantDlp:{},canvasOwnership:{},homeDir:home,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',officeReload:reload});
+    const {app}=createOfficeHttpApp({backend:{demo:false,tenancy:{activity:()=>({scope:'process-local-tenancy-work',closed:false,profileSelection:false,authenticationRequests:0,awaitingNativeExit:0,nativeCommands:0,busy:false})}},swarm,delivery,capabilities:{view:()=>({})},features:{},toolGovernance:{},tenantDlp:{},canvasOwnership:{},homeDir:home,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',officeReload:reload});
     const server=http.createServer(app);process.on('message',msg=>{if(msg?.type==='office:shutdown'){reload.close();server.closeAllConnections();server.close(()=>process.exit(0));}});
     server.listen(Number(process.env.SWARM_PORT),'127.0.0.1',async()=>{await fs.writeFile(path.join(home,'fixture-process.json'),JSON.stringify({pid:process.pid,parentPid:process.ppid}));reload.ready();});`;
   await fs.writeFile(path.join(root,'server/index.ts'),source);
@@ -47,7 +47,7 @@ it.each(['dev','built'])('reloads an owned native %s launcher without a source c
     expect(response.status).toBe(202);const accepted=await response.json();
     let second:Awaited<ReturnType<typeof read>>|undefined;
     await vi.waitFor(async()=>{second=await read();expect(second.runtime.pid).not.toBe(first!.runtime.pid);expect(second.runtime.reload.phase).toBe('ready');},{timeout:15000,interval:100});
-    expect(second!.runtime).toMatchObject({draining:true,demo:false,reload:{supported:true,sourcePid:first!.runtime.pid,targetPid:second!.runtime.pid,operationId:accepted.operationId}});
+    expect(second!.runtime).toMatchObject({draining:true,demo:false,authenticationWork:{scope:'process-local-tenancy-work',busy:false},reload:{supported:true,sourcePid:first!.runtime.pid,targetPid:second!.runtime.pid,operationId:accepted.operationId}});
     expect(JSON.parse(await fs.readFile(path.join(home,'fixture-process.json'),'utf8'))).toEqual({pid:second!.runtime.pid,parentPid:child.pid});
     expect(JSON.parse(await fs.readFile(path.join(home,'maintenance.json'),'utf8'))).toEqual({version:1,draining:true});
     expect((await fs.stat(path.join(root,'server/index.ts'))).mtimeMs).toBe(before.mtimeMs);
