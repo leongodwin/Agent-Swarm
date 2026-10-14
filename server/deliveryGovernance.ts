@@ -9,6 +9,8 @@ import crypto from 'node:crypto';
 import {declaredSchemaObservation,type DeclaredSchemaObserver} from './declaredSchema.ts';
 import {comparePackageSchema} from './packageSchema.ts';
 import {advancedPolicyObservation,type AdvancedPolicyObserver} from './advancedPolicy.ts';
+import {compareAdvancedConnectorConstraints} from './advancedConstraints.ts';
+import type {PackageResource} from './packageInventory.ts';
 
 /** Declaration-level standard checks may deny, but cannot authorize a release.
  * A full provider must also independently extract package resources and evaluate
@@ -20,6 +22,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     let resources:{id:string;complete:true;connectors:string[]}[]|undefined;
     let packageIssues:string[]=[];
     let resourceSchemaReferences:LifecycleRequest['resourceSchemaReferences'];
+    let advancedResources:PackageResource[]|undefined;
     if(request.packageSha256) {
       const inventory=await inspectSolutionPackage(await containedFile(request.checkout,manifest.solutionZip),request.signal);
       if(request.evidenceDirectory){packageInventoryFile=`package-inventory-${inventory.packageSha256||request.packageSha256}.json`;await atomicWrite(path.join(request.evidenceDirectory,packageInventoryFile),JSON.stringify(inventory,null,2));}
@@ -32,6 +35,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
       }
       const packageSchema=comparePackageSchema(inventory,manifest);
       resourceSchemaReferences=inventory.resources.flatMap(resource=>resource.schemaReferences??[]);
+      advancedResources=inventory.resources;
       if(packageSchema.status==='blocked')return {...base,status:'blocked',reasons:packageSchema.reasons};
       packageIssues.push(...packageSchema.reasons);
       resources=inventory.resources.filter(resource=>resource.complete).map(resource=>({id:resource.id,complete:true,connectors:resource.connectors}));
@@ -46,13 +50,15 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     let declaredSchemaFile:string|undefined;
     let advancedPolicyFile:string|undefined;
     let advancedReason='Fresh environment rule assignment inventory and effective advanced enforcement mode are unavailable';
+    let advancedConflict=false;let advancedReasons:string[]=[];
     const advancedWork=async()=>{if(observeAdvanced)try{
       const value=advancedPolicyObservation.parse(await observeAdvanced({...identity,environmentId:platformIdentity.environmentId,checkout:request.checkout,signal:request.signal}));
       const age=Date.now()-Date.parse(value.checkedAt);
       if(request.signal?.aborted||value.tenantId.toLowerCase()!==identity.tenantId.toLowerCase()||value.caller.toLowerCase()!==identity.caller.toLowerCase()||value.environmentId.toLowerCase()!==platformIdentity.environmentId.toLowerCase()||age>60_000||age < -30_000)throw new Error('Advanced policy context differs');
       advancedReason=value.reason;
+      if(advancedResources){const comparison=compareAdvancedConnectorConstraints(value,{...identity,environmentId:platformIdentity.environmentId},advancedResources);advancedConflict=comparison.status==='conflict';advancedReasons=comparison.reasons;}
       if(request.evidenceDirectory){const content=JSON.stringify(value,null,2);advancedPolicyFile=`advanced-policy-${crypto.createHash('sha256').update(content).digest('hex')}.json`;await atomicWrite(path.join(request.evidenceDirectory,advancedPolicyFile),content);}
-    }catch{advancedReason='Advanced policy observation could not be bound to this stage or persisted';}};
+    }catch{advancedConflict=false;advancedReasons=[];advancedReason='Advanced policy observation could not be bound to this stage or persisted';}};
     let schemaReason='Fresh identity-bound declared target schema evidence is unavailable';
     const schemaWork=async()=>{if(observeSchema)try{
       const schema=declaredSchemaObservation.parse(await observeSchema({...request,resourceSchemaReferences}));
@@ -63,12 +69,12 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     }catch{schemaReason='Declared schema evidence could not be bound to this stage or persisted';}};
     let snapshot:unknown;
     const [,policy]=await Promise.allSettled([schemaWork(),Promise.resolve().then(()=>source.ensureObservation?source.ensureObservation(identity,{signal:request.signal,force:true,timeoutMs:45_000}):source.observation(identity)),advancedWork()]);
-    if(policy.status==='rejected')return {...unavailable(['Refresh the authenticated policy inventory for the exact approved tenant and account before governed delivery',schemaReason,advancedReason]),declaredSchemaFile,advancedPolicyFile};
+    if(policy.status==='rejected')return {...unavailable([...advancedReasons,'Refresh the authenticated policy inventory for the exact approved tenant and account before governed delivery',schemaReason,advancedReason].slice(0,30)),status:advancedConflict?'blocked':'unavailable',declaredSchemaFile,advancedPolicyFile};
     snapshot=policy.value;
     const declared=manifest.postDeployActions.filter(action=>action.type==='connection-reference-check').map(action=>({id:`reference:${action.component}`,complete:true,connectors:[action.connectorId]}));
     if(!(resources??declared).length)return {...unavailable(['No independently complete app/flow connector inventory is available; advanced policy and comprehensive schema evidence are also required',schemaReason,advancedReason]),declaredSchemaFile,advancedPolicyFile};
     const standard=evaluateStandardPolicies(snapshot,identity,manifest.platformIdentity.environmentId,resources??declared);
     const reasons=standard.status==='clear'?[resources?'Inspectable package resources passed standard classification; advanced policies, remaining opaque resources and comprehensive schemas are unverified':'Declared reference IDs passed standard classification; full package resource inventory, advanced policies and comprehensive schemas remain unverified']:standard.reasons.slice(0,20).map(reason=>reason.slice(0,1000));
-    return {...unavailableGovernance(request,[...reasons,...packageIssues,schemaReason,advancedReason].slice(0,30)),status:standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,declaredSchemaFile,advancedPolicyFile};
+    return {...unavailableGovernance(request,[...advancedReasons,...reasons,...packageIssues,schemaReason,advancedReason].slice(0,30)),status:advancedConflict||standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,declaredSchemaFile,advancedPolicyFile};
   };
 }

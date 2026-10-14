@@ -11,6 +11,25 @@ const request:LifecycleRequest={phase:'build',sourceCommit:'a'.repeat(40),enviro
 const observation=(policies:unknown[]=[])=>({schemaVersion:1,tenantId:guid,caller:'tester@company.test',observedAt:new Date().toISOString(),source:'Get-DlpPolicy module route',moduleVersion:'2.0.219',scope:'standard-policy-inventory',complete:true,pages:1,policies});
 const advanced=():AdvancedPolicyObservation=>({scope:'environment-rule-assignment-inventory',complete:false,complianceVerified:false,accountScope:'azure-cli-profile',status:'observed',tenantId:guid,caller:'tester@company.test',environmentId:guid,checkedAt:new Date().toISOString(),reason:'Repeated assignment inventory observed; enforcement mode is unverified',assignments:[],policies:[],observationSha256:crypto.createHash('sha256').update(JSON.stringify({assignments:[],policies:[]})).digest('hex')});
 const directories:string[]=[];afterEach(async()=>{await Promise.all(directories.splice(0).map(directory=>fs.rm(directory,{recursive:true,force:true})));});
+function connectorConstraints(allowMail:boolean){
+  const value=advanced();
+  value.assignments=[{policyId:'policy-1',resourceId:guid,resourceType:'Environment',tenantId:guid,ruleSetCount:1}];
+  value.policies=[{id:'policy-1',tenantId:guid,name:'Synthetic connector policy',ruleSetCount:1,ruleSets:[{id:'ConnectorManagement',version:'1.0',inputs:{AllowedConnectorList:[
+    {AllowedConnector:'/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps',AllowedActionsMode:'AllAllowed',AllowedConnectionTypesMode:'AllAllowed'},
+    {AllowedConnector:'/providers/Microsoft.PowerApps/apis/shared_office365',AllowedActionsMode:'SomeAllowed',AllowedActions:allowMail?['SendEmailV2']:['ReadEmail'],AllowedConnectionTypesMode:'AllAllowed'},
+  ]}}]}];
+  value.observationSha256=crypto.createHash('sha256').update(JSON.stringify({assignments:value.assignments,policies:value.policies})).digest('hex');return value;
+}
+it.each(['build','test','import','post-deploy','verify','health'] as const)('blocks a package-derived action conflict before %s without converting matched constraints into permission',async phase=>{
+  const input=await packaged(),value=connectorConstraints(false),check=createDeliveryGovernance({observation:()=>observation()},undefined,async()=>value);
+  const result=await check({...input,phase});expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('SendEmailV2');expect(result.reasons.join(' ')).toContain('outside observed policy');expect(result.advancedPolicyFile).toBeDefined();expect(result.artifactSha256).toBe(input.packageSha256);
+  const matched=await createDeliveryGovernance({observation:()=>observation()},undefined,async()=>connectorConstraints(true))({...input,phase});expect(matched.status).toBe('unavailable');expect(matched.schemaSha256).toBeUndefined();
+});
+it('retains a known advanced constraint denial when classic policy discovery fails and rejects changed package digests',async()=>{
+  const input=await packaged(),value=connectorConstraints(false),check=createDeliveryGovernance({observation:()=>{throw new Error('private classic detail');}},undefined,async()=>value);
+  const result=await check(input);expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('outside observed policy');expect(JSON.stringify(result)).not.toContain('private classic');
+  const tampered=await check({...input,packageSha256:'f'.repeat(64)});expect(tampered.status).toBe('unavailable');expect(tampered.reasons.join(' ')).not.toContain('outside observed policy');
+});
 async function packaged(customizationExtra='',rootExtra='') {
   const checkout=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-governed-package-'));directories.push(checkout);const evidenceDirectory=path.join(checkout,'evidence');
   const definition = {
