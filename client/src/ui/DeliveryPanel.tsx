@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState,useRef } from 'react';
+import type {DeliveryView} from '../../../shared/delivery';
 import { Panel } from './Overlays';
 import { useStore, repoOnFloor } from '../store';
 import { api } from '../api';
 import { useResource } from '../useResource';
+import {HealthEvidence} from './HealthEvidence';
 
 export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
   const repos = useStore((s) => s.repos);
@@ -18,19 +20,24 @@ export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
   const resource = useResource(selected, () => api.delivery(selected || undefined));
   const tenancy = useResource('tenancy', api.tenancy);
   useEffect(() => { const timer = setInterval(() => { resource.refresh(); capabilities.refresh(); }, 5000); return () => clearInterval(timer); }, [selected]);
-  const data = resource.value;
+  const observed=useRef<{key:string;value:DeliveryView}|undefined>(undefined);
+  if(resource.error||observed.current?.key!==selected)observed.current=undefined;
+  if(resource.value)observed.current={key:selected,value:resource.value};
+  const data=resource.value??(resource.loading?observed.current?.value:undefined);
+  const locked=busy||resource.loading||!data;
   const target = tenancy.value?.environments.find((env) => env.active);
   const action = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); resource.refresh(); capabilities.refresh(); } catch { /* API displays the failure */ } finally { setBusy(false); } };
   return <Panel title="Solution delivery" wide onClose={onClose}>
     <p>Build, test, deploy and verify your solution in its approved development environment.</p>
     <div className="row wrap">
       <label>Project <select value={selected} onChange={(event) => setSelected(event.target.value)}><option value="">All projects</option>{repos.map((repo) => <option key={repo.id} value={repo.id}>{repo.fullName}</option>)}</select></label>
-      <button className="btn" disabled={busy || data?.running || (!data?.policy?.enabled && (!target || tenancy.value?.status !== 'connected'))} onClick={() => void action(() => api.configureDelivery(!data?.policy?.enabled))}>{data?.policy?.enabled ? 'Pause automatic delivery' : 'Enable delivery to connected development environment'}</button>
-      <button className="btn btn-ghost" disabled={busy || data?.running || !data?.policy?.enabled || !selected} onClick={() => void action(() => api.runDelivery(selected))}>Run / resume latest release</button>
+      <button className="btn" disabled={locked || data?.running || (!data?.policy?.enabled && (!target || tenancy.value?.status !== 'connected'))} onClick={() => void action(() => api.configureDelivery(!data?.policy?.enabled))}>{data?.policy?.enabled ? 'Pause automatic delivery' : 'Enable delivery to connected development environment'}</button>
+      <button className="btn btn-ghost" disabled={locked || data?.running || !data?.policy?.enabled || !selected} onClick={() => void action(() => api.runDelivery(selected))}>Run / resume latest release</button>
     </div>
     <p><strong>Deployment target:</strong> {data?.policy?.environmentUrl ?? target?.url ?? 'Connect a development environment first'}</p>
     {data?.policy?.copilotPaused && <p>Copilot Studio delivery is paused. Other solution components can continue through their own approved release.</p>}
     <p className="muted">{resource.error ?? data?.message ?? 'Loading delivery status…'}</p>
+    {resource.loading&&data&&<p role="status">Refreshing delivery status. Showing the last observed snapshot; release actions are disabled.</p>}
     <details><summary>Capabilities and implementation starters</summary>
       <p>Live readiness checks run before new work. Missing access stays blocked until configured and verified.</p>
       <details><summary>Installed Power Platform skills ({skills.value?.skills.length ?? 0})</summary>
@@ -47,15 +54,16 @@ export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
       {templates.value?.map((template) => <p key={template.id}><strong>{template.id} v{template.version}</strong> · {template.validation} <button className="btn btn-ghost" disabled={busy || !selected} onClick={() => void action(() => api.installTemplate(selected, template.id))}>Add starter reference bundle</button></p>)}
     </details>
     {data?.blockers?.map((blocker) => <p role="alert" key={blocker.repoId}><strong>{blocker.owner}:</strong> {blocker.error}<br />{blocker.recovery}{blocker.preflightRetry&&<><br />Preflight failures: {blocker.preflightRetry.failures}. {blocker.preflightRetry.nextAttemptAt?`Automatic retry after ${new Date(blocker.preflightRetry.nextAttemptAt).toLocaleString()}.`:'Automatic retries paused; resolve the prerequisite and run the release manually.'}</>}</p>)}
-    <details><summary>Create a scoped release</summary><p>Paste the release plan JSON defined in docs/DELIVERY.md. The assigned QA agent must review and approve the pinned plan before it runs.</p><textarea aria-label="Release plan JSON" rows={10} value={plan} onChange={(event) => setPlan(event.target.value)} style={{ width: '100%' }} /><button className="btn" disabled={busy || !selected || !plan || !data?.policy?.enabled} onClick={() => { try { const parsed = JSON.parse(plan); setPlanError(''); void action(() => api.createRelease(selected, parsed)); } catch { setPlanError('Enter valid JSON'); } }}>Create release</button>{planError && <p role="alert">{planError}</p>}</details>
-    {data?.releases?.map((release) => <section key={release.id}><p><strong>{release.plan.name}</strong> · {release.head.slice(0, 8)} · {release.approvedAt ? `QA approved by ${release.approvedBy}` : `Awaiting ${release.plan.qaOwner}`}</p>{(!release.approvedAt || data.runs.some((run) => run.releaseId === release.id && run.phase === 'reviewing')) && <button className="btn btn-ghost" disabled={busy} onClick={() => void action(() => api.reviewRelease(release.id))}>Request assigned QA review</button>}<p>Architecture: {release.plan.architecture?.docId ?? 'missing version'} · {release.architectureReview ? `${release.architectureReview.decision} by ${release.architectureReview.reviewer}` : 'independent review pending'}</p>{release.architectureReview && <p>{release.architectureReview.notes}</p>}<p>Required issues: {release.plan.requiredIssues.map((n) => `#${n}`).join(', ')} · Components: {release.plan.components.join(', ')}</p><details><summary>Acceptance plan</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(release.plan, null, 2)}</pre></details><button className="btn btn-ghost" disabled={busy || data.running || !release.approvedAt || release.architectureReview?.decision !== 'approved' || !data.policy?.enabled} onClick={() => void action(() => api.runDelivery(release.repoId, release.id))}>Run / resume this release</button></section>)}
-    {!data?.runs.length && <p>No verified delivery yet. The team must finish the solution and its delivery checks before it can appear here as complete.</p>}
+    <details><summary>Create a scoped release</summary><p>Paste the release plan JSON defined in docs/DELIVERY.md. The assigned QA agent must review and approve the pinned plan before it runs.</p><textarea aria-label="Release plan JSON" rows={10} value={plan} onChange={(event) => setPlan(event.target.value)} style={{ width: '100%' }} /><button className="btn" disabled={locked || !selected || !plan || !data?.policy?.enabled} onClick={() => { try { const parsed = JSON.parse(plan); setPlanError(''); void action(() => api.createRelease(selected, parsed)); } catch { setPlanError('Enter valid JSON'); } }}>Create release</button>{planError && <p role="alert">{planError}</p>}</details>
+    {data?.releases?.map((release) => <section key={release.id}><p><strong>{release.plan.name}</strong> · {release.head.slice(0, 8)} · {release.approvedAt ? `QA approved by ${release.approvedBy}` : `Awaiting ${release.plan.qaOwner}`}</p>{(!release.approvedAt || data.runs.some((run) => run.releaseId === release.id && run.phase === 'reviewing')) && <button className="btn btn-ghost" disabled={locked} onClick={() => void action(() => api.reviewRelease(release.id))}>Request assigned QA review</button>}<p>Architecture: {release.plan.architecture?.docId ?? 'missing version'} · {release.architectureReview ? `${release.architectureReview.decision} by ${release.architectureReview.reviewer}` : 'independent review pending'}</p>{release.architectureReview && <p>{release.architectureReview.notes}</p>}<p>Required issues: {release.plan.requiredIssues.map((n) => `#${n}`).join(', ')} · Components: {release.plan.components.join(', ')}</p><details><summary>Acceptance plan</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(release.plan, null, 2)}</pre></details><button className="btn btn-ghost" disabled={locked || data.running || !release.approvedAt || release.architectureReview?.decision !== 'approved' || !data.policy?.enabled} onClick={() => void action(() => api.runDelivery(release.repoId, release.id))}>Run / resume this release</button></section>)}
+    {data&&!data.runs.length && <p>No verified delivery yet. The team must finish the solution and its delivery checks before it can appear here as complete.</p>}
     {data?.runs.map((run) => <section key={run.id} style={{ border: '1px solid #334155', borderRadius: 10, padding: 16, marginTop: 12 }}>
       <div className="row wrap"><strong>{run.solution ?? run.repoId} {run.version ?? ''}</strong><span style={{ color: run.health?.status === 'degraded' ? '#fb7185' : run.phase === 'complete' ? '#4ade80' : run.phase === 'blocked' ? '#fb7185' : '#7dd3fc' }}>{run.health?.status === 'degraded' ? 'Deployed; health degraded' : run.phase === 'complete' ? run.acceptance?.profile === 'functional-development' ? 'Development functionality verified' : 'Deployed and verified' : run.phase}</span></div>
       {run.acceptance?.limitations.map((limitation) => <p key={limitation}><strong>Validation scope:</strong> {limitation}</p>)}
       <p className="muted">{new Date(run.startedAt).toLocaleString()} · {run.head.slice(0, 8)} · {run.environmentUrl}</p>
       {run.phase === 'reviewing' && <p>Awaiting independent visual and recovery evidence review. Evidence hash: {run.evidenceHash}</p>}
-      {run.health && <p>Post-release health: <strong>{run.health.status}</strong>{run.health.error && ` — ${run.health.error}`} {run.phase === 'complete' && <button className="btn btn-ghost" disabled={busy || data.running || !data.policy?.enabled} onClick={() => void action(() => api.monitorDelivery(run.repoId, run.id))}>Check health now</button>}</p>}
+      {run.health && <p>Post-release health: <strong>{run.health.status}</strong>{run.health.error && ` — ${run.health.error}`} {run.phase === 'complete' && <button className="btn btn-ghost" disabled={locked || data.running || !data.policy?.enabled} onClick={() => void action(() => api.monitorDelivery(run.repoId, run.id))}>Check health now</button>}</p>}
+      {run.health?.governanceEvidence&&<HealthEvidence key={`${run.id}:${run.health.governanceEvidence}`} run={run.id} decision={run.health.governanceEvidence}/>}
       {run.previousRunId && <p>Previous verified deployment: {run.previousRunId}</p>}
       {run.recovery && <p>Recovery runbook and rehearsal evidence retained. Package SHA-256: {run.recovery.packageSha256}</p>}
       {run.error && <p role="alert">{run.error}</p>}

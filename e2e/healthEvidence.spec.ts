@@ -1,0 +1,28 @@
+import {test,expect} from '@playwright/test';
+import type {WorldSnapshot} from '../shared/types';
+
+test('loads health evidence on demand and clears stale facts after a read failure',async({page,request})=>{
+  await page.setViewportSize({width:1440,height:1000});
+  await request.get('/api/session');const snapshot=await (await request.get('/api/state')).json() as WorldSnapshot;snapshot.settings.setupDone=true;snapshot.settings.tutorialStep=-1;
+  await page.routeWebSocket('/ws',socket=>socket.send(JSON.stringify({type:'snapshot',data:snapshot})));
+  const run={id:'health-fixture',repoId:'synthetic/repo',releaseId:'synthetic-release',head:'a'.repeat(40),phase:'blocked',startedAt:new Date().toISOString(),environmentUrl:'https://synthetic.crm4.dynamics.com',solution:'Synthetic expenses',appUrls:[],evidence:[],log:[],health:{status:'pending',nextCheckAt:new Date().toISOString(),governanceEvidence:'health/governance-0-health.json'}};
+  let deliveryAvailable=true,hold=false,held!:()=>void,release!:()=>void;
+  const pending=new Promise<void>(resolve=>{held=resolve;}),resume=new Promise<void>(resolve=>{release=resolve;});
+  const reviewed={id:'synthetic-release',repoId:'synthetic/repo',head:run.head,approvedAt:new Date().toISOString(),approvedBy:'synthetic-qa',plan:{name:'Synthetic reviewed release',qaOwner:'synthetic-qa',requiredIssues:[1],components:['Expenses']},architectureReview:{decision:'approved',reviewer:'synthetic-qa',notes:'Synthetic architecture review'}};
+  await page.route(/\/api\/delivery(?:\?|$)/,async route=>{if(hold){held();await resume;}return deliveryAvailable?route.fulfill({json:{policy:{enabled:true,copilotPaused:true,environmentUrl:run.environmentUrl},running:false,runs:[run],releases:[reviewed],blockers:[],message:'Synthetic delivery fixture'}}):route.fulfill({status:503,json:{error:'Synthetic delivery unavailable'}});});
+  let requests=0,available=true;
+  await page.route('**/api/delivery/runs/health-fixture/health-evidence',route=>{requests++;return available?route.fulfill({json:{status:'unavailable',checkedAt:new Date().toISOString(),reasons:['Effective connector enforcement remains unverified'],files:[{file:'governance-0-health.json',kind:'decision'},{file:`advanced-policy-${'b'.repeat(64)}.json`,kind:'advanced-policy'}]}}):route.fulfill({status:404,json:{error:'Synthetic current health evidence unavailable'}});});
+  await page.goto('/?quality=low');await page.getByRole('button',{name:'Enter the office',exact:true}).click();
+  await page.evaluate(()=>{const store=(window as any).__swarmStore;store.setState({demo:false});store.getState().openOverlay({kind:'alm-kiosk'});});
+  const heading=page.getByText('Latest health governance evidence',{exact:true});await expect(heading).toBeVisible();expect(requests).toBe(0);
+  await heading.click();await expect(page.getByRole('link',{name:'Environment policy assignments',exact:true})).toBeVisible();expect(requests).toBe(1);
+  await expect(page.getByText('Effective connector enforcement remains unverified',{exact:true})).toBeVisible();
+  await expect(page.getByRole('link',{name:'Lifecycle decision',exact:true})).toHaveAttribute('href','/api/delivery/runs/health-fixture/health-evidence?file=governance-0-health.json');
+  await expect(page.getByRole('button',{name:'Run / resume this release',exact:true})).toBeEnabled();hold=true;await pending;
+  await expect(page.getByRole('status')).toContainText('Showing the last observed snapshot');await expect(page.getByRole('button',{name:'Run / resume this release',exact:true})).toBeDisabled();
+  const evidence=heading.locator('..');await expect(page.getByRole('link',{name:'Environment policy assignments',exact:true})).toBeVisible();await evidence.screenshot({path:'.swarm-reliability/health-evidence-ui.png'});release();hold=false;
+  await expect(page.getByRole('button',{name:'Run / resume this release',exact:true})).toBeEnabled();
+  available=false;await evidence.getByRole('button',{name:'Refresh health evidence',exact:true}).click();await expect(evidence.getByRole('alert')).toHaveText('Synthetic current health evidence unavailable');
+  await expect(page.getByRole('link',{name:'Environment policy assignments',exact:true})).toHaveCount(0);await expect(page.getByText('Effective connector enforcement remains unverified',{exact:true})).toHaveCount(0);
+  deliveryAvailable=false;await expect(page.getByRole('paragraph').filter({hasText:/^Synthetic delivery unavailable$/})).toBeVisible();await expect(heading).toHaveCount(0);await expect(page.getByText('Synthetic reviewed release',{exact:true})).toHaveCount(0);await expect(page.getByText('No verified delivery yet.',{exact:false})).toHaveCount(0);await expect(page.locator('.toast-error')).toHaveCount(0);
+});

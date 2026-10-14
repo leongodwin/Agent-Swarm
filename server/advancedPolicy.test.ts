@@ -1,5 +1,6 @@
 import {expect,it,vi} from 'vitest';
-import {createAdvancedPolicyObserver} from './advancedPolicy.ts';
+import {advancedPolicyObservation,createAdvancedPolicyObserver} from './advancedPolicy.ts';
+import crypto from 'node:crypto';
 const tenant='11111111-1111-4111-8111-111111111111',other='22222222-2222-4222-8222-222222222222',environmentId=`Default-${tenant}`;
 const input={tenantId:tenant,caller:'tester@company.test',environmentId,checkout:'synthetic'};
 const row={policyId:'policy-1',resourceId:environmentId,resourceType:'Environment',tenantId:tenant,ruleSetCount:1};
@@ -55,3 +56,11 @@ it('bounds provider output and conceals native diagnostics',async()=>{
   f.run.mockRejectedValue(new Error('private bearer token'));expect(JSON.stringify(await f.observe(input))).not.toContain('private');
 });
 it('rejects malformed approved input before dispatch',async()=>{const f=fixture();await expect(f.observe({...input,environmentId:'../unsafe'})).rejects.toThrow();expect(f.run).not.toHaveBeenCalled();});
+it.each(['digest','assignment-tenant','policy-tenant','environment','policy-id','count','duplicate-policy','duplicate-rule','unavailable-facts'])('revalidates policy receipt facts at the consumer boundary: %s',async fault=>{
+  const value=await fixture([row]).observe(input);
+  if(fault==='assignment-tenant')value.assignments[0].tenantId=other;if(fault==='policy-tenant')value.policies[0].tenantId=other;if(fault==='environment')value.assignments[0].resourceId=other;
+  if(fault==='policy-id')value.policies[0].id='unbound';if(fault==='count')value.policies[0].ruleSetCount=2;if(fault==='duplicate-policy')value.policies.push(value.policies[0]);if(fault==='duplicate-rule'){value.policies[0].ruleSets.push(value.policies[0].ruleSets[0]);value.policies[0].ruleSetCount=2;value.assignments[0].ruleSetCount=2;}
+  value.observationSha256=crypto.createHash('sha256').update(JSON.stringify({assignments:value.assignments,policies:value.policies})).digest('hex');
+  if(fault==='digest')value.observationSha256='a'.repeat(64);if(fault==='unavailable-facts')value.status='unavailable';
+  expect(advancedPolicyObservation.safeParse(value).success).toBe(false);
+});

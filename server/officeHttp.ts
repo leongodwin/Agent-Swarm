@@ -24,6 +24,7 @@ import { discoverSkills, selectSkills } from './skillRegistry.ts';
 import { createBrowserAuth } from './browserAuth.ts';
 import { parseBody, proposalSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 import type {OfficeReloadRequester} from './officeReload.mjs';
+import {healthEvidenceView} from './healthEvidence.ts';
 
 export interface OfficeHttpServices {
   officeReload?:Pick<OfficeReloadRequester,'prepare'|'view'>;
@@ -190,6 +191,21 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     const location = await containedFile(path.join(homeDir, 'delivery-runs', run.id, 'evidence'), file);
     requireOpen();
     await new Promise<void>((resolve,reject) => res.download(location,error => error ? reject(error) : resolve()));
+  }));
+  app.get('/api/delivery/runs/:run/health-evidence',route(async(req,res)=>{
+    const run=delivery.view().runs.find(run=>run.id===String(req.params.run));if(!run)throw new HttpError(404,'Delivery run not found');
+    const query=parseBody(z.object({file:z.string().max(200).optional()}).strict(),req.query);
+    const evidence=await healthEvidenceView(homeDir,run);requireOpen();
+    const current=()=>{
+      const value=delivery.view().runs.find(item=>item.id===run.id);
+      if(!value||value.head!==run.head||value.releaseId!==run.releaseId||value.environmentUrl!==run.environmentUrl||value.health?.governanceEvidence!==run.health?.governanceEvidence)throw new HttpError(409,'Health governance changed; refresh before reading its evidence');
+    };
+    current();
+    res.set('Cache-Control','no-store');
+    if(!query.file)return evidence.view;
+    if(!evidence.view.files.some(item=>item.file===query.file))throw new HttpError(404,'Health evidence not found in the current decision');
+    const location=await containedFile(evidence.root,query.file).catch(()=>{throw new HttpError(404,'Registered health evidence is unavailable');});requireOpen();current();
+    await new Promise<void>((resolve,reject)=>res.download(location,error=>error?reject(error):resolve()));
   }));
 
 

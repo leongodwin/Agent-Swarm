@@ -18,6 +18,7 @@ const resultSchema=z.object({status:z.enum(['clear','blocked','unavailable']),ph
   reasons:z.array(z.string().min(1).max(1000)).min(1).max(30),
 }).strict().superRefine((result,ctx)=>{if(result.status==='clear'&&(!result.artifactSha256||!result.policySha256||!result.schemaSha256))ctx.addIssue({code:'custom',message:'Clear governance requires complete artifact, policy and schema evidence'});});
 export type LifecycleResult=z.infer<typeof resultSchema>;
+export const lifecycleResultSchema=resultSchema;
 export type LifecycleCheck=(request:LifecycleRequest)=>Promise<LifecycleResult>;
 export function manifestDigest(manifest:unknown) {return crypto.createHash('sha256').update(JSON.stringify(manifest)).digest('hex');}
 export function unavailableGovernance(request:LifecycleRequest,reasons=['Complete artifact inventory, advanced tenant policy evaluation and comprehensive schema contracts are not available']):LifecycleResult {

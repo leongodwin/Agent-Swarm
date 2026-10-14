@@ -6,7 +6,20 @@ import {platformIdentitySchema} from './identityContracts.ts';
 const id=z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),environment=platformIdentitySchema.shape.environmentId;
 const assignment=z.object({policyId:id,resourceId:environment,resourceType:z.literal('Environment'),tenantId:z.uuid(),ruleSetCount:z.number().int().min(0).max(100)}).passthrough();
 const policy=z.object({id,tenantId:z.uuid(),name:z.string().min(1).max(500),ruleSetCount:z.number().int().min(0).max(100),ruleSets:z.array(z.object({id,version:z.string().min(1).max(100),inputs:z.record(z.string(),z.unknown())}).passthrough()).max(100)}).passthrough();
-export const advancedPolicyObservation=z.strictObject({scope:z.literal('environment-rule-assignment-inventory'),complete:z.literal(false),complianceVerified:z.literal(false),accountScope:z.literal('azure-cli-profile'),status:z.enum(['observed','unavailable']),tenantId:z.uuid(),caller:z.email(),environmentId:environment,checkedAt:z.iso.datetime(),reason:z.string().min(1).max(1000),assignments:z.array(assignment).max(10),policies:z.array(policy).max(10),observationSha256:z.string().regex(/^[a-f0-9]{64}$/).optional()}).superRefine((value,ctx)=>{if(value.status==='observed'&&!value.observationSha256)ctx.addIssue({code:'custom',message:'Observed assignments require their evidence digest'});});
+export const advancedPolicyObservation=z.strictObject({scope:z.literal('environment-rule-assignment-inventory'),complete:z.literal(false),complianceVerified:z.literal(false),accountScope:z.literal('azure-cli-profile'),status:z.enum(['observed','unavailable']),tenantId:z.uuid(),caller:z.email(),environmentId:environment,checkedAt:z.iso.datetime(),reason:z.string().min(1).max(1000),assignments:z.array(assignment).max(10),policies:z.array(policy).max(10),observationSha256:z.string().regex(/^[a-f0-9]{64}$/).optional()}).superRefine((value,ctx)=>{
+  const invalid=(message:string)=>ctx.addIssue({code:'custom',message});
+  if(value.status==='unavailable'){
+    if(value.assignments.length||value.policies.length||value.observationSha256)invalid('Unavailable observations cannot retain successful policy facts');
+    return;
+  }
+  const facts=JSON.stringify({assignments:value.assignments,policies:value.policies});
+  if(Buffer.byteLength(facts)>8*1024*1024||value.observationSha256!==crypto.createHash('sha256').update(facts).digest('hex'))invalid('Observed policy facts exceed their bound or differ from their digest');
+  if(value.assignments.length!==value.policies.length||new Set(value.assignments.map(row=>row.policyId.toLowerCase())).size!==value.assignments.length||new Set(value.policies.map(row=>row.id.toLowerCase())).size!==value.policies.length)invalid('Policy facts are incomplete or ambiguous');
+  for(const row of value.assignments){
+    const detail=value.policies.find(detail=>detail.id===row.policyId);
+    if(row.tenantId.toLowerCase()!==value.tenantId.toLowerCase()||row.resourceId.toLowerCase()!==value.environmentId.toLowerCase()||!detail||detail.tenantId.toLowerCase()!==value.tenantId.toLowerCase()||detail.ruleSetCount!==row.ruleSetCount||detail.ruleSetCount!==detail.ruleSets.length||new Set(detail.ruleSets.map(rule=>rule.id.toLowerCase())).size!==detail.ruleSets.length)invalid('Policy facts do not match their observed tenant, environment or assignment');
+  }
+});
 export type AdvancedPolicyObservation=z.infer<typeof advancedPolicyObservation>;
 export interface AdvancedPolicyRequest {tenantId:string;caller:string;environmentId:string;checkout:string;signal?:AbortSignal}
 export type AdvancedPolicyObserver=(request:AdvancedPolicyRequest)=>Promise<AdvancedPolicyObservation>;
