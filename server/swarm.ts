@@ -2061,7 +2061,7 @@ export class Swarm {
         },
         limited: (at) => {if (live()) this.pauseForLimit(at);},
         usageWarning: (info) => {if (live()) this.paceForWarning(info);},
-        finished: (result) => {if (!live()) return; completed = true; return this.onFinished(a, repo, result, generation).catch(()=>{
+        finished: (result) => {if (!live()) return; const fallbackAuthorized=authority()===null;completed = true; return this.onFinished(a, repo, result, generation,how.cli,fallbackAuthorized).catch(()=>{
           if(!this.ownsTask(a,generation))return;
           rt.session=null;rt.currentTool=null;a.status='error';a.endedAt=Date.now();
           a.lastError='Completion processing failed; reconcile artifacts and external actions before retrying';
@@ -2074,7 +2074,7 @@ export class Swarm {
     return true;
   }
 
-  private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a)) {
+  private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a),sessionCli?:AgentCli,fallbackAuthorized=false) {
     const rt = this.agentRt.get(a.id);
     if (!rt || !this.ownsTask(a, generation)) return;
     if (this.officeUpdate.handedOver) return; // stopped for the office's update: recovered like after a restart
@@ -2088,7 +2088,7 @@ export class Swarm {
     void this.deskOperation(a, async () => {if (this.ownsTask(a, generation)) await this.backend.releaseDesk(repo.fullName, slug, this.port(a));}).catch(() => undefined);
     if (result.interrupted) this.interrupted(a);
 
-    if (!result.ok && this.isOpenCodeLimit(result, a)) {
+    if (!this.draining && fallbackAuthorized && !result.ok && sessionCli==='opencode' && result.opencodeLimit===true) {
       const recovered = await this.fallbackFromOpenCodeToCodex(a, repo);
       if (recovered) {
         this.emitAgent(a);
@@ -2125,18 +2125,6 @@ export class Swarm {
     this.toast('error', `${a.name} hit a problem on ${what}: ${a.lastError.slice(0, 120)}`);
   }
 
-  private isOpenCodeLimit(result: SessionResult, a?: PersistedAgent): boolean {
-    if (result.opencodeLimit) return true;
-    const combined = [...(result.errors || []), result.text || ''].join(' ');
-    if (/Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(combined)) return true;
-    if (a) {
-      const rt = this.agentRt.get(a.id);
-      const screen = rt?.terminal?.screen() ?? '';
-      if (/Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen)) return true;
-    }
-    return false;
-  }
-
   private async fallbackFromOpenCodeToCodex(a: PersistedAgent, repo: PersistedRepo): Promise<boolean> {
     const fallbackModel = '';
     a.cli = 'codex';
@@ -2151,13 +2139,13 @@ export class Swarm {
     }
 
     this.appendLog(a, [
-      { kind: 'system', text: `🔄 OpenCode free tier limit reached. Automatically falling back to Codex (model: ${fallbackModel}).` },
+      { kind: 'system', text: 'OpenCode quota reached. Checking fresh Codex readiness before replacement dispatch.' },
     ]);
     this.postMessage(
       'office',
-      `🔄 OpenCode free tier limit reached for ${a.name}. Automatically switching to Codex (${fallbackModel}) to continue uninterrupted.`,
+      `OpenCode quota reached for ${a.name}. Codex fallback requires fresh readiness before work can continue.`,
     );
-    this.toast('info', `${a.name} hit OpenCode limit: switched to Codex (${fallbackModel}).`);
+    this.toast('info', `${a.name} hit OpenCode quota: checking Codex readiness.`);
 
     if (a.task === 'issue' && a.issueNumber) {
       const issue = this.repoRt.get(repo.id)?.issues.find((i) => i.number === a.issueNumber);
@@ -2889,23 +2877,6 @@ export class Swarm {
     this.tickUsage();
     if (this.officeUpdateTick()) return; // draining for the office's own update
     if (this.limited()) return;
-
-    // Rescue any agents currently frozen on OpenCode's free limit dialog
-    for (const a of this.state.agents) {
-      if (a.status === 'working') {
-        const rt = this.agentRt.get(a.id);
-        const screen = rt?.terminal?.screen() ?? '';
-        if (/Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen)) {
-          const repo = this.state.repos.find((r) => r.id === a.repoId);
-          if (repo) {
-            if (rt?.session) {
-              try { rt.session.stop(); } catch {}
-            }
-            void this.fallbackFromOpenCodeToCodex(a, repo);
-          }
-        }
-      }
-    }
 
     // Management first: the CEO's jobs are short and shape everyone else's work.
     this.maybeHeartbeat();

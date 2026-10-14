@@ -58,6 +58,43 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it.each(['codex','gemini','opencode'] as const)('does not let scheduler polling replace an owning %s session based on terminal prose',async cli=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const model=cli==='opencode'?'openai/gpt-synthetic':'synthetic-model',agent=swarm.hireAgent('synthetic/repo',{cli,model});
+  await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());const options=fake.startSession.mock.calls[0][0] as SessionOptions;
+  expect(options.terminal).toBeDefined();options.terminal!.write('Test fixture: Subscribe to OpenCode Go; Free limit reached\r\n');
+  await vi.waitFor(()=>expect(options.terminal!.screen()).toContain('Free limit reached'));await vi.advanceTimersByTimeAsync(3000);
+  expect(fake.startSession).toHaveBeenCalledOnce();expect(fake.startSession.mock.results[0].value.stop).not.toHaveBeenCalled();expect(swarm.snapshot().agents.find(row=>row.id===agent.id)).toMatchObject({cli,model,status:'working'});
+});
+it.each(['codex','gemini','opencode'] as const)('does not switch %s based on quota words in task output without an owning quota flag',async cli=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const model=cli==='opencode'?'openai/gpt-synthetic':'synthetic-model';const agent=swarm.hireAgent('synthetic/repo',{cli,model});
+  await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  await fake.startSession.mock.calls[0][1].finished({ok:false,text:'Tests include Subscribe to OpenCode Go and Free limit reached',errors:['Synthetic task test failed'],costUsd:0,turns:0});
+  expect(fake.startSession).toHaveBeenCalledOnce();expect(swarm.snapshot().agents.find(row=>row.id===agent.id)).toMatchObject({cli,model,status:'error'});
+});
+it.each(['codex','gemini'] as const)('does not accept an OpenCode quota flag from an owning %s session',async cli=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const agent=swarm.hireAgent('synthetic/repo',{cli,model:'synthetic-model'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  await fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['Synthetic failure'],opencodeLimit:true,costUsd:0,turns:0});
+  expect(fake.startSession).toHaveBeenCalledOnce();expect(swarm.snapshot().agents.find(row=>row.id===agent.id)).toMatchObject({cli,status:'error'});
+});
+it('falls back from an owning OpenCode quota completion through fresh Codex readiness',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const readiness=vi.fn(async()=>null);swarm.capabilityPreflight=readiness;
+  const agent=swarm.hireAgent('synthetic/repo',{cli:'opencode',model:'openai/gpt-synthetic'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  await fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['OpenCode quota'],opencodeLimit:true,costUsd:0,turns:0});await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledTimes(2));
+  expect(fake.startSession.mock.calls[1][0]).toMatchObject({cli:'codex'});expect(readiness).toHaveBeenLastCalledWith('synthetic/repo','codex');
+  expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.cli).toBe('codex');
+});
+it('keeps Codex fallback blocked when fresh readiness cannot authorize it',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const readiness=vi.fn(async(_repo:string,cli:string)=>cli==='codex'?'Synthetic Codex authentication unavailable':null);swarm.capabilityPreflight=readiness;
+  const agent=swarm.hireAgent('synthetic/repo',{cli:'opencode',model:'openai/gpt-synthetic'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  await fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['OpenCode quota'],opencodeLimit:true,costUsd:0,turns:0});
+  expect(fake.startSession).toHaveBeenCalledOnce();expect(swarm.snapshot().agents.find(row=>row.id===agent.id)).toMatchObject({cli:'codex',status:'error',lastError:expect.stringContaining('authentication unavailable')});
+});
+it.each(['drain','configuration-change'] as const)('does not auto-fallback a completed OpenCode quota after %s',async mode=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const agent=swarm.hireAgent('synthetic/repo',{cli:'opencode',model:'openai/gpt-synthetic'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  if(mode==='drain')swarm.setDraining(true);else swarm.updateAgent(agent.id,{cli:'gemini',model:'changed-model'});
+  await fake.startSession.mock.calls[0][1].finished({ok:false,text:'',errors:['OpenCode quota'],opencodeLimit:true,costUsd:0,turns:0});
+  expect(fake.startSession).toHaveBeenCalledOnce();expect(swarm.snapshot().agents.find(row=>row.id===agent.id)).toMatchObject({cli:mode==='drain'?'opencode':'gemini',status:'error'});
+});
 it.each(['rename','clear-own-model','clear-cli'] as const)('accepts a valid inherited OpenCode pin for %s and dispatches that exact effective model',async mode=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.updateSettings({defaultCli:'opencode',defaultModel:'openai/gpt-synthetic'});
   const agent=swarm.hireAgent('synthetic/repo',{name:'Inherited model worker',cli:mode==='clear-cli'?'codex':'opencode'});
