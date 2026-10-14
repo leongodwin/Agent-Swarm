@@ -13,3 +13,12 @@ it('scans large screenshot strings linearly while preserving the explicit 64 MiB
   const payload='A'.repeat(33*1024*1024),text=JSON.stringify({screenshot:payload});expect(()=>parseUnambiguousJson(text)).toThrow();expect(()=>verifyJsonStructure(text,{maxBytes:64*1024*1024})).not.toThrow();expect((parseUnambiguousJson(text,{maxBytes:64*1024*1024}) as {screenshot:string}).screenshot.length).toBe(payload.length);
 },15000);
 it.each(['"unterminated','"trailing\\','{]','[}','}'])('rejects incomplete or mismatched token structure before construction: %s',text=>{expect(()=>verifyJsonStructure(text)).toThrow();});
+it('preserves quote boundaries across even and odd escape runs',()=>{
+  for(let count=0;count<12;count++){
+    const key='prefix'+String.fromCharCode(92).repeat(count)+'"suffix';
+    const text=JSON.stringify({[key]:key,after:'retained'});
+    expect(parseUnambiguousJson(text)).toEqual(JSON.parse(text));
+    const duplicate='{'+JSON.stringify(key)+':1,'+JSON.stringify(key)+':2}';
+    expect(()=>parseUnambiguousJson(duplicate)).toThrow('ambiguity');
+  }
+});

@@ -39,6 +39,24 @@ afterEach(async () => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) 
 const target = 'https://test.crm4.dynamics.com';
 const config = capabilityConfigSchema.parse({ environmentUrl: target, checks: ['authentication', 'environment', 'licence', 'mcp', 'cli', 'connector'].map((category) => ({ id: category, category, remedy: `Reconnect the ${category} capability`, probe: category === 'cli' ? { kind: 'cli', executable: 'node', minimumVersion: '22.0.0' } : category === 'mcp' ? { kind: 'mcp', url: 'http://localhost:1234/mcp', tools: ['compile_canvas'] } : { kind: 'http', url: 'https://provider.test/status', pointer: [category], equals: true } })) });
 async function fixture() { const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-capabilities-')); dirs.push(root); const probe = vi.fn<typeof runCapabilityProbe>(async () => {}); const service = new CapabilityService(root, false, probe); await service.init(); return { root, probe, service }; }
+it('refuses aggregate UTF-8 snapshots above the startup limit while preserving readable acknowledged state',async()=>{
+ const {root,service,probe}=await fixture(),file=path.join(root,'capabilities.json');
+ const large={...config,checks:config.checks.map((check,index)=>index===0?{...check,probe:{...check.probe,equals:'£'.repeat(300000)}}:check)};
+ for(let index=0;index<6;index++)await service.configure(`repo-${index}`,large);
+ const before=await fs.readFile(file),fingerprint=service.configurationFingerprint(['repo-6']);expect(before.length).toBeLessThan(4*1024*1024);
+ await expect(service.configure('repo-6',large)).rejects.toThrow('4 MiB');expect((await fs.readFile(file)).equals(before)).toBe(true);expect(service.configurationFingerprint(['repo-6'])).toBe(fingerprint);expect(service.view()).toMatchObject({unavailableKind:'limit'});expect(service.view().configuredProjects).toHaveLength(6);expect(probe).not.toHaveBeenCalled();
+ const restored=new CapabilityService(root,false,probe);await restored.init();expect(restored.view().configuredProjects).toHaveLength(6);await restored.close();
+ await service.configure('repo-0',config);expect(service.view().unavailableReason).toBeUndefined();expect((await service.check('repo-0',root,target)).status).toBe('ready');
+},15000);
+it('refuses processing-depth overflow before replacing the acknowledged snapshot',async()=>{
+ const {root,service}=await fixture();await service.configure('repo',config);const file=path.join(root,'capabilities.json'),before=await fs.readFile(file);let nested:unknown=true;for(let index=0;index<251;index++)nested=[nested];
+ const deep={...config,checks:config.checks.map((check,index)=>index===0?{...check,probe:{kind:'http',url:'https://provider.test/status',pointer:['result'],matches:nested}}:check)};
+ await expect(service.configure('deep',deep)).rejects.toThrow('processing limit');expect(service.view().unavailableKind).toBe('limit');expect(await fs.readFile(file)).toEqual(before);expect(service.view().configuredProjects).toEqual(['repo']);
+});
+it('rejects malformed probe observations before writing an unreadable result',async()=>{
+ const {root,service,probe}=await fixture();await service.configure('repo',config);const file=path.join(root,'capabilities.json'),before=await fs.readFile(file);
+ probe.mockImplementation(async check=>{if(check.id==='licence')(check as any).remedy='x'.repeat(1001);});await expect(service.check('repo',root,target)).rejects.toThrow('snapshot is invalid');expect(service.view().unavailableKind).toBe('invalid');expect(await fs.readFile(file)).toEqual(before);expect(service.view().results).toEqual([]);
+});
 it('never reuses ready evidence after publication fails and requires fresh probes after repair',async()=>{
  const {root,service,probe}=await fixture();await service.configure('repo',config);await service.check('repo',root,target);const file=path.join(root,'capabilities.json'),before=await fs.readFile(file),count=probe.mock.calls.length,changed=vi.fn();service.onChange=changed;
  vi.spyOn(fs,'rename').mockRejectedValueOnce(new Error('private-storage-detail'));await expect(service.check('repo',root,target,'git',true)).rejects.toThrow('publication failed');

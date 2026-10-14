@@ -152,7 +152,7 @@ it('uses the production session boundary and reports actual initialized services
 it('reports capability publication failure through HTTP without leaking its storage diagnostic',async()=>{
  const f=await office(),file=path.join(HOME_DIR,'capabilities.json');
  const original=fs.rename;let fail=true;vi.spyOn(fs,'rename').mockImplementation(async(...args)=>{if(String(args[1])===file&&fail){fail=false;throw new Error('private-storage-detail');}return original(...args);});
- await expect(f.capabilities.check('synthetic/repo',HOME_DIR,environment)).rejects.toThrow('publication failed');const response=await f.request('/api/capabilities'),view=await response.json();expect(response.status).toBe(200);expect(view.unavailableReason).toContain('publication failed');expect(JSON.stringify(view)).not.toContain('private-storage-detail');
+ await expect(f.capabilities.check('synthetic/repo',HOME_DIR,environment)).rejects.toThrow('publication failed');const response=await f.request('/api/capabilities'),view=await response.json();expect(response.status).toBe(200);expect(view.unavailableReason).toContain('publication failed');expect(view.unavailableKind).toBe('storage');expect(JSON.stringify(view)).not.toContain('private-storage-detail');
  await f.capabilities.check('synthetic/repo',HOME_DIR,environment);expect((await(await f.request('/api/capabilities')).json()).unavailableReason).toBeUndefined();
 });
 it('pins policy discovery to the connected caller and rejects supplied evidence',async()=>{

@@ -40,7 +40,7 @@ export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
       <button className="btn btn-ghost" disabled={locked || capabilityHeld || data?.running || !data?.policy?.enabled || !selected} onClick={() => void action(() => api.runDelivery(selected))}>Run / resume latest release</button>
     </div>
     <p><strong>Deployment target:</strong> {data?.availability==='unavailable'?'Unverified while delivery initialization is unavailable':data?.policy?.environmentUrl ?? target?.url ?? 'Connect a development environment first'}</p>
-    {capabilities.value?.unavailableReason&&<p role="alert">Readiness could not be saved. Check storage access, then refresh readiness. New delivery runs are held.</p>}
+    {capabilities.value?.unavailableReason&&<p role="alert">{capabilities.value.unavailableKind==='limit'?'Readiness records exceed their size or processing limit. Reduce probe configuration size, then refresh readiness.':capabilities.value.unavailableKind==='invalid'?'Readiness records could not be validated. Review project probes, then refresh readiness.':'Readiness could not be saved. Check storage access, then refresh readiness.'} New delivery runs are held.</p>}
     {tenancy.error&&<p role="alert">Connected environment discovery is unavailable. Refresh authentication before enabling delivery.</p>}
     {data?.policy?.copilotPaused && <p>Copilot Studio delivery is paused. Other solution components can continue through their own approved release.</p>}
     <p className="muted">{resource.error ?? data?.message ?? 'Loading delivery status…'}</p>

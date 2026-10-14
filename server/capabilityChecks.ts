@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import {parseUnambiguousJson} from './unambiguousJson.ts';
+import {parseUnambiguousJson,verifyJsonStructure} from './unambiguousJson.ts';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -16,6 +16,7 @@ import { targetBindingSchema, type Request } from './targetOperations.ts';
 import { connectFlowAdapter } from './flowAdapter.ts';
 
 const key = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
+const CAPABILITY_MAX_BYTES=4*1024*1024;
 const category = z.enum(['authentication', 'environment', 'licence', 'mcp', 'cli', 'connector', 'workflow']);
 const endpoint = z.url().refine((v) => { const u = new URL(v); return !u.username && !u.password && (u.protocol === 'https:' || u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)); });
 const azureCli = z.object({ tenantId: z.uuid(), username: z.email() }).strict();
@@ -179,7 +180,7 @@ export class CapabilityService {
   private stop = new AbortController();
   private initialized = false;
   private liveResults = new Set<string>();
-  private persistenceFailure=false;
+  private persistenceFailure:{kind:'storage'|'limit'|'invalid';reason:string}|null=null;
   onChange = () => {};
   constructor(private root: string, private demo: boolean, private probe = runCapabilityProbe) {}
   async init() {
@@ -189,11 +190,11 @@ export class CapabilityService {
     let found = false;
     try {
       const file = path.join(this.root, 'capabilities.json');
-      if ((await fs.stat(file)).size > 4 * 1024 * 1024) {found = true; throw new Error('oversized');}
+      if ((await fs.stat(file)).size > CAPABILITY_MAX_BYTES) {found = true; throw new Error('oversized');}
       found = true;
       const raw = await fs.readFile(file);
-      if (Buffer.byteLength(raw) > 4 * 1024 * 1024) throw new Error('oversized');
-      const input = parseUnambiguousJson(new TextDecoder('utf-8',{fatal:true}).decode(raw),{maxBytes:4*1024*1024}) as {configs?:unknown;results?:unknown};
+      if (Buffer.byteLength(raw) > CAPABILITY_MAX_BYTES) throw new Error('oversized');
+      const input = parseUnambiguousJson(new TextDecoder('utf-8',{fatal:true}).decode(raw),{maxBytes:CAPABILITY_MAX_BYTES}) as {configs?:unknown;results?:unknown};
       for (const map of [input?.configs, input?.results]) if (map && typeof map === 'object') {
         const keys = Object.keys(map);
         if (keys.length > 1024) throw new Error('oversized project map');
@@ -204,16 +205,23 @@ export class CapabilityService {
     this.initialized = true;
   }
   private async persist(configs:typeof this.configs,results:typeof this.results){
-    try{if(this.stop.signal.aborted)throw new Error('Capability service is closing');await atomicWrite(path.join(this.root,'capabilities.json'),JSON.stringify({configs,results},null,2),()=>!this.stop.signal.aborted);if(this.stop.signal.aborted)throw new Error('Capability service is closing');}
-    catch{this.persistenceFailure=true;this.cache.clear();this.liveResults.clear();try{this.onChange();}catch{/* Status remains available through the read API. */}throw new Error('Capability evidence publication failed; repair storage and refresh readiness');}
-    this.persistenceFailure=false;
+    const storage={kind:'storage' as const,reason:'Capability evidence publication failed; repair storage and refresh readiness'};let failure:NonNullable<typeof this.persistenceFailure>=storage;
+    try{
+      if(this.stop.signal.aborted)throw new Error('Capability service is closing');
+      failure={kind:'invalid',reason:'Capability evidence snapshot is invalid; repair project probes and refresh readiness'};
+      const content=JSON.stringify(savedSchema.parse({configs,results}),null,2);
+      failure={kind:'limit',reason:'Capability evidence exceeds its 4 MiB or processing limit; reduce project probe size before retrying'};
+      verifyJsonStructure(content,{maxBytes:CAPABILITY_MAX_BYTES});
+      failure=storage;await atomicWrite(path.join(this.root,'capabilities.json'),content,()=>!this.stop.signal.aborted);if(this.stop.signal.aborted)throw new Error('Capability service is closing');
+    }catch{this.persistenceFailure=failure;this.cache.clear();this.liveResults.clear();try{this.onChange();}catch{/* Status remains available through the read API. */}throw new Error(failure.reason);}
+    this.persistenceFailure=null;
   }
   view() {
     const results = Object.values(this.results).map(result => {
       if (!this.persistenceFailure&&this.liveResults.has(result.repoId) && currentObservation(result)) return result;
-      return {...result, status: 'blocked' as const, checks: [...result.checks, {id:'current-evidence', category:'environment', passed:false, detail:'Saved or expired observation is not current verification', remedy:'Refresh capability checks in this office process'}]};
+      return {...result, status: 'blocked' as const, checks: [...result.checks.filter(check=>check.id!=='current-evidence'), {id:'current-evidence', category:'environment', passed:false, detail:'Saved or expired observation is not current verification', remedy:'Refresh capability checks in this office process'}]};
     });
-    return structuredClone({results, configuredProjects: Object.keys(this.configs),...(this.persistenceFailure?{unavailableReason:'Capability evidence publication failed; repair storage and refresh readiness'}:{})});
+    return structuredClone({results, configuredProjects: Object.keys(this.configs),...(this.persistenceFailure?{unavailableReason:this.persistenceFailure.reason,unavailableKind:this.persistenceFailure.kind}:{})});
   }
   configurationFingerprint(repoIds: string[]) {
     return crypto.createHash('sha256').update(JSON.stringify([...new Set(repoIds)].sort().map(id => [id, this.configs[id] ?? null]))).digest('hex');

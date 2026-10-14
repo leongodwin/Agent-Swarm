@@ -15,8 +15,11 @@ export function verifyJsonStructure(text:string,options:Partial<JsonBounds>={}):
     for(let index=0;index<text.length;index++){
       const char=text[index];
       if(char==='"'){
-        token();const start=index;let ended=false;
-        while(++index<text.length){if(text[index]==='\\'){if(++index>=text.length)throw invalid();}else if(text[index]==='"'){ended=true;break;}}
+        token();const start=index;let ended=false,end=text.indexOf('"',index+1);
+        // Native substring search skips large scalar values without instrumenting
+        // every character. Odd preceding escape runs keep the quote inside the
+        // string; all such runs are disjoint, preserving linear work.
+        while(end>=0){let slashes=0;for(let cursor=end-1;cursor>start&&text[cursor]==='\\';cursor--)slashes++;if(slashes%2===0){index=end;ended=true;break;}end=text.indexOf('"',end+1);}
         if(!ended)throw invalid();
         if(keys.at(-1)){const key=JSON.parse(text.slice(start,index+1));if(stack.at(-1)!.has(key))throw invalid();stack.at(-1)!.add(key);keys[keys.length-1]=false;}
       }else if(char==='{'||char==='['){token();if(stack.length>=limits.maxDepth)throw invalid();stack.push(char==='{'?new Set():null);keys.push(char==='{');}
