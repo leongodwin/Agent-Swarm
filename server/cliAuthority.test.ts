@@ -48,6 +48,25 @@ it.each([undefined,'old-plugin-hash','stopping'])('retires an unsafe retained Op
   vi.mocked(adoptPty).mockReturnValueOnce({pid:0,get verifiedExit(){return exited;},write:vi.fn(),resize:vi.fn(),setMeta:vi.fn(),kill,onData:vi.fn(),onExit:callback=>{listeners.push(callback);}});
   expect(await reconnectClis(()=>term)).toEqual([]);expect(kill).toHaveBeenCalledOnce();expect(adoptPty).toHaveBeenCalledExactlyOnceWith(held);expect(term.bind).not.toHaveBeenCalled();expect(runtimeCleanupView().records).toEqual([]);
 });
+it.each(['native-root','native-child','text-only','unbound'] as const)('only falls back for an owning structured OpenCode rate limit: %s',async mode=>{
+  vi.useFakeTimers();const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=> 'Task fixture: Free limit reached; Subscribe to OpenCode Go; rate_limit payment'} as unknown as AgentTerminal;
+  const handle=await startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'openai/gpt-synthetic',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'opencode',terminal:term,authorizeTool:()=>null},callbacks);
+  if(mode!=='unbound')await handleHook(native.token,{hook_event_name:'OpenCodeSessionStart',session_id:'root'});
+  await handleHook(native.token,{hook_event_name:'TurnError',session_id:mode==='native-child'?'child':'root',error:'Free limit reached; payment',...(mode==='text-only'?{}:{native_error:{name:'APIError',data:{statusCode:429,isRetryable:true}}})});
+  await vi.advanceTimersByTimeAsync(4000);
+  if(mode==='native-root')expect(callbacks.finished).toHaveBeenCalledWith(expect.objectContaining({ok:false,opencodeLimit:true}));
+  else expect(callbacks.finished).not.toHaveBeenCalled();
+  handle.stop();
+});
+it('does not turn a completed OpenCode response into a quota failure because of quoted terminal text',async()=>{
+  vi.useFakeTimers();const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=> 'Test text: Subscribe to OpenCode Go; Free limit reached'} as unknown as AgentTerminal;
+  await startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'openai/gpt-synthetic',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'opencode',terminal:term,authorizeTool:()=>null},callbacks);
+  await handleHook(native.token,{hook_event_name:'OpenCodeSessionStart',session_id:'root'});
+  await handleHook(native.token,{hook_event_name:'TurnComplete',session_id:'root',last_assistant_message:'Tests covering Free limit reached passed.'});native.exit?.(0);
+  expect(callbacks.finished).toHaveBeenCalledWith(expect.objectContaining({ok:true,text:'Tests covering Free limit reached passed.'}));expect(callbacks.finished.mock.calls[0][0].opencodeLimit).not.toBe(true);
+});
 it('quarantines cancelled native work past the former five-second timeout until confirmed exit',async()=>{
   const handle=await session(()=>null);native.autoExit=false;handle.stop();
   expect(runtimeCleanupView().records).toHaveLength(1);await vi.advanceTimersByTimeAsync(6000);expect(runtimeCleanupView().records).toHaveLength(1);

@@ -192,7 +192,7 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         '--prompt',
         ctx.prompt,
       ];
-      return { args, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config), CUBEFARM_NOTIFY_URL: ctx.notify.url } };
+      return { args, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config), CUBEFARM_NOTIFY_URL: ctx.notify.url, CUBEFARM_OPENCODE_SESSION_ID:ctx.resumeId??'' } };
     }
     default: throw new Error('Unsupported coding runtime');
   }
@@ -357,7 +357,8 @@ export default async function CubefarmPlugin({ client } = {}) {
     endpoint = new URL(url);
     if (endpoint.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) throw new Error();
   } catch { throw new Error('Office governance endpoint is unavailable; OpenCode execution denied'); }
-  let root;
+  let root = process.env.CUBEFARM_OPENCODE_SESSION_ID || undefined;
+  let announcement;
   const names = {read:'Read',glob:'Glob',grep:'Grep',write:'Write',edit:'Edit',multiedit:'MultiEdit',bash:'Bash',apply_patch:'apply_patch'};
   const normalize = (name,args) => {
     const fields = {...args};
@@ -397,12 +398,14 @@ export default async function CubefarmPlugin({ client } = {}) {
     },
     event: async ({ event }) => {
       const props = event?.properties ?? {};
-      if (event?.type === 'session.created' && !props.info?.parentID && !root) root = props.info?.id;
+      if (event?.type === 'session.created' && !props.info?.parentID && !root && typeof props.info?.id==='string') root = props.info.id;
       const sessionID = props.sessionID ?? props.info?.id;
-      if (event?.type === 'session.idle' && (!root || sessionID === root)) {
-        post({ hook_event_name: 'TurnComplete', session_id: sessionID ?? null, last_assistant_message: sessionID ? await lastReply(sessionID) : '' });
+      if(!root||sessionID!==root)return;
+      await (announcement ??= post({hook_event_name:'OpenCodeSessionStart',session_id:root}));
+      if (event?.type === 'session.idle') {
+        await post({ hook_event_name: 'TurnComplete', session_id: root, last_assistant_message: await lastReply(root) });
       }
-      if (event?.type === 'session.error') post({ hook_event_name: 'TurnError', session_id: sessionID ?? null, error: String(props.error?.data?.message ?? props.error?.message ?? props.error?.name ?? 'error') });
+      if (event?.type === 'session.error') await post({ hook_event_name: 'TurnError', session_id: root, error: String(props.error?.data?.message ?? props.error?.message ?? props.error?.name ?? 'error').slice(0,1000), native_error:{name:props.error?.name,data:{statusCode:props.error?.data?.statusCode,isRetryable:props.error?.data?.isRetryable}} });
     },
   };
 }

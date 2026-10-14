@@ -61,7 +61,7 @@ export interface SessionResult {
   structured?: unknown;
   /** The manager interrupted the turn in the agent's terminal (Esc). */
   interrupted?: boolean;
-  /** OpenCode hit its free usage limit and needs fallback to Copilot. */
+  /** An owning OpenCode native API error reported HTTP 429; fallback still requires fresh admission. */
   opencodeLimit?: boolean;
   /** Explicit native model rejection; changing task text does not repair it. */
   configurationError?:{kind:'unsupported-model'|'unverified-model';cli:AgentCli;model:string};

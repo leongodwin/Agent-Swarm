@@ -34,7 +34,7 @@ import type { OfficeTools } from './ceo.ts';
 import type { AgentTerminal } from './terminal.ts';
 import type { AgentCli } from '../shared/types.ts';
 import { governSessionTool, hookDecision, hookFailure } from './toolGovernance.ts';
-import {copilotUnavailableModel} from './runtimeFailure.ts';
+import {copilotUnavailableModel,openCodeRateLimited} from './runtimeFailure.ts';
 
 // One agent session as the real CLI in a pseudo-terminal: the same contract as the Agent SDK runner (log lines, the
 // current tool, the final text, finished), so the rest of the office doesn't care which runtime an agent uses.
@@ -584,6 +584,14 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const hook = async (b: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const event = String(b.hook_event_name ?? '');
     const sub = typeof b.agent_id === 'string' && b.agent_id !== ''; // a subagent's call: kept off the log
+    if(cli==='opencode'&&event==='OpenCodeSessionStart') {
+      if(typeof b.session_id==='string'&&b.session_id.length>0&&b.session_id.length<=256&&(!mainThread||mainThread===b.session_id)) {
+        mainThread=b.session_id;cb.sessionId(mainThread);
+        if(live){live.resumeId=mainThread;remember(live);}
+      }
+      return {};
+    }
+    if(cli==='opencode'&&['TurnError','TurnComplete'].includes(event)&&(!mainThread||b.session_id!==mainThread))return {};
     if(cli==='gemini'&&b.bridgeSha256!==geminiGovernanceSha)return hookDecision({status:'unavailable',reason:'Gemini governance bridge is unverified'});
     if (cli==='gemini'&&!sub&&typeof b.session_id==='string'&&b.session_id!==kept){kept=b.session_id;cb.sessionId(kept);}
     if (cli === 'claude' && !sub && b.session_id !== kept) {
@@ -693,11 +701,11 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
         const rawErr = String(b.error ?? 'error');
         turnError = `${label}: ${clip(rawErr, 200)}`;
         log([{ kind: 'error', text: `✗ ${turnError}` }]);
-        if (cli === 'opencode' && /Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go|rate_limit|payment/i.test(rawErr)) {
+        if (cli === 'opencode' && openCodeRateLimited(b.native_error)) {
           finish({
             ok: false,
             text: '',
-            errors: [`OpenCode free limit reached: ${clip(rawErr, 160)}`],
+            errors: ['OpenCode provider returned HTTP 429 for the owning session; checking fallback readiness.'],
             opencodeLimit: true,
           });
         }
@@ -732,14 +740,11 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       finish({ ok: false, text: '', errors: [`${label} couldn't find the conversation it was resuming, so the next session starts a new one.`] });
       return;
     }
-    const screen = term.screen();
-    const isOpenCodeLimit = cli === 'opencode' && /Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen);
-    const ok = exitCode === 0 && lastText !== '' && !isOpenCodeLimit;
+    const ok = exitCode === 0 && lastText !== '' && !turnError;
     finish({
       ok,
       text: lastText,
-      errors: ok ? [] : [isOpenCodeLimit ? 'OpenCode free limit reached' : `${label} exited${exitCode ? ` with code ${exitCode}` : ''} before finishing.`],
-      opencodeLimit: isOpenCodeLimit,
+      errors: ok ? [] : [turnError ?? `${label} exited${exitCode ? ` with code ${exitCode}` : ''} before finishing.`],
     });
   };
 
@@ -899,25 +904,11 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
 
     // Starting up: answer the folder-trust question for the office's own worktrees (the answer that trusts it), and
     // say so when a CLI is waiting on something only the manager can do (signing in),
-    // and continuously monitor for OpenCode free tier limit modals so the office can fall back to Codex.
+    // and observe terminal readiness. Provider failures come from session-owned plugin events.
     screenTimer = setInterval(() => {
       if (done || (cli !== 'opencode' && cli !== 'gemini' && Date.now() - started > BOOT_MS * 2)) return clearInterval(screenTimer);
       const screen = term.screen();
       if(cli==='gemini'&&live?.governanceReady&&!geminiPromptSent&&/Type your message|Type a message|Send a message/i.test(screen)){geminiPromptSent=true;clearTimeout(geminiStartupTimer);handle.send(`${opts.systemAppend}\n\n${prompt}`);}
-      if (cli === 'opencode' && /Free limit reached|Subscribe to OpenCode Go|opencode\.ai\/go|Free usage exceeded|subscribe to Go/i.test(screen)) {
-        clearInterval(screenTimer);
-        log([{ kind: 'error', text: `⚠ OpenCode free tier limit reached: ${label}. Triggering fallback to Codex.` }]);
-        quietly(() => p.write('\x1b'));
-        setTimeout(() => {
-          finish({
-            ok: false,
-            text: '',
-            errors: ['OpenCode free limit reached: Subscribe to OpenCode Go for reliable access or fallback to Codex.'],
-            opencodeLimit: true,
-          });
-        }, 300);
-        return;
-      }
       const review = hookReviewKey(screen);
       const key = trustKeys < 12 && Date.now() - trustedAt > 3000 ? (trustKey(screen) ?? (cli==='codex'?null:review)) : null;
       if (key === 'down') {

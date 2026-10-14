@@ -9,6 +9,22 @@ async function plugin(){
   return factory({client:{session:{messages:async()=>({data:[]})}}});
 }
 function endpoint(){vi.stubEnv('CUBEFARM_NOTIFY_URL','http://127.0.0.1:4499/api/hooks/synthetic');}
+it('announces the root before forwarding bounded native failures, excluding child and unbound sessions',async()=>{
+  endpoint();vi.stubEnv('CUBEFARM_OPENCODE_SESSION_ID','');const bodies:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_url,options)=>{bodies.push(JSON.parse(options.body));return {ok:true};}));
+  const hooks=await plugin(),error={name:'APIError',data:{statusCode:429,isRetryable:true,message:'x'.repeat(2000),responseBody:'secret',responseHeaders:{Authorization:'secret'}}};
+  await hooks.event({event:{type:'session.error',properties:{sessionID:'unknown',error}}});expect(bodies).toEqual([]);
+  await hooks.event({event:{type:'session.created',properties:{info:{id:'child',parentID:'root'}}}});expect(bodies).toEqual([]);
+  await hooks.event({event:{type:'session.created',properties:{info:{id:'root'}}}});
+  await hooks.event({event:{type:'session.error',properties:{sessionID:'child',error}}});
+  await hooks.event({event:{type:'session.error',properties:{sessionID:'root',error}}});
+  expect(bodies).toHaveLength(2);expect(bodies[0]).toMatchObject({hook_event_name:'OpenCodeSessionStart',session_id:'root'});
+  expect(bodies[1]).toMatchObject({hook_event_name:'TurnError',session_id:'root',native_error:{name:'APIError',data:{statusCode:429,isRetryable:true}}});expect(bodies[1].error).toHaveLength(1000);expect(JSON.stringify(bodies)).not.toContain('secret');
+});
+it('keeps a resumed root pinned when another root is created',async()=>{
+  endpoint();vi.stubEnv('CUBEFARM_OPENCODE_SESSION_ID','retained');const bodies:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_url,options)=>{bodies.push(JSON.parse(options.body));return {ok:true};}));const hooks=await plugin();
+  await hooks.event({event:{type:'session.created',properties:{info:{id:'unrelated'}}}});expect(bodies).toEqual([]);
+  await hooks.event({event:{type:'session.idle',properties:{sessionID:'retained'}}});expect(bodies.map(row=>row.hook_event_name)).toEqual(['OpenCodeSessionStart','TurnComplete']);expect(bodies.every(row=>row.session_id==='retained')).toBe(true);
+});
 it.each([undefined,'https://example.test/hooks','http://user:password@localhost/hooks','http://example.test/hooks'])('refuses plugin initialization with an unsafe endpoint %s',async url=>{
   if(url===undefined)vi.stubEnv('CUBEFARM_NOTIFY_URL',undefined);else vi.stubEnv('CUBEFARM_NOTIFY_URL',url);
   const fetch=vi.fn();vi.stubGlobal('fetch',fetch);await expect(plugin()).rejects.toThrow('execution denied');expect(fetch).not.toHaveBeenCalled();
