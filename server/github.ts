@@ -1,25 +1,37 @@
 import { gh, ghJson } from './exec.ts';
 import type { GhRepoSummary, IssueInfo, PullInfo } from '../shared/types.ts';
 import { dlpResource } from '../shared/dlp.ts';
+import {z} from 'zod';
+import crypto from 'node:crypto';
 
 // All GitHub access goes through the gh CLI so it reuses the user's existing `gh auth login`.
 
 /** Inspect full files at a pinned head, rejecting a concurrently changed PR. */
 export async function prFiles(fullName: string, number: number, headSha: string): Promise<{ file: string; content: string }[]> {
+  if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)||fullName.split('/').some(part=>part==='.'||part==='..')||!Number.isSafeInteger(number)||number<1||! /^[a-f0-9]{40}$/i.test(headSha))throw new Error('PR scan requires an exact repository, PR number and supported commit SHA');
+  headSha=headSha.toLowerCase();
   if ((await prDetails(fullName, number)).headSha !== headSha) throw new Error('PR head changed during DLP scan');
   const pages = await ghJson<{ filename: string; status: string }[][]>(['api', '--paginate', '--slurp', `repos/${fullName}/pulls/${number}/files?per_page=100`]);
-  const changed = pages.flat();
+  const changed=z.array(z.array(z.object({filename:z.string().min(1).max(1000),status:z.enum(['added','removed','modified','renamed','copied','changed','unchanged']),sha:z.string().regex(/^[a-f0-9]{40}$/i)})).max(100)).max(30).parse(pages).flat();
+  if(new Set(changed.map(file=>file.filename)).size!==changed.length||changed.some(file=>file.filename.startsWith('/')||file.filename.includes('\\')||file.filename.split('/').some(part=>!part||part==='.'||part==='..')))throw new Error('PR file paths are ambiguous or unsafe');
   if (changed.length >= 3000) throw new Error('PR file listing reached the API limit; full DLP coverage cannot be verified');
   const files = changed.filter((file) => file.status !== 'removed' && dlpResource(file.filename));
   const result: { file: string; content: string }[] = [];
+  let totalBytes=0;
   // Bound concurrency and memory; an unavailable/oversized file blocks rather than skips the scan.
   for (const file of files) {
     const filename = file.filename.split('/').map(encodeURIComponent).join('/');
     const raw = await ghJson<{ type: string; encoding: string; size: number; content: string }>([
       'api', `repos/${fullName}/contents/${filename}?ref=${encodeURIComponent(headSha)}`,
     ]);
-    if (raw.type !== 'file' || raw.encoding !== 'base64' || raw.size > 5_000_000) throw new Error(`Cannot inspect ${file.filename} for DLP`);
-    result.push({ file: file.filename, content: Buffer.from(raw.content, 'base64').toString('utf8') });
+    const metadata=z.object({type:z.literal('file'),encoding:z.literal('base64'),size:z.number().int().min(0).max(5_000_000),content:z.string().max(7_000_000),sha:z.string().regex(/^[a-f0-9]{40}$/i)}).parse(raw);
+    const encoded=metadata.content.replace(/[\r\n]/g,'');
+    if(encoded.length%4||! /^[A-Za-z0-9+/]*={0,2}$/.test(encoded))throw new Error('PR file encoding is malformed');
+    const bytes=Buffer.from(encoded,'base64');totalBytes+=bytes.length;
+    if(bytes.length!==metadata.size||bytes.toString('base64')!==encoded||totalBytes>32*1024*1024)throw new Error('PR file size or accumulated scan bound differs');
+    const blobSha=crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+    if(blobSha!==metadata.sha.toLowerCase()||blobSha!==file.sha.toLowerCase())throw new Error('PR file blob identity differs from its pinned listing');
+    result.push({ file: file.filename, content: new TextDecoder('utf-8',{fatal:true}).decode(bytes) });
   }
   if ((await prDetails(fullName, number)).headSha !== headSha) throw new Error('PR head changed during DLP scan');
   return result;
@@ -93,9 +105,9 @@ const PR_FIELDS =
   'number,title,url,headRefName,headRefOid,state,isDraft,mergeable,mergeStateStatus,reviewDecision,closingIssuesReferences,createdAt,mergedAt,additions,deletions,statusCheckRollup';
 
 type Check = NonNullable<RawPull['statusCheckRollup']>[number];
-const BAD = ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE'];
+const BAD = ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE','STALE'];
 const failed = (c: Check) => BAD.includes(c.conclusion ?? '') || BAD.includes(c.state ?? '');
-const pending = (c: Check) => (!!c.status && c.status !== 'COMPLETED') || c.state === 'PENDING' || c.state === 'EXPECTED';
+const pending = (c: Check) => !failed(c)&&!(c.status==='COMPLETED'&&['SUCCESS','NEUTRAL','SKIPPED'].includes(c.conclusion??'')&&!c.state||!c.status&&!c.conclusion&&c.state==='SUCCESS');
 const checkName = (c: Check) => c.name || c.context || 'check';
 
 function checksOf(rollup: RawPull['statusCheckRollup']): PullInfo['checks'] {
@@ -160,7 +172,7 @@ export async function createIssue(fullName: string, title: string, body: string,
 export async function issueState(fullName: string, number: number): Promise<'OPEN' | 'CLOSED' | null> {
   try {
     const raw = await ghJson<{ state: string }>(['issue', 'view', String(number), '-R', fullName, '--json', 'state']);
-    return raw.state === 'OPEN' ? 'OPEN' : 'CLOSED';
+    return z.enum(['OPEN','CLOSED']).parse(raw.state);
   } catch {
     return null;
   }
