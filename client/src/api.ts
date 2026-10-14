@@ -12,6 +12,7 @@ import type { DlpScanReport } from '../../shared/dlp';
 export type { DlpScanReport } from '../../shared/dlp';
 import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../../shared/tenancy';
 import { ensureSession } from './session';
+export class ApiError extends Error {constructor(message:string,public status:number){super(message);this.name='ApiError';}}
 
 async function call<T = unknown>(method: string, url: string, body?: unknown,quiet=false): Promise<T> {
   await ensureSession();
@@ -26,7 +27,7 @@ async function call<T = unknown>(method: string, url: string, body?: unknown,qui
   if (!res.ok) {
     const message = (data as { error?: string }).error ?? `${res.status} ${res.statusText}`;
     if(!quiet)useStore.getState().pushToast('error', message);
-    throw new Error(message);
+    throw new ApiError(message,res.status);
   }
   return data as T;
 }
@@ -137,6 +138,6 @@ export const api = {
   tenancy: () => call<TenancyInfo>('GET', '/api/tenancy'),
   selectTenancyEnvironment: (index: number) => call<{ ok: boolean; message: string }>('POST', '/api/tenancy/select', { index }),
   loginTenancy: (data: TenancyLoginInput) => call<TenancyLogin>('POST', '/api/tenancy/login', data),
-  tenancyLoginStatus: (id: string) => call<TenancyLogin>('GET', `/api/tenancy/login/${encodeURIComponent(id)}`),
+  tenancyLoginStatus: (id: string) => call<TenancyLogin>('GET', `/api/tenancy/login/${encodeURIComponent(id)}`,undefined,true),
   cancelTenancyLogin: (id: string) => call('DELETE', `/api/tenancy/login/${encodeURIComponent(id)}`),
 };

@@ -3,7 +3,7 @@ import { useResource } from '../useResource';
 import type { TenancyInfo, TenancyLogin } from '../../../shared/tenancy';
 import { Panel } from './Overlays';
 import { useStore, repoOnFloor } from '../store';
-import { api } from '../api';
+import { api,ApiError } from '../api';
 import { ALLOWED_BUSINESS_CONNECTORS, ENTERPRISE_DLP_RULES, auditDlpCompliance, type DlpPolicyViolation } from '../../../shared/dlp';
 
 export function DlpSecurityModal() {
@@ -77,12 +77,17 @@ export function DlpSecurityModal() {
           loginId.current = null;
           if (status.status === 'completed') { pushToast('success', status.message); refreshTenancy(); }
         }
-      }).catch(() => { if (mounted.current) setLogin({ ...login, status: 'failed', ok: false, message: 'Could not read authentication status' }); });
+      }).catch((error) => {
+        if(!mounted.current)return;
+        const missing=error instanceof ApiError&&error.status===404;
+        if(missing&&loginId.current===login.id)loginId.current=null;
+        setLogin(current=>current?.id===login.id&&current.status==='pending'?missing?{...current,status:'failed',ok:false,message:'This authentication request no longer exists. Start a new sign-in request.'}:{...current,message:'Authentication status is temporarily unavailable. The request may still be running; retrying its status.'}:current);
+      });
     }, 1000);
     return () => clearTimeout(timer);
   }, [login]);
   const closeLogin = () => {
-    if (loginId.current) void api.cancelTenancyLogin(loginId.current).catch(() => {});
+    if (loginId.current) void api.cancelTenancyLogin(loginId.current).catch(() => {}).finally(refreshTenancy);
     loginId.current = null; setLogin(null); setShowLoginModal(false);
   };
 
@@ -480,6 +485,7 @@ export function DlpSecurityModal() {
                   Discovered PAC profiles ({tenancy.environments.length}; {tenancy.environments.filter(environment=>environment.active).length} selected)
                 </div>
                 <button
+                  disabled={isSwitching||tenancy.authenticationBusy||login?.status==='pending'}
                   onClick={() => setShowLoginModal(true)}
                   style={{
                     background: '#0284c7',
@@ -498,7 +504,9 @@ export function DlpSecurityModal() {
                   <span>➕</span>
                   <span>Connect Tenancy / Environment</span>
                 </button>
+                <button onClick={refreshTenancy} disabled={resource.loading}>Refresh profiles</button>
               </div>
+              {tenancy.authenticationBusy&&<p role="status">A profile change or native authentication cleanup is still pending. New sign-ins and profile selection are held. Refresh profiles to check again.</p>}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {tenancy.environments.length > 0 ? (
@@ -536,7 +544,7 @@ export function DlpSecurityModal() {
                         <span style={{ fontSize: 11, color: '#cbd5e1' }}>{env.user}</span>
                         {!env.active && env.index !== undefined && (
                           <button
-                            disabled={isSwitching || login?.status === 'pending'}
+                            disabled={isSwitching || tenancy.authenticationBusy || login?.status === 'pending'}
                             onClick={() => void handleSelectEnv(env.index)}
                             style={{
                               background: '#1e293b',
@@ -638,7 +646,8 @@ export function DlpSecurityModal() {
                     </button>
                   </div>
 
-                  <p role="status" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{login?.message || resource.error || (tenancy.status === 'stale' ? 'Profile discovery failed; showing cached profiles.' : '')}</p>
+                  <p role="status" style={{ color:'#cbd5e1',whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{login?.message || resource.error || (tenancy.status === 'stale' ? 'Profile discovery failed; showing cached profiles.' : '')}</p>
+                  {login?.status==='completed'&&login.observation&&<p style={{color:'#cbd5e1',overflowWrap:'anywhere'}}>Confirmed account: {login.observation.username}<br/>Confirmed environment: {login.observation.environmentUrl}<br/>This verifies PAC identity; tenant policy, licences and deployment permissions require their own readiness checks.</p>}
                   <form onSubmit={handleExecuteLogin} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div>
                       <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>
@@ -655,7 +664,7 @@ export function DlpSecurityModal() {
 
                     <div>
                       <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>
-                        Environment URL or Name
+                        Environment URL
                       </label>
                       <input
                         type="text"

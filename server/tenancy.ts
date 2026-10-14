@@ -7,6 +7,7 @@ import { HttpError } from './httpError.ts';
 import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../shared/tenancy.ts';
 import {identityRoot} from './identityContracts.ts';
 import {currentEnvironment} from '../shared/tenancy.ts';
+import {parsePacIdentity} from './platformAuth.ts';
 export type { TenancyInfo, TenancyEnvironment } from '../shared/tenancy.ts';
 
 /** Resolve CLI shims to programs so values never pass through a shell. */
@@ -51,12 +52,12 @@ const realRunner: TenancyRunner = {
   start(args, output, ended) {
     const cmd = resolveTenancyCommand('pac');
     const child = spawn(cmd.file, [...cmd.args, ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let done = false;
+    let done = false,processError=false;
     const finish = (error?: string) => { if (!done) { done = true; ended(error); } };
     child.stdout.on('data', (data: Buffer) => output(data.toString()));
     child.stderr.on('data', (data: Buffer) => output(data.toString()));
-    child.once('error', () => finish('PAC could not start'));
-    child.once('close', (code) => finish(code === 0 ? undefined : 'PAC authentication failed'));
+    child.on('error', () => {processError=true;if(child.pid===undefined)finish('PAC could not start');else output('Error: PAC process error; waiting for confirmed native exit\n');});
+    child.once('close', (code) => finish(code === 0&&!processError ? undefined : 'PAC authentication failed'));
     return () => { child.kill(); };
   },
 };
@@ -102,11 +103,12 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
     environments: [{ index: 1, name: 'Demo sandbox', url: 'https://demo.example.com', user: 'manager@example.com', active: true }], isReal: false, status: 'demo' };
   const invalidate = () => { cache = null; checkedAt = 0; generation++; refreshing = null; };
   const assertOpen=()=>{if(closed)throw new HttpError(503,'Tenancy service is closed');};
-  const assertProfileIdle=()=>{if(selecting||[...jobs.values()].some(job=>job.value.status==='pending'))throw new HttpError(409,'An authentication profile change is already pending');};
+  const profileBusy=()=>selecting||[...jobs.values()].some(job=>job.value.status==='pending'||job.value.nativeCleanup==='awaiting-exit');
+  const assertProfileIdle=()=>{if(profileBusy())throw new HttpError(409,'An authentication profile change or native process cleanup is already pending');};
   const info = async (): Promise<TenancyInfo> => {
     if(closed)return disconnected();
     if (demo) return structuredClone(demoInfo);
-    if(selecting||[...jobs.values()].some(job=>job.value.status==='pending'))return cache?{...structuredClone(cache),status:'stale',isReal:false}:disconnected();
+    if(profileBusy())return cache?{...structuredClone(cache),status:'stale',isReal:false,authenticationBusy:true}:{...disconnected(),authenticationBusy:true};
     const age=Date.now()-checkedAt;
     if (cache && age>=0&&age < 20_000) return structuredClone(cache);
     if (!refreshing) {
@@ -151,13 +153,35 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
     },
     login(input) {
       assertOpen();assertProfileIdle();
+      input=structuredClone(input);
+      if(input.environmentUrl){try{identityRoot(input.environmentUrl);}catch{throw new HttpError(400,'Sign-in environment must be an HTTPS organization root');}}
       if ([...jobs.values()].some((job) => job.value.status === 'pending')) throw new HttpError(409, 'An authentication request is already pending');
       if (jobs.size >= 20) jobs.delete(jobs.keys().next().value!);
-      const value: TenancyLogin = { id: crypto.randomUUID(), status: demo ? 'completed' : 'pending', message: demo ? 'Demo authentication completed; no credentials changed' : 'Waiting for PAC authentication instructions', ok: demo };
+      const value: TenancyLogin = { id: crypto.randomUUID(), status: demo ? 'completed' : 'pending', ...(demo?{}:{phase:'authenticating' as const,nativeCleanup:'awaiting-exit' as const}),message: demo ? 'Demo authentication completed; no credentials changed' : 'Waiting for PAC authentication instructions', ok: demo };
       const job: { value: TenancyLogin; stop: () => void; timer?: NodeJS.Timeout } = { value, stop: () => {} };
       jobs.set(value.id, job);
       if (demo) return { ...value };
       invalidate();
+      const loginGeneration=generation;
+      const verificationActive=()=>!closed&&value.status==='pending'&&generation===loginGeneration;
+      const verifyCompletion=async()=>{
+        if(!verificationActive())return;
+        value.phase='verifying';value.message='Sign-in returned. Verifying the active PAC account and environment…';
+        try{
+          const discovered=parsePacProfiles(await runner.run('pac',['auth','list']));if(!verificationActive())return;
+          const expected=currentEnvironment(discovered);
+          if(!expected?.index||!expected.user||input.environmentUrl&&identityRoot(input.environmentUrl)!==identityRoot(expected.url))throw new Error('Active profile differs from sign-in target');
+          const identity=parsePacIdentity(await runner.run('pac',['org','who','--environment',identityRoot(expected.url)]));if(!verificationActive())return;
+          if(identity.environmentUrl!==identityRoot(expected.url)||identity.username.toLowerCase()!==expected.user.toLowerCase())throw new Error('Organization identity differs from active profile');
+          const confirmed=currentEnvironment(parsePacProfiles(await runner.run('pac',['auth','list'])));if(!verificationActive())return;
+          if(!confirmed||confirmed.index!==expected.index||confirmed.url!==expected.url||confirmed.user.toLowerCase()!==expected.user.toLowerCase())throw new Error('Active profile changed during confirmation');
+          clearTimeout(job.timer);value.observation={scope:'pac-profile-and-organization',checkedAt:new Date().toISOString(),profileIndex:expected.index,environmentUrl:identity.environmentUrl,organizationId:identity.organizationId,userId:identity.userId,username:identity.username,environmentId:identity.environmentId};
+          value.status='completed';value.ok=true;value.message='PAC account and environment verified. Tenant, licence, connector and deployment readiness checks still apply.';invalidate();
+        }catch{
+          if(!verificationActive())return;
+          clearTimeout(job.timer);value.status='failed';value.ok=false;value.message='Sign-in returned, but the PAC account and environment could not be verified. Refresh connected identity and resolve the mismatch or access failure before retrying.';
+        }
+      };
       const args = ['auth', 'create'];
       if (input.name) args.push('--name', input.name);
       if (input.environmentUrl) args.push('--environment', input.environmentUrl);
@@ -166,28 +190,31 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       else args.push('--applicationId', input.applicationId!, '--clientSecret', input.clientSecret!);
       const secret = input.clientSecret;
       const redact = (text: string) => secret ? text.replaceAll(secret, '[redacted]') : text;
-      let transcript = '';
+      let transcript = '',reportedFailure=false;
       try {
         job.stop = runner.start(args, (text) => {
-          if (value.status !== 'pending') return;
-          transcript = (transcript + text).slice(-12000);
+          if (value.status !== 'pending'||value.phase==='verifying') return;
+          const combined=transcript+text;
+          if(/^[ \t]*(?:Error:|AADSTS\d+\b)/im.test(combined))reportedFailure=true;
+          transcript = combined.slice(-12000);
           // Credential-based login does not need a transcript; no secret fragment reaches the browser.
           if (input.interactive !== false) value.message = redact(transcript).slice(-8000);
         }, (error) => {
-          if (value.status !== 'pending') return;
-          clearTimeout(job.timer); value.status = error ? 'failed' : 'completed'; value.ok = !error;
-          value.message = error ? (/53003|conditional access|blocked.*device.code/i.test(transcript) ? 'Conditional Access blocked this sign-in. Use interactive sign-in; ask your administrator to inspect the failed policy if it persists.' : 'PAC authentication failed. Check the profile and credentials.') : 'Authentication profile created successfully';
-          if (!error) invalidate();
+          value.nativeCleanup='exited';
+          if (value.status !== 'pending'||value.phase==='verifying') return;
+          if(!error&&!reportedFailure){void verifyCompletion();return;}
+          clearTimeout(job.timer);value.status='failed';value.ok=false;
+          value.message=/53003|conditional access|blocked.*device.code/i.test(transcript)?'Conditional Access blocked this sign-in. Use interactive sign-in; ask your administrator to inspect the failed policy if it persists.':'PAC authentication failed. Check the profile and credentials.';
         });
         if(closed||value.status==='cancelled'||value.status==='expired')job.stop();
         if (value.status === 'pending') {
           job.timer = setTimeout(() => { value.status = 'expired'; value.ok = false; value.message = 'Authentication expired. Start a new request.'; job.stop(); }, 10 * 60_000);
           job.timer.unref();
         }
-      } catch { if(value.status==='pending'){value.status = 'failed'; value.message = 'PAC could not start. Check the CLI installation.';} }
+      } catch { if(value.status==='pending'){value.nativeCleanup='exited';value.status = 'failed'; value.message = 'PAC could not start. Check the CLI installation.';} }
       return { ...value };
     },
-    loginStatus: (id) => ({ ...lookup(id).value }),
+    loginStatus: (id) => structuredClone(lookup(id).value),
     cancelLogin(id) {
       const job = lookup(id);
       if (job.value.status === 'pending') { job.value.status = 'cancelled'; job.value.message = 'Authentication cancelled'; clearTimeout(job.timer); job.stop(); }
