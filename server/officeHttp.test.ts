@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import type { Backend } from './backend.ts';
@@ -239,12 +240,14 @@ it('serves only current context-bound health evidence without altering the relea
   const {request,url,delivery}=await office(true),snapshot=delivery.view(),run=snapshot.runs[0];run.head='a'.repeat(40);run.releaseId='synthetic-release';run.health={status:'degraded',nextCheckAt:new Date().toISOString(),governanceEvidence:'health/governance-0-health.json'};
   vi.spyOn(delivery,'view').mockImplementation(()=>structuredClone(snapshot));
   const root=path.join(HOME_DIR,'delivery-runs',run.id,'health');await fs.mkdir(root,{recursive:true});
-  const policy=`advanced-policy-${'b'.repeat(64)}.json`,schema=`declared-schema-${'c'.repeat(64)}.json`;
+  const policyContent=JSON.stringify({scope:'environment-rule-assignment-inventory',complete:false,complianceVerified:false,accountScope:'azure-cli-profile',status:'unavailable',tenantId:'11111111-1111-4111-8111-111111111111',caller:'tester@company.test',environmentId:'11111111-1111-4111-8111-111111111111',checkedAt:new Date().toISOString(),reason:'Synthetic policy unavailable',assignments:[],policies:[]});
+  const policy=`advanced-policy-${crypto.createHash('sha256').update(policyContent).digest('hex')}.json`,schema=`declared-schema-${'c'.repeat(64)}.json`;
   const decision={...unavailableGovernance({phase:'health',sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId:run.releaseId,checkout:'synthetic',manifest:{}}),advancedPolicyFile:policy,declaredSchemaFile:schema};
-  await fs.writeFile(path.join(root,'governance-0-health.json'),JSON.stringify(decision));await fs.writeFile(path.join(root,policy),'partial policy bytes');await fs.writeFile(path.join(root,schema),'partial schema bytes');
+  await fs.writeFile(path.join(root,'governance-0-health.json'),JSON.stringify(decision));await fs.writeFile(path.join(root,policy),policyContent);await fs.writeFile(path.join(root,schema),'partial schema bytes');
   expect((await fetch(url+'/api/delivery/runs/synthetic-run/health-evidence')).status).toBe(401);
   const response=await request('/api/delivery/runs/synthetic-run/health-evidence');expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('no-store');expect(await response.json()).toMatchObject({status:'unavailable',files:[{file:'governance-0-health.json',kind:'decision'},{file:schema,kind:'schema'},{file:policy,kind:'advanced-policy'}]});
-  const download=await request(`/api/delivery/runs/synthetic-run/health-evidence?file=${policy}`);expect(download.status).toBe(200);expect(await download.text()).toBe('partial policy bytes');expect(download.headers.get('content-disposition')).toContain('attachment');
+  const download=await request(`/api/delivery/runs/synthetic-run/health-evidence?file=${policy}`);expect(download.status).toBe(200);expect(await download.text()).toBe(policyContent);expect(download.headers.get('content-disposition')).toContain('attachment');
+  await fs.writeFile(path.join(root,policy),'tampered private output');expect((await request(`/api/delivery/runs/synthetic-run/health-evidence?file=${policy}`)).status).toBe(404);await fs.writeFile(path.join(root,policy),policyContent);
   for(const file of ['../proof.txt','unregistered.json','governance-1-health.json'])expect((await request(`/api/delivery/runs/synthetic-run/health-evidence?file=${encodeURIComponent(file)}`)).status).toBe(404);
   expect((await request('/api/delivery/runs/synthetic-run/health-evidence?extra=1')).status).toBe(400);
   expect(snapshot.runs[0].evidence).toEqual(['proof.txt']);expect((await request('/api/delivery/runs/synthetic-run/evidence?file=proof.txt')).status).toBe(200);

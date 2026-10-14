@@ -42,6 +42,7 @@ it.each(['tenant','caller','environment','requested','stale','future'])('rejects
 it.each(['build','test','import','post-deploy','verify','health'] as const)('blocks a package-derived action conflict before %s without converting matched constraints into permission',async phase=>{
   const input=await packaged(),value=connectorConstraints(false),check=createDeliveryGovernance({observation:()=>observation()},undefined,async()=>value);
   const result=await check({...input,phase});expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('SendEmailV2');expect(result.reasons.join(' ')).toContain('outside observed policy');expect(result.advancedPolicyFile).toBeDefined();expect(result.artifactSha256).toBe(input.packageSha256);
+  expect(result.packageInventorySha256).toBe(crypto.createHash('sha256').update(await fs.readFile(path.join(input.evidenceDirectory!,result.packageInventoryFile!))).digest('hex'));
   const matched=await createDeliveryGovernance({observation:()=>observation()},undefined,async()=>connectorConstraints(true))({...input,phase});expect(matched.status).toBe('unavailable');expect(matched.schemaSha256).toBeUndefined();
 });
 it('retains a known advanced constraint denial when classic policy discovery fails and rejects changed package digests',async()=>{

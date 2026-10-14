@@ -14,11 +14,16 @@ const resultSchema=z.object({status:z.enum(['clear','blocked','unavailable']),ph
   environmentUrl:z.url(),releaseId:z.string().min(1),manifestSha256:digest,checkedAt:z.iso.datetime(),
   artifactSha256:digest.optional(),policySha256:digest.optional(),schemaSha256:digest.optional(),
   packageInventoryFile:z.string().regex(/^package-inventory-[a-f0-9]{64}\.json$/).optional(),
+  packageInventorySha256:digest.optional(),
   declaredSchemaFile:z.string().regex(/^declared-schema-[a-f0-9]{64}\.json$/).optional(),
   advancedPolicyFile:z.string().regex(/^advanced-policy-[a-f0-9]{64}\.json$/).optional(),
   connectorCatalogueFile:z.string().regex(/^connector-catalogue-[a-f0-9]{64}\.json$/).optional(),
   reasons:z.array(z.string().min(1).max(1000)).min(1).max(30),
-}).strict().superRefine((result,ctx)=>{if(result.status==='clear'&&(!result.artifactSha256||!result.policySha256||!result.schemaSha256))ctx.addIssue({code:'custom',message:'Clear governance requires complete artifact, policy and schema evidence'});});
+}).strict().superRefine((result,ctx)=>{
+  if(result.status==='clear'&&(!result.artifactSha256||!result.policySha256||!result.schemaSha256))ctx.addIssue({code:'custom',message:'Clear governance requires complete artifact, policy and schema evidence'});
+  if(result.packageInventorySha256&&!result.packageInventoryFile||result.packageInventoryFile&&result.artifactSha256&&result.packageInventoryFile!==`package-inventory-${result.artifactSha256}.json`)ctx.addIssue({code:'custom',message:'Package inventory digest and pointer must match the recorded artifact'});
+  if(result.status==='clear'&&result.packageInventoryFile&&!result.packageInventorySha256)ctx.addIssue({code:'custom',message:'Clear governance requires a content digest for its package inventory'});
+});
 export type LifecycleResult=z.infer<typeof resultSchema>;
 export const lifecycleResultSchema=resultSchema;
 export type LifecycleCheck=(request:LifecycleRequest)=>Promise<LifecycleResult>;

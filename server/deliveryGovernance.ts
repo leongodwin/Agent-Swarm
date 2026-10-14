@@ -20,14 +20,15 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
   return async request=>{
     const manifest=deliveryManifest.parse(request.manifest);
     let packageInventoryFile:string|undefined;
+    let packageInventorySha256:string|undefined;
     let resources:{id:string;complete:true;connectors:string[]}[]|undefined;
     let packageIssues:string[]=[];
     let resourceSchemaReferences:LifecycleRequest['resourceSchemaReferences'];
     let advancedResources:PackageResource[]|undefined;
     if(request.packageSha256) {
       const inventory=await inspectSolutionPackage(await containedFile(request.checkout,manifest.solutionZip),request.signal);
-      if(request.evidenceDirectory){packageInventoryFile=`package-inventory-${inventory.packageSha256||request.packageSha256}.json`;await atomicWrite(path.join(request.evidenceDirectory,packageInventoryFile),JSON.stringify(inventory,null,2));}
-      const base={...unavailableGovernance(request),artifactSha256:inventory.packageSha256||request.packageSha256,packageInventoryFile};
+      if(request.evidenceDirectory){const content=JSON.stringify(inventory,null,2);packageInventoryFile=`package-inventory-${inventory.packageSha256||request.packageSha256}.json`;await atomicWrite(path.join(request.evidenceDirectory,packageInventoryFile),content);packageInventorySha256=crypto.createHash('sha256').update(content).digest('hex');}
+      const base={...unavailableGovernance(request),artifactSha256:inventory.packageSha256||request.packageSha256,packageInventoryFile,packageInventorySha256};
       if(!inventory.archiveComplete||inventory.packageSha256!==request.packageSha256)return {...base,reasons:['Package integrity or the independently bound package digest could not be verified']};
       if(inventory.solution?.name!==manifest.solutionUniqueName||inventory.solution.version!==manifest.solutionVersion)return {...base,status:'blocked',reasons:['Actual package solution identity/version differs from the approved manifest']};
       for(const component of inventory.components.filter(component=>[1,29,300].includes(component.type))) {
@@ -44,7 +45,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
       if(!resources.length)return {...base,reasons:['No fully inspectable app/flow resource connector inventory is available',...packageIssues]};
       for(const reference of inventory.connections)if(!manifest.postDeployActions.some(action=>action.type==='connection-reference-check'&&manifest.targetComponents.some(component=>component.key===action.component&&component.logicalName.toLowerCase()===reference.name)&&action.connectorId.replace(/^\/providers\/Microsoft.PowerApps\/apis\//i,'').toLowerCase()===reference.connector))return {...base,status:'blocked',reasons:[`Package connection reference ${reference.name} lacks its exact approved connector/binding declaration`]};
     }
-    const unavailable=(reasons:string[])=>({...unavailableGovernance(request,reasons),artifactSha256:request.packageSha256,packageInventoryFile});
+    const unavailable=(reasons:string[])=>({...unavailableGovernance(request,reasons),artifactSha256:request.packageSha256,packageInventoryFile,packageInventorySha256});
     if(!manifest.platformIdentity)return unavailable(['The release lacks a pinned platform identity for tenant policy and schema governance']);
     const platformIdentity=manifest.platformIdentity;
     const identity={tenantId:platformIdentity.tenantId,caller:platformIdentity.username};
@@ -84,6 +85,6 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     if(!(resources??declared).length)return {...unavailable(['No independently complete app/flow connector inventory is available; advanced policy and comprehensive schema evidence are also required',schemaReason,advancedReason,catalogueReason]),declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
     const standard=evaluateStandardPolicies(snapshot,identity,manifest.platformIdentity.environmentId,resources??declared);
     const reasons=standard.status==='clear'?[resources?'Inspectable package resources passed standard classification; advanced policies, remaining opaque resources and comprehensive schemas are unverified':'Declared reference IDs passed standard classification; full package resource inventory, advanced policies and comprehensive schemas remain unverified']:standard.reasons.slice(0,20).map(reason=>reason.slice(0,1000));
-    return {...unavailableGovernance(request,[...[...advancedReasons,...reasons,...packageIssues].slice(0,27),schemaReason,advancedReason,catalogueReason]),status:advancedConflict||standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
+    return {...unavailableGovernance(request,[...[...advancedReasons,...reasons,...packageIssues].slice(0,27),schemaReason,advancedReason,catalogueReason]),status:advancedConflict||standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,packageInventorySha256,declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
   };
 }
