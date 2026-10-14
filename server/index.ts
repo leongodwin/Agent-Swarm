@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
+import {MAX_OFFICE_WS_PAYLOAD} from './webSocketLimits.ts';
 import { DEMO, PORT, STATE_FILE, WORKSPACE_ROOT } from './config.ts';
 import { realBackend } from './backend.ts';
 import { setOfficeUrl,runtimeCleanupView,onRuntimeCleanupChanged } from './cliRunner.ts';
@@ -169,8 +170,8 @@ deliveryTimer.unref();
 
 const server = http.createServer(app);
 // Two sockets: /ws carries the office's state to every tab, /ws/term?agent=<id> one agent's terminal to whoever opened it.
-const wss = new WebSocketServer({ noServer: true });
-const terms = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true,maxPayload:MAX_OFFICE_WS_PAYLOAD });
+const terms = new WebSocketServer({ noServer: true,maxPayload:MAX_OFFICE_WS_PAYLOAD });
 wss.on('connection', (ws) => swarm.addClient(ws));
 terms.on('connection', (ws, req) => swarm.attachTerminal(new URL(req.url ?? '', 'http://localhost').searchParams.get('agent') ?? '', ws));
 server.on('upgrade', (req, socket, head) => {

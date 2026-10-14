@@ -115,6 +115,16 @@ it('temporarily blocks a reader while a live writer has not published its record
   fs.writeFileSync(file,JSON.stringify({schemaVersion:1,records:[record]}));fs.unlinkSync(file+'.lock');
   expect(store.view()).toEqual({records:[{...record,state:'unverified'}]});
 });
+it('reports a safe diagnostic code for a transient reader failure without permanently quarantining it',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file),open=fs.openSync;
+  const spy=vi.spyOn(fs,'openSync').mockImplementation((...args)=>{
+    if(String(args[0]).endsWith('.queue-lock')&&args[1]==='wx')throw Object.assign(new Error('private file details'),{code:'EACCES'});
+    return open(...args);
+  });
+  try{const view=store.view();expect(view).toMatchObject({failureCode:'io',failureSystemCode:'EACCES'});expect(JSON.stringify(view)).not.toContain('private');}
+  finally{spy.mockRestore();}
+  expect(store.view()).toEqual({records:[]});
+});
 it('does not let new callers overtake a live queued writer or remove its ticket on timeout',()=>{
   const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
   const ticket={pid:process.pid,token:'11111111-1111-4111-8111-111111111111',sequence:0};const name=path.join(queue,ticket.token+'.json');fs.writeFileSync(name,JSON.stringify(ticket));

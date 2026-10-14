@@ -64,14 +64,15 @@ export class RuntimeCleanupStore {
     catch(error){this.failureSystemCode=systemCode(error);this.failureCode='evidence';this.unavailableReason='Runtime cleanup evidence is unreadable or changed identity; capacity is quarantined';}
   }
   view():CleanupView{
-    let busy:string|undefined,busyCode:CleanupView['failureCode'];
+    let busy:string|undefined,busyCode:CleanupView['failureCode'],busySystemCode:string|undefined;
     // Serialize readers too: a writer may be about to publish a new quarantine.
     if(!this.unavailableReason){
       try{const release=this.acquire();try{this.refresh();}finally{release();}}
-      catch(error){const code=(error as {code?:unknown}).code;busyCode=code==='CLEANUP_BUSY'?'contention':code==='CLEANUP_EVIDENCE'?'evidence':'io';busy='Runtime cleanup writer is unavailable; capacity is quarantined';}
+      catch(error){const code=(error as {code?:unknown}).code;busySystemCode=systemCode(error);busyCode=code==='CLEANUP_BUSY'?'contention':code==='CLEANUP_EVIDENCE'?'evidence':'io';busy='Runtime cleanup writer is unavailable; capacity is quarantined';}
     }
     const reason=this.unavailableReason??busy;
-    return {records:[...this.records.values()].map(row=>({...row})),...(reason?{unavailableReason:reason,failureCode:this.failureCode??busyCode,...(this.failureSystemCode?{failureSystemCode:this.failureSystemCode}:{})}:{})};
+    const failureSystemCode=this.failureSystemCode??busySystemCode;
+    return {records:[...this.records.values()].map(row=>({...row})),...(reason?{unavailableReason:reason,failureCode:this.failureCode??busyCode,...(failureSystemCode?{failureSystemCode}:{})}:{})};
   }
   private exclusive(file:string,deadline:number):()=>void{
     const guard=file+'.reaping',owner={pid:process.pid,token:crypto.randomUUID()};

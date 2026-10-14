@@ -17,6 +17,7 @@ export const TERM_ROWS = 32;
 const SCROLLBACK = 5000;
 /** A viewer this far behind stops getting output and is sent a fresh snapshot once it catches up. */
 const STALE_BYTES = 4 * 1024 * 1024;
+interface Viewer { stale:boolean; queued:string[]|null; queuedBytes:number; synchronizing:boolean }
 /** The mouse encodings (SGR, SGR pixels) the serialize addon doesn't restore on its own. */
 const MOUSE_ENCODINGS = [1006, 1016];
 
@@ -44,7 +45,7 @@ export class AgentTerminal {
   onInput: ((data: string) => void) | null = null;
   private term = new Terminal({ cols: TERM_COLS, rows: TERM_ROWS, scrollback: SCROLLBACK, allowProposedApi: true, scrollOnEraseInDisplay: true });
   private ser = new SerializeAddon();
-  private viewers = new Map<WebSocket, { stale: boolean; queued: string[] | null }>();
+  private viewers = new Map<WebSocket,Viewer>();
   private sink: TerminalSink | null = null;
   private mouseEncoding: number | null = null;
   private resync: NodeJS.Timeout | null = null;
@@ -142,15 +143,24 @@ export class AgentTerminal {
   attach(ws: WebSocket) {
     // xterm parses writes asynchronously: snapshot once everything written so far is parsed, and hold back what
     // arrives meanwhile so it follows the snapshot instead of going missing.
-    const viewer = { stale: false, queued: [] as string[] | null };
+    if(this.viewers.has(ws)||ws.readyState!==ws.OPEN)return;
+    const viewer:Viewer = { stale: false, queued: [],queuedBytes:0,synchronizing:false };
     this.viewers.set(ws, viewer);
     this.term.write('', () => {
+      if(this.viewers.get(ws)!==viewer)return;
       const queued = viewer.queued ?? [];
       viewer.queued = null;
+      viewer.queuedBytes=0;
+      if(viewer.stale||ws.bufferedAmount>STALE_BYTES){viewer.stale=true;this.scheduleResync();return;}
       this.sendTo(ws, { t: 'snapshot', data: this.snapshot(), cols: this.cols, rows: this.rows, live: this.live });
-      for (const json of queued) if (ws.readyState === ws.OPEN) ws.send(json);
+      for (const json of queued) {
+        if(this.viewers.get(ws)!==viewer)return;
+        if(viewer.stale||ws.bufferedAmount>STALE_BYTES){viewer.stale=true;this.scheduleResync();return;}
+        this.sendJson(ws,json);
+      }
     });
     ws.on('message', (raw) => {
+      if(this.viewers.get(ws)!==viewer)return;
       let msg: TermClientMessage;
       try {
         msg = JSON.parse(String(raw)) as TermClientMessage;
@@ -168,10 +178,11 @@ export class AgentTerminal {
       }
     });
     ws.on('close', () => this.viewers.delete(ws));
+    ws.on('error',()=>this.dropViewer(ws));
   }
 
   dispose() {
-    for (const ws of this.viewers.keys()) ws.close();
+    for (const ws of [...this.viewers.keys()])this.dropViewer(ws);
     this.viewers.clear();
     if (this.resync) clearTimeout(this.resync);
     this.sink = null;
@@ -181,10 +192,12 @@ export class AgentTerminal {
   private send(msg: TermServerMessage) {
     if (this.viewers.size === 0) return;
     const json = JSON.stringify(msg);
+    const bytes=Buffer.byteLength(json);
     for (const [ws, v] of this.viewers) {
       if (ws.readyState !== ws.OPEN || v.stale) continue;
       if (v.queued) {
-        v.queued.push(json);
+        if(v.queuedBytes+bytes>STALE_BYTES){v.queued=null;v.queuedBytes=0;v.stale=true;this.scheduleResync();}
+        else{v.queued.push(json);v.queuedBytes+=bytes;}
         continue;
       }
       if (ws.bufferedAmount > STALE_BYTES) {
@@ -192,12 +205,23 @@ export class AgentTerminal {
         this.scheduleResync();
         continue;
       }
-      ws.send(json);
+      if(bytes>STALE_BYTES){v.stale=true;this.scheduleResync();continue;}
+      this.sendJson(ws,json);
     }
   }
 
   private sendTo(ws: WebSocket, msg: TermServerMessage) {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
+    this.sendJson(ws,JSON.stringify(msg));
+  }
+
+  private sendJson(ws:WebSocket,json:string){
+    if(!this.viewers.has(ws)||ws.readyState!==ws.OPEN)return;
+    try{ws.send(json,error=>{if(error)this.dropViewer(ws);});}catch{this.dropViewer(ws);}
+  }
+
+  private dropViewer(ws:WebSocket){
+    this.viewers.delete(ws);
+    try{ws.close();}catch{/* A failed transport must not interrupt terminal output or disposal. */}
   }
 
   /** Viewers that fell behind get a fresh snapshot once their socket has drained, instead of an ever-growing backlog. */
@@ -208,12 +232,21 @@ export class AgentTerminal {
       let waiting = false;
       for (const [ws, v] of this.viewers) {
         if (!v.stale) continue;
+        if(ws.readyState!==ws.OPEN){this.viewers.delete(ws);continue;}
         if (ws.bufferedAmount > STALE_BYTES / 4) {
           waiting = true;
           continue;
         }
-        v.stale = false;
-        this.sendTo(ws, { t: 'snapshot', data: this.snapshot(), cols: this.cols, rows: this.rows, live: this.live });
+        if(v.synchronizing)continue;
+        v.synchronizing=true;
+        // Keep it stale while xterm drains: no discarded output is replayed after the snapshot.
+        this.term.write('',()=>{
+          v.synchronizing=false;
+          if(this.viewers.get(ws)!==v||!v.stale)return;
+          if(ws.bufferedAmount>STALE_BYTES/4){this.scheduleResync();return;}
+          v.stale=false;
+          this.sendTo(ws, { t: 'snapshot', data: this.snapshot(), cols: this.cols, rows: this.rows, live: this.live });
+        });
       }
       if (waiting) this.scheduleResync();
     }, 1000);
