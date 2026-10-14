@@ -45,17 +45,34 @@ export async function verifyColumns(columns:ColumnContract[],table:string,attrib
   const rows=attributes.map(value=>baseAttribute.parse(value));if(rows.length>=5000||new Set(rows.map(row=>row.LogicalName)).size!==rows.length)throw new Error('Schema inventory is truncated or ambiguous');
   const metadataIds=rows.flatMap(row=>row.MetadataId?[row.MetadataId.toLowerCase()]:[]);
   if(new Set(metadataIds).size!==metadataIds.length)throw new Error('Schema metadata IDs are ambiguous');
+  const groups=new Map<string,{column:ColumnContract;current:z.infer<typeof baseAttribute>}[]>();
   for(const column of columns) {
     const current=rows.find(row=>row.LogicalName===column.name);if(!current){if(migration)continue;throw new Error(`Missing declared column ${column.name}`);}
     compareColumn({...column,constraints:undefined},current,migration);
     if(column.constraints&&Object.keys(column.constraints).length){
       if(!current.MetadataId)throw new Error('Typed schema lookup requires a metadata ID');
-      const suffix=column.type==='Uniqueidentifier'?'UniqueIdentifier':column.type;
-      const cast=`Microsoft.Dynamics.CRM.${suffix}AttributeMetadata`;
-      const select=common+(fields[column.type]?','+fields[column.type]:'');
-      const detailed=baseAttribute.parse(await request('GET',`EntityDefinitions(LogicalName='${table}')/Attributes(${current.MetadataId})/${cast}?$select=${select}${column.constraints.options?'&$expand=OptionSet':''}`));
-      if(detailed.MetadataId?.toLowerCase()!==current.MetadataId.toLowerCase())throw new Error('Typed schema response changed identity');
-      compareColumn(column,detailed,migration);
+      const group=groups.get(column.type)??[];group.push({column,current});groups.set(column.type,group);
+    }
+  }
+  // Bounded typed collections reduce native CLI starts without caching across checks.
+  // Never fall back to individual reads after an incomplete or inconsistent collection.
+  for(const [type,group] of groups){
+    const suffix=type==='Uniqueidentifier'?'UniqueIdentifier':type,cast=`Microsoft.Dynamics.CRM.${suffix}AttributeMetadata`;
+    const select=common+(fields[type]?','+fields[type]:'');
+    for(let offset=0;offset<group.length;offset+=20){
+      const chunk=group.slice(offset,offset+20),expand=chunk.some(({column})=>column.constraints?.options)?'&$expand=OptionSet($select=Options)':'';
+      const root=`EntityDefinitions(LogicalName='${table}')/Attributes`;
+      const resource=chunk.length===1?`${root}(${chunk[0].current.MetadataId})/${cast}?$select=${select}${expand}`:
+        `${root}/${cast}?$select=${select}&$filter=${encodeURIComponent(chunk.map(({current})=>`MetadataId eq ${current.MetadataId}`).join(' or '))}${expand}`;
+      if(resource.length>4000)throw new Error('Typed schema request exceeded its bound');
+      const output=await request('GET',resource);
+      const detailed=chunk.length===1?[baseAttribute.parse(output)]:z.object({value:z.array(baseAttribute).length(chunk.length),'@odata.nextLink':z.never().optional()}).parse(output).value;
+      if(new Set(detailed.map(row=>row.LogicalName)).size!==chunk.length||new Set(detailed.map(row=>row.MetadataId?.toLowerCase())).size!==chunk.length)throw new Error('Typed schema inventory is ambiguous');
+      for(const {column,current} of chunk){
+        const observed=detailed.find(row=>row.LogicalName===column.name);
+        if(!observed||observed.MetadataId?.toLowerCase()!==current.MetadataId!.toLowerCase())throw new Error('Typed schema response changed identity');
+        compareColumn(column,observed,migration);
+      }
     }
   }
 }
