@@ -34,7 +34,7 @@ afterEach(async () => {
 afterAll(async () => fs.rm(HOME_DIR, { recursive: true, force: true }));
 const tenantId='11111111-1111-4111-8111-111111111111';
 const environment='https://synthetic.crm4.dynamics.com';
-async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload'],interruptedDelivery=false) {
+async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload'],interruptedDelivery:boolean|'ambiguous-history'=false) {
   await fs.writeFile(STATE_FILE, JSON.stringify({ version: 2, settings: { runtime: 'sdk', ceoHeartbeatMin: 0, autoUpdate: false },
     repos: [{ id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,color:'#000',description:'',url:'',autoAssign:false,autoMerge:false,browserTesting:false,addedAt:1 }] }));
   const tenancy = {status:'connected', user:'synthetic@example.com', environments:[{name:'Synthetic',url:environment,active:true}], isReal:true};
@@ -57,8 +57,8 @@ async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliab
     const root=path.join(HOME_DIR,'delivery-runs','synthetic-run','evidence');await fs.mkdir(root,{recursive:true});await fs.writeFile(path.join(root,'proof.txt'),'synthetic evidence bytes');
     await fs.writeFile(path.join(HOME_DIR,'delivery.json'),JSON.stringify({policy:null,releases:[],blockers:[],revision:0,runs:[{id:'synthetic-run',repoId:'synthetic/repo',head:'synthetic-commit',environmentUrl:environment,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:['proof.txt'],log:[]}]}));
   }
-  if(interruptedDelivery){await fs.writeFile(path.join(HOME_DIR,'delivery.lock'),JSON.stringify({schemaVersion:1,pid:2147483647,token:crypto.randomUUID(),acquiredAt:new Date().toISOString()}));await fs.writeFile(path.join(HOME_DIR,'delivery.json'),JSON.stringify({schemaVersion:1,policy:null,runs:[],releases:[],blockers:[],revision:0}));}
-  const delivery=new DeliveryService(HOME_DIR,false);await delivery.init({allowUnavailable:interruptedDelivery});cleanup.push(()=>delivery.close());
+  if(interruptedDelivery){await fs.writeFile(path.join(HOME_DIR,'delivery.lock'),JSON.stringify({schemaVersion:1,pid:2147483647,token:crypto.randomUUID(),acquiredAt:new Date().toISOString()}));const history=JSON.stringify({schemaVersion:1,policy:null,runs:[],releases:[],blockers:[],revision:0});await fs.writeFile(path.join(HOME_DIR,'delivery.json'),interruptedDelivery==='ambiguous-history'?`{"runs":[{"unknown":"private-cloud-operation"}],${history.slice(1)}`:history);}
+  const delivery=new DeliveryService(HOME_DIR,false);await delivery.init({allowUnavailable:!!interruptedDelivery});cleanup.push(()=>delivery.close());
   if(maintenance.draining)delivery.setDraining(true);
   const toolGovernance=new ToolGovernanceService(path.join(HOME_DIR,'governance'),()=>true);await toolGovernance.init();
   const reader=vi.fn<StartPolicyReader>(()=>({pid:123,refresh(){},stop(){}}));
@@ -333,6 +333,13 @@ it('keeps authenticated workspace diagnostics open while interrupted delivery an
   expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:'a'.repeat(64)})).status).toBe(409);
   expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:recovery.snapshotSha256})).status).toBe(200);
   expect(f.delivery.available).toBe(true);expect(f.delivery.isDraining).toBe(true);expect(f.swarm.isDraining).toBe(true);expect(f.external.startSession).not.toHaveBeenCalled();
+});
+it('keeps ambiguous recovery history unavailable through authenticated HTTP without archiving it',async()=>{
+ const f=await office(false,undefined,undefined,undefined,'ambiguous-history'),file=path.join(HOME_DIR,'delivery.json'),marker=path.join(HOME_DIR,'delivery.lock'),before=await fs.readFile(file),owner=await fs.readFile(marker);
+ expect((await f.request('/api/state')).status).toBe(200);expect(await (await f.request('/api/delivery')).json()).toMatchObject({availability:'unavailable',policy:null,running:false});
+ const response=await f.request('/api/delivery/recovery'),view=await response.json();expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('no-store');expect(view).toMatchObject({history:'invalid',canRecover:false});expect(view.snapshotSha256).toBeUndefined();expect(JSON.stringify(view)).not.toContain('private-cloud-operation');
+ await f.request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});const forged=crypto.createHash('sha256').update(owner).update('\0').update(before).digest('hex');
+ expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:forged})).status).toBe(409);expect(f.delivery.available).toBe(false);expect(await fs.readFile(file)).toEqual(before);expect(await fs.readFile(marker)).toEqual(owner);expect(await fs.stat(path.join(HOME_DIR,'delivery-recovery')).catch(()=>undefined)).toBeUndefined();expect(f.external.startSession).not.toHaveBeenCalled();
 });
 it.each(['authentication','native-exit','profile-command','profile-selection'] as const)('blocks reload and handoff while %s work remains tracked',async mode=>{
   const handoff=vi.fn(),prepare=vi.fn(async()=>({operationId:'11111111-1111-4111-8111-111111111111',commit:vi.fn(async()=>'accepted' as const),cancel:vi.fn()}));const f=await office(false,handoff,undefined,{prepare,view:()=>({supported:true,phase:'idle'})});await f.request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});

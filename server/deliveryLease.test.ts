@@ -29,6 +29,11 @@ it('refuses to release a different generation and preserves its marker',async()=
   await expect(lease.assertOwned()).rejects.toThrow('ownership lost');await expect(lease.release()).rejects.toThrow('ownership lost');
   expect(await fs.readFile(file,'utf8')).toBe(raw);expect(await fs.stat(`${file}.reaping`).then(()=>true,()=>false)).toBe(false);
 });
+it.each(['pid','token','escaped-token'] as const)('preserves an ambiguous %s successor on assert and release',async field=>{
+ const home=await root(),file=path.join(home,'delivery.lock'),lease=await acquireDeliveryLease(home),original=await fs.readFile(file,'utf8');
+ const raw=field==='pid'?`{"pid":2147483647,${original.slice(1)}`:`{"${field==='token'?'token':'\\u0074oken'}":"private-successor-token",${original.slice(1)}`;await fs.writeFile(file,raw);
+ await expect(lease.assertOwned()).rejects.toThrow('missing or invalid');await expect(lease.release()).rejects.toThrow('missing or invalid');expect(await fs.readFile(file,'utf8')).toBe(raw);expect(await fs.stat(`${file}.reaping`).catch(()=>undefined)).toBeUndefined();
+});
 it('does not clear an existing release/recovery guard',async()=>{
   const home=await root(),file=path.join(home,'delivery.lock');const lease=await acquireDeliveryLease(home);const raw=await fs.readFile(file,'utf8');await fs.mkdir(`${file}.reaping`);
   await expect(lease.release()).rejects.toThrow('already in progress');expect(await fs.readFile(file,'utf8')).toBe(raw);expect((await fs.stat(`${file}.reaping`)).isDirectory()).toBe(true);

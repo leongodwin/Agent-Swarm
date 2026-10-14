@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {z} from 'zod';
 import {readBoundedBytes} from './boundedJson.ts';
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 import {validateDeliveryState} from './deliveryState.ts';
 import {HttpError} from './httpError.ts';
 import type {DeliveryRecoveryInspection} from '../shared/deliveryRecovery.ts';
@@ -12,8 +13,8 @@ async function regularBytes(file:string,max:number){const stat=await fs.lstat(fi
 async function inspect(root:string):Promise<{view:DeliveryRecoveryInspection;leaseBytes?:Buffer;stateBytes?:Buffer}>{
   const view:DeliveryRecoveryInspection={scope:'local-delivery-startup',observedAt:new Date().toISOString(),owner:'invalid',history:'invalid',canRecover:false,reason:'Delivery ownership or history is unreadable. Preserve the files and investigate.'};
   let leaseBytes:Buffer|undefined,stateBytes:Buffer|undefined;
-  try{leaseBytes=await regularBytes(path.join(root,'delivery.lock'),16384);if(!leaseBytes)view.owner='missing';else{const lease=leaseSchema.parse(JSON.parse(leaseBytes.toString('utf8')));view.owner=absent(lease.pid)?'absent':'live-or-unverifiable';}}catch{/* No raw data or ownership token leaves inspection. */}
-  try{stateBytes=await regularBytes(path.join(root,'delivery.json'),16*1024*1024);if(!stateBytes)view.history='missing';else{const state=validateDeliveryState(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(stateBytes)));view.history=!state.runs.length&&!state.releases.length&&!state.blockers.length&&!state.attemptHistory?.attempts.length?'empty':'retained';}}catch{/* Invalid history can never authorize recovery. */}
+  try{leaseBytes=await regularBytes(path.join(root,'delivery.lock'),16384);if(!leaseBytes)view.owner='missing';else{const lease=leaseSchema.parse(parseUnambiguousJson(new TextDecoder('utf-8',{fatal:true}).decode(leaseBytes),{maxBytes:16384}));view.owner=absent(lease.pid)?'absent':'live-or-unverifiable';}}catch{/* No raw data or ownership token leaves inspection. */}
+  try{stateBytes=await regularBytes(path.join(root,'delivery.json'),16*1024*1024);if(!stateBytes)view.history='missing';else{const state=validateDeliveryState(parseUnambiguousJson(new TextDecoder('utf-8',{fatal:true}).decode(stateBytes),{maxBytes:16*1024*1024}));view.history=!state.runs.length&&!state.releases.length&&!state.blockers.length&&!state.attemptHistory?.attempts.length?'empty':'retained';}}catch{/* Invalid history can never authorize recovery. */}
   if(view.owner==='absent'&&view.history==='empty'&&leaseBytes&&stateBytes){view.canRecover=true;view.snapshotSha256=crypto.createHash('sha256').update(leaseBytes).update('\0').update(stateBytes).digest('hex');view.reason='The recorded process is absent and validated local delivery history is empty. Recovering preserves the interrupted marker and starts delivery in maintenance mode.';}
   else if(view.owner==='live-or-unverifiable')view.reason='Another process may own delivery. Inspect its process identity; takeover is disabled.';
   else if(view.history==='retained')view.reason='Retained delivery history requires independent reconciliation of outstanding cloud operations. No automatic lock removal is allowed.';

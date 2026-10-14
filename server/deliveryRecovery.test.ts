@@ -14,6 +14,20 @@ it('preserves an interrupted marker and validated empty history without dispatch
   const audit=JSON.parse(await fs.readFile(path.join(root,'delivery-recovery',files.find(file=>!file.endsWith('.lock.json'))!),'utf8'));expect(audit.remoteOutcomeVerified).toBe(false);
   const next=await acquireDeliveryLease(root);await next.release();
 });
+it.each(['pid','token','runs','escaped-runs','releases','blockers','attempts'] as const)('refuses ambiguous recovery %s evidence even when the final value looks recoverable',async field=>{
+ const {root,lease,state}=await fixture(),prior=await inspectDeliveryRecovery(root);
+ let marker=lease,history=state;
+ if(field==='pid')marker=`{"pid":${process.pid},${lease.slice(1)}`;
+ else if(field==='token')marker=`{"token":"private-owner-token",${lease.slice(1)}`;
+ else if(field==='attempts')history=state.replace('"attempts":[]','"attempts":[{"unknown":"private-cloud-operation"}],"attempts":[]');
+ else history=`{"${field==='escaped-runs'?'\\u0072uns':field}":[{"unknown":"private-cloud-operation"}],${state.slice(1)}`;
+ await fs.writeFile(path.join(root,'delivery.lock'),marker);await fs.writeFile(path.join(root,'delivery.json'),history);
+ const view=await inspectDeliveryRecovery(root);expect(view.canRecover).toBe(false);expect(view.snapshotSha256).toBeUndefined();expect(JSON.stringify(view)).not.toContain('private-');
+ expect(['pid','token'].includes(field)?view.owner:view.history).toBe('invalid');
+ const forged=crypto.createHash('sha256').update(marker).update('\0').update(history).digest('hex');
+ for(const digest of [prior.snapshotSha256!,forged])await expect(recoverEmptyDelivery(root,digest)).rejects.toThrow('changed or requires independent reconciliation');
+ expect(await fs.readFile(path.join(root,'delivery.lock'),'utf8')).toBe(marker);expect(await fs.readFile(path.join(root,'delivery.json'),'utf8')).toBe(history);expect(await fs.stat(path.join(root,'delivery-recovery')).catch(()=>undefined)).toBeUndefined();
+});
 it.each(['live','legacy','malformed-lease','missing-lease','invalid-state','missing-state','retained'] as const)('refuses %s recovery and preserves remaining bytes',async mode=>{
   const {root}=await fixture(),file=path.join(root,'delivery.lock'),state=path.join(root,'delivery.json');
   if(mode==='live'){const lease=JSON.parse(await fs.readFile(file,'utf8'));lease.pid=process.pid;await fs.writeFile(file,JSON.stringify(lease));}
