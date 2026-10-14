@@ -1,9 +1,18 @@
 import crypto from 'node:crypto';
 import type { DeliveryRun } from '../shared/delivery.ts';
+const inFlight=new WeakMap<DeliveryRun,Set<string>>();
 
 /** A previous success is historical until a fresh, owned observation confirms it.
  * Intent is persisted before mutation; an uncertain mutation is never blindly repeated. */
 export async function reconcile(id: string, definition: unknown, run: DeliveryRun, save: () => Promise<void>, owned: () => Promise<void>, observe: () => Promise<boolean>, mutate: () => Promise<unknown>) {
+  const active=inFlight.get(run)??new Set<string>();
+  if(active.has(id))throw new Error(`${id} reconciliation is already in progress; await its outcome before retrying`);
+  active.add(id);inFlight.set(run,active);
+  try{await reconcileOwned(id,definition,run,save,owned,observe,mutate);}
+  finally{active.delete(id);if(!active.size)inFlight.delete(run);}
+}
+
+async function reconcileOwned(id: string, definition: unknown, run: DeliveryRun, save: () => Promise<void>, owned: () => Promise<void>, observe: () => Promise<boolean>, mutate: () => Promise<unknown>) {
   const commandSha256 = crypto.createHash('sha256').update(JSON.stringify(definition)).digest('hex');
   run.operations ??= [];
   const matches = run.operations.filter(op => op.id === id);

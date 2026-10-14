@@ -7,6 +7,25 @@ import type { DeliveryRun } from '../shared/delivery.ts';
 
 const state = (): DeliveryRun => ({ id: 'run', repoId: 'repo', head: 'commit', environmentUrl: 'https://target.crm4.dynamics.com', phase: 'deploying', startedAt: new Date().toISOString(), appUrls: [], evidence: [], log: [] });
 const owned = async () => {};
+it('denies an overlapping retry before another read or intent and later reconciles without duplicating the mutation',async()=>{
+  const run=state();let release!:(value:boolean)=>void,applied=false;const firstRead=new Promise<boolean>(resolve=>{release=resolve;});
+  const observe=vi.fn(async()=>observe.mock.calls.length===1?firstRead:applied),mutate=vi.fn(async()=>{applied=true;}),save=vi.fn(async()=>{});
+  const first=reconcile('enable',{},run,save,owned,observe,mutate);await vi.waitFor(()=>expect(observe).toHaveBeenCalledOnce());
+  await expect(reconcile('enable',{},run,save,owned,observe,mutate)).rejects.toThrow('already in progress');expect(observe).toHaveBeenCalledOnce();expect(save).not.toHaveBeenCalled();
+  release(false);await first;await reconcile('enable',{},run,save,owned,observe,mutate);
+  expect(mutate).toHaveBeenCalledOnce();expect(run.operations).toHaveLength(1);expect(run.operations![0].status).toBe('verified');
+});
+it('releases its in-flight guard after a failed read without suppressing a later observation',async()=>{
+  const run=state(),mutate=vi.fn(async()=>{}),observe=vi.fn(async()=>{throw new Error('read unavailable');});
+  await expect(reconcile('enable',{},run,async()=>{},owned,observe,mutate)).rejects.toThrow('read unavailable');
+  await reconcile('enable',{},run,async()=>{},owned,async()=>true,mutate);expect(mutate).not.toHaveBeenCalled();expect(run.operations![0].status).toBe('verified');
+});
+it('keeps different operations independent while one observation is pending',async()=>{
+  const run=state();let release!:(value:boolean)=>void;const pending=new Promise<boolean>(resolve=>{release=resolve;});
+  const first=reconcile('first',{},run,async()=>{},owned,()=>pending,async()=>{});
+  await reconcile('second',{},run,async()=>{},owned,async()=>true,async()=>{});release(true);await first;
+  expect(run.operations?.map(operation=>operation.id).sort()).toEqual(['first','second']);
+});
 it.each(['drift', 'read failure'] as const)('persists invalidation before %s and recovers by observation after restart without repeating mutation', async failure => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-reconcile-'));
   const file = path.join(home, 'release.json');
