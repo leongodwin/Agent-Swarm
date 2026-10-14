@@ -87,8 +87,10 @@ export const deliveryCommands: DeliveryDependencies = {
     return new Promise((resolve, reject) => {
       const child = spawn(cmd.file, [...cmd.args, ...command.args], { cwd, env: { ...process.env, ...env }, windowsHide: true,
         detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '', stderr = '', failure = '';
+      let stdout = '', stderr = '', failure = '',bytes=0;
+      const outDecoder=new TextDecoder('utf-8',{fatal:true}),errDecoder=new TextDecoder('utf-8',{fatal:true});
       const kill = (reason: string) => {
+        if(failure)return;
         failure = reason;
         if (!child.pid) return;
         if (process.platform === 'win32') execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => { child.kill(); });
@@ -99,11 +101,18 @@ export const deliveryCommands: DeliveryDependencies = {
       const clean = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); };
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) abort();
-      child.stdout.on('data', (chunk) => { stdout += chunk; if (stdout.length + stderr.length > 8 * 1024 * 1024) kill('Delivery output exceeded its limit'); });
-      child.stderr.on('data', (chunk) => { stderr += chunk; if (stdout.length + stderr.length > 8 * 1024 * 1024) kill('Delivery output exceeded its limit'); });
+      const collect=(chunk:Buffer,isError:boolean)=>{
+        if(failure)return;bytes+=chunk.length;
+        if(bytes>8*1024*1024){kill('Delivery output exceeded its limit');return;}
+        try{const text=(isError?errDecoder:outDecoder).decode(chunk,{stream:true});if(isError)stderr+=text;else stdout+=text;}
+        catch{kill('Delivery output contained invalid UTF-8');}
+      };
+      child.stdout.on('data',chunk=>collect(chunk,false));
+      child.stderr.on('data',chunk=>collect(chunk,true));
       child.once('error', (err) => { clean(); reject(err); });
       child.once('close', (code) => {
         clean();
+        if(!failure)try{stdout+=outDecoder.decode();stderr+=errDecoder.decode();}catch{failure='Delivery output contained invalid UTF-8';}
         if (failure || code !== 0 || pacReportedError(command.executable, stdout)) reject(new Error(`${path.basename(command.executable)} failed: ${failure || stderr.slice(-4000) || (pacReportedError(command.executable, stdout) ? stdout.slice(-4000) : `exit ${code}`)}`));
         else resolve(stdout);
       });
