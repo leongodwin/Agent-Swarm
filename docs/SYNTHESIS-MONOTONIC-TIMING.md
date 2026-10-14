@@ -8,6 +8,8 @@ Latency statistics use recorded monotonic observations only. Older wall-clock-on
 
 Timing covers request preparation, admission, model execution, output validation and architecture artifact publication through the completion boundary. It does not include the subsequent final job-history writer drain or independent architecture/tenant acceptance. Artifact payload timing remains a pre-publication wall-clock estimate; operational latency statistics use terminal job observations. These distinctions do not redefine the broader five-minute objective or certify it achieved.
 
+The later completion-commit improvement also includes the critical completion-state write before public completion; see `SYNTHESIS-COMPLETION-COMMIT.md`. Subsequent cleanup/timing refinement remains separately scoped.
+
 Validation on 14 October 2026:
 
 - Focused synthesis/metrics tests: 34 passed, including expired/backwards monotonic clocks while wall time remains below deadline, completion-boundary expiry, persisted/restarted monotonic timing and exclusion of wall-clock-only statistics.

@@ -34,7 +34,7 @@ export class HldSynthesisService {
   private jobs:SynthesisJob[]=[];private writer=new SerialWriter();private closed=false;private ready=false;
   private historyStartedAt=Date.now();
   private progressPersist?:Promise<void>;private progressDirty=false;private progressJob?:SynthesisJob;
-  private active?:{job:SynthesisJob;controller:AbortController;handle?:SessionHandle;timer:NodeJS.Timeout;work?:Promise<void>;lease:AuxiliarySessionLease;started:boolean;acknowledged:boolean;startedMonotonic:number};
+  private active?:{job:SynthesisJob;controller:AbortController;handle?:SessionHandle;timer:NodeJS.Timeout;work?:Promise<void>;lease:AuxiliarySessionLease;started:boolean;acknowledged:boolean;startedMonotonic:number;commitPending?:boolean};
   constructor(private home:string,private deps:SynthesisDependencies){}
   private file(){return path.join(this.home,'architecture-synthesis.json');}
   pendingCleanup(){return this.jobs.filter(job=>job.runtimeCleanup==='awaiting-completion').map(job=>({jobId:job.id,repoId:job.repoId,reservedAt:job.startedAt}));}
@@ -42,7 +42,7 @@ export class HldSynthesisService {
     try{const stored=await readBoundedJson(this.file(),4*1024*1024);const parsed=stored===undefined?undefined:storedSchema.parse(stored);this.jobs=parsed?.jobs??[];this.historyStartedAt=parsed?.historyStartedAt??Date.now();}
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw new Error('Architecture synthesis state is unreadable; preserve and repair it before restart',{cause:error});}
     if(new Set(this.jobs.map(job=>job.id)).size!==this.jobs.length)throw new Error('Duplicate architecture synthesis identities');
-    if(this.jobs.some(job=>job.runtimeCleanup==='awaiting-completion'))throw new Error('A prior architecture runtime lacks completion acknowledgement; preserve its records and verify it stopped before reopening synthesis');
+    if(this.jobs.some(job=>job.runtimeCleanup==='awaiting-completion'))throw new Error('A prior architecture run lacks completion acknowledgement for runtime or publication; preserve its records and verify cleanup before reopening synthesis');
     for(const job of this.jobs)if(!terminal(job)){job.status='blocked';job.error='Office restarted before synthesis completed; inspect saved drafts before explicitly starting a new job';job.endedAt=Date.now();job.elapsedMs=Math.max(0,job.endedAt-job.startedAt);}
     await this.persist();this.ready=true;
   }
@@ -109,9 +109,9 @@ export class HldSynthesisService {
     }
     job.status=status;job.error=error?.slice(0,4000);job.endedAt=endedAt;job.elapsedMs=elapsedMs;
     const active=this.active;if(active?.job===job){clearTimeout(active.timer);active.controller.abort();
-      if(active.started&&!active.acknowledged){active.lease.stopping();job.runtimeCleanup='awaiting-completion';}
-      try{active.handle?.stop();}catch{this.closed=true;job.error='Model runtime stop failed; verify the process before reopening synthesis';}
-      if(!active.started||active.acknowledged){active.lease.release();this.active=undefined;job.runtimeCleanup='released';}
+      if(active.commitPending||active.started&&!active.acknowledged){active.lease.stopping();job.runtimeCleanup='awaiting-completion';}
+      try{active.handle?.stop();}catch{this.closed=true;job.error='Model runtime stop failed; verify the process before reopening synthesis';if(job.status==='completed'){job.status='failed';delete job.result;}}
+      if(!active.commitPending&&(!active.started||active.acknowledged)){active.lease.release();this.active=undefined;job.runtimeCleanup='released';}
     }
     void this.persist().catch(()=>{this.closed=true;job.status='failed';job.error='Synthesis state could not be persisted; preserve artifacts before repair';delete job.result;});
   }
@@ -120,11 +120,31 @@ export class HldSynthesisService {
     if(this.closed||this.active?.job!==job||terminal(job))throw new HttpError(409,'Synthesis no longer owns this job');
     const monotonic=performance.now()-this.active.startedMonotonic;
     if(!Number.isFinite(monotonic)||monotonic<0||monotonic>=DEADLINE)throw new HttpError(409,'Architecture synthesis monotonic deadline expired or its clock is inconsistent');
-    if(Date.now()-job.startedAt>=DEADLINE)throw new HttpError(409,'Architecture synthesis deadline expired');
+    const wall=Date.now()-job.startedAt;
+    if(wall<0||wall>=DEADLINE)throw new HttpError(409,'Architecture synthesis wall-clock deadline expired or its clock is inconsistent');
     const current=this.deps.context(job.repoId);
     if(current.checkoutPath!==captured.checkoutPath||current.fingerprint!==captured.fingerprint)throw new HttpError(409,'Architecture project, skills or platform scope changed; repeat synthesis with current requirements');
   }
   private event(job:SynthesisJob,kind:'progress'|'error',text:string){if(terminal(job))return;job.events.push({at:Date.now(),kind,text:text.slice(0,1000)});job.events=job.events.slice(-100);}
+  private async commitCompletion(job:SynthesisJob,result:NonNullable<SynthesisJob['result']>,context:SynthesisContext,signal:AbortSignal){
+    const owned=this.active!;owned.commitPending=true;
+    try{await this.writer.write(async()=>{
+      this.guard(job,context,signal);
+      const owner=this.active!,endedAt=Date.now(),monotonic=performance.now()-owner.startedMonotonic;
+      const candidate=synthesisJobSchema.parse({...job,status:'completed',result,endedAt,elapsedMs:endedAt-job.startedAt,monotonicElapsedMs:Math.floor(monotonic),runtimeCleanup:'awaiting-completion'});
+      const data=JSON.stringify({schemaVersion:1,historyStartedAt:this.historyStartedAt,jobs:this.jobs.map(row=>row.id===job.id?candidate:row)});
+      if(Buffer.byteLength(data)>4*1024*1024)throw new Error('Synthesis completion record exceeds its persisted bound');
+      await atomicWrite(this.file(),data,()=>{this.guard(job,context,signal);return true;});
+      this.guard(job,context,signal);
+    });}finally{
+      owned.commitPending=false;
+      if(terminal(job)&&(!owned.started||owned.acknowledged)&&this.active===owned){owned.lease.release();job.runtimeCleanup='released';this.active=undefined;await this.persist();}
+    }
+    this.guard(job,context,signal);
+    job.result=result;this.finish(job,'completed');
+    await this.writer.drain();
+    if(this.closed)throw new Error('Synthesis completion could not be persisted');
+  }
   private async run(job:SynthesisJob,input:HldInput,context:SynthesisContext,signal:AbortSignal){
     this.guard(job,context,signal);job.status='checking';this.event(job,'progress','Checking the installed Codex runtime and connected project readiness');await this.persist();
     this.guard(job,context,signal);
@@ -163,7 +183,7 @@ export class HldSynthesisService {
     const draft:HldResult={docId,generatedAt:Date.now(),solutionName:input.solutionName,status:'draft',generationMethod:'model-synthesis',synthesis:{runtime:'codex-cli',jobId:job.id,startedAt:job.startedAt,elapsedMs,deadlineMs:DEADLINE},missingEvidence,implementationPlan:design.implementationPlan,markdownContent,mermaidDiagrams:design.mermaidDiagrams};
     hldResultSchema.parse(draft);
     const saved=await saveHldArtifact(context.checkoutPath,input,draft,()=>this.guard(job,context,signal),job.repoId);this.guard(job,context,signal);
-    job.result={docId,artifactSha256:saved.artifactSha256!};this.finish(job,'completed');await this.writer.drain();if(this.closed)throw new Error('Synthesis completion could not be persisted');
+    await this.commitCompletion(job,{docId,artifactSha256:saved.artifactSha256!},context,signal);
   }
   cancel(repoId:string,id:string){const job=this.view(repoId,id)[0],owned=this.jobs.find(item=>item.id===job.id)!;if(!terminal(owned))this.finish(owned,'cancelled','Cancelled by the manager');return this.view(repoId,id)[0];}
   async close(){this.closed=true;const active=this.active;if(active)this.finish(active.job,'blocked','Office stopped during synthesis; inspect drafts before explicitly restarting');await active?.work;await this.writer.drain();}
