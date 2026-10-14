@@ -1,5 +1,6 @@
 import type { DeliveryView } from '../../shared/delivery';
 import type {HealthEvidenceView} from '../../shared/healthEvidence';
+import type {GovernanceEvidenceView} from '../../shared/governanceEvidence';
 import { useStore } from './store';
 import type { AgentCli, GhRepoSummary, OfficeUpdateView, PreviewView, ProjectFolderView, RepoView, SwarmSettings } from '../../shared/types';
 import type { ParsedSolution } from '../../shared/solutionTypes';
@@ -52,6 +53,7 @@ export const api = {
   monitorDelivery: (repoId: string, run: string) => call('POST', `${r(repoId)}/delivery/monitor/${encodeURIComponent(run)}`, {}),
   delivery: (repoId?: string) => call<DeliveryView>('GET', `/api/delivery${scope(repoId)}`,undefined,true),
   healthEvidence:(run:string)=>call<HealthEvidenceView>('GET',`/api/delivery/runs/${encodeURIComponent(run)}/health-evidence`,undefined,true),
+  governanceEvidence:(run:string)=>call<GovernanceEvidenceView>('GET',`/api/delivery/runs/${encodeURIComponent(run)}/governance-evidence`,undefined,true),
   configureDelivery: (enabled: boolean) => call<DeliveryView>('POST', '/api/delivery/configure', { enabled }),
   reviewRelease: (id: string) => call('POST', `/api/delivery/releases/${encodeURIComponent(id)}/review`, {}),
   createRelease: (repoId: string, plan: unknown) => call('POST', `${r(repoId)}/delivery/releases`, plan),

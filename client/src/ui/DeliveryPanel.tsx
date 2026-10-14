@@ -6,6 +6,7 @@ import { useStore, repoOnFloor } from '../store';
 import { api } from '../api';
 import { useResource } from '../useResource';
 import {HealthEvidence} from './HealthEvidence';
+import {DeliveryGovernanceEvidence} from './DeliveryGovernanceEvidence';
 
 export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
   const repos = useStore((s) => s.repos);
@@ -69,6 +70,9 @@ export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
       {run.previousRunId && <p>Previous verified deployment: {run.previousRunId}</p>}
       {run.recovery && <p>Recovery runbook and rehearsal evidence retained. Package SHA-256: {run.recovery.packageSha256}</p>}
       {run.error && <p role="alert">{run.error}</p>}
+      {run.releaseId&&<DeliveryGovernanceEvidence run={run}/>}
+      {run.recoveryRequired&&<p role="alert">Recovery reconciliation required. Inspect unknown operation outcomes before retrying.</p>}
+      {!!run.operations?.length&&<section aria-label="Native delivery operations"><h4>Native operation outcomes</h4><ul>{run.operations.map(operation=><li key={operation.id}><strong>{operation.id}</strong>: {operation.status==='reported-success'?'CLI reported success; independent verification required':operation.status==='verified'?'Recorded target verification; inspect its evidence':operation.status==='unknown'?'Outcome unknown; reconcile before retrying':'Intent recorded; outcome unverified'}{operation.platformJobId&&<> · Platform job <code>{operation.platformJobId}</code></>}</li>)}</ul></section>}
       {run.appUrls.map((url) => <p key={url}><a href={url} target="_blank" rel="noreferrer">Open deployed solution</a></p>)}
       {run.evidence.length > 0 && <details><summary>Verification evidence</summary><ul>{run.evidence.map((file) => <li key={file}><a href={`/api/delivery/runs/${run.id}/evidence?file=${encodeURIComponent(file)}`}>{file}</a></li>)}</ul></details>}
       <details><summary>Delivery stages</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{run.log.join('\n')}</pre></details>

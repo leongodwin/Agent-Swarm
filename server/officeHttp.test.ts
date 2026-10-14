@@ -267,6 +267,14 @@ it('serves only current context-bound health evidence without altering the relea
   let reads=0;vi.mocked(delivery.view).mockImplementation(()=>{const value=structuredClone(snapshot);if(++reads>1)value.runs[0].health!.governanceEvidence='health/governance-1-health.json';return value;});
   expect((await request('/api/delivery/runs/synthetic-run/health-evidence')).status).toBe(409);
 });
+it('serves scoped historical stage summaries without claiming fresh authority and rejects changed run snapshots',async()=>{
+  const {request,delivery}=await office(true),snapshot=delivery.view(),run=snapshot.runs[0];run.head='a'.repeat(40);run.releaseId='synthetic-release';run.evidence=['governance-0-import.json'];
+  const root=path.join(HOME_DIR,'delivery-runs',run.id,'evidence');await fs.mkdir(root,{recursive:true});await fs.writeFile(path.join(root,run.evidence[0]),JSON.stringify(unavailableGovernance({phase:'import',sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId:run.releaseId,checkout:'synthetic',manifest:{}})));
+  const view=vi.spyOn(delivery,'view').mockImplementation(()=>structuredClone(snapshot));
+  const response=await request(`/api/delivery/runs/${run.id}/governance-evidence`);expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('no-store');const body=await response.json();expect(body.scope).toBe('historical-governance-decisions');expect(body.stages.find((row:any)=>row.phase==='import').status).toBe('unavailable');
+  expect((await request(`/api/delivery/runs/${run.id}/governance-evidence?file=../../secret`)).status).toBe(400);expect((await request('/api/delivery/runs/missing/governance-evidence')).status).toBe(404);
+  let reads=0;view.mockImplementation(()=>{const value=structuredClone(snapshot);if(++reads>1)value.runs[0].head='b'.repeat(40);return value;});expect((await request(`/api/delivery/runs/${run.id}/governance-evidence`)).status).toBe(409);
+});
 it('requires a current process and quiescent authenticated office for terminal-preserving handoff',async()=>{
   const handoff=vi.fn();const {request,swarm,url}=await office(false,handoff);
   expect((await fetch(url+'/api/office/prepare-handoff',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedPid:process.pid})})).status).toBe(401);

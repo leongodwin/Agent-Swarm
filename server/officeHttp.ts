@@ -26,6 +26,7 @@ import { createBrowserAuth } from './browserAuth.ts';
 import { parseBody, proposalSchema, loginSchema, selectSchema, notifySchema, approveSchema } from './requestSchemas.ts';
 import type {OfficeReloadRequester} from './officeReload.mjs';
 import {healthEvidenceView,readHealthEvidenceArtifact} from './healthEvidence.ts';
+import {governanceEvidenceView} from './governanceEvidence.ts';
 
 export interface OfficeHttpServices {
   officeReload?:Pick<OfficeReloadRequester,'prepare'|'view'>;
@@ -207,6 +208,14 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     if(!evidence.view.files.some(item=>item.file===query.file))throw new HttpError(404,'Health evidence not found in the current decision');
     const content=await readHealthEvidenceArtifact(evidence,query.file);requireOpen();current();
     res.attachment(query.file).type('application/json').send(content);
+  }));
+  app.get('/api/delivery/runs/:run/governance-evidence',route(async(req,res)=>{
+    parseBody(z.object({}).strict(),req.query);
+    const run=delivery.view().runs.find(row=>row.id===String(req.params.run));if(!run?.releaseId)throw new HttpError(404,'Scoped delivery run not found');
+    const evidence=await governanceEvidenceView(homeDir,run);requireOpen();
+    const current=delivery.view().runs.find(row=>row.id===run.id);
+    if(JSON.stringify(current)!==JSON.stringify(run))throw new HttpError(409,'Delivery scope changed; refresh governance evidence');
+    res.set('Cache-Control','no-store');return evidence;
   }));
 
 
