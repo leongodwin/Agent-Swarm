@@ -73,6 +73,48 @@ it('maps target component IDs and requires solution membership', async () => {
 it('rejects ambiguous component lookup', async () => {
   await expect(mapTargetComponents(async () => ({ value: [{ solutionid: id }, { solutionid: other }] }), 'Expense', [])).rejects.toThrow('exactly one');
 });
+const environment='https://test.crm4.dynamics.com';
+const membershipQuery=`solutioncomponents?$select=objectid,componenttype&$filter=${encodeURIComponent(`_solutionid_value eq ${other}`)}`;
+const continuation=(cursor='page-2')=>`${environment}/api/data/v9.2/${membershipQuery}&$skiptoken=${cursor}`;
+it('maps components found on a later solution membership page without following an arbitrary URL',async()=>{
+  const request=vi.fn<Request>(async(_method,resource)=>resource.startsWith('solutions?')?{value:[{solutionid:other}]}:resource===membershipQuery?{value:[],'@odata.nextLink':continuation()}:resource.startsWith('solutioncomponents?')?{value:[{objectid:id,componenttype:29}]}:{value:[{workflowid:id}]});
+  expect(await mapTargetComponents(request,'Expense',[{key:'approval',kind:'workflow',logicalName:'approval'}],environment)).toEqual([component]);
+  expect(request.mock.calls[2]).toEqual(['GET',`${membershipQuery}&$skiptoken=page-2`]);
+  expect(request.mock.calls.every(([method,resource])=>method==='GET'&&!resource.startsWith('https:'))).toBe(true);
+});
+it.each(['solutions','workflows'])('rejects an incomplete unique %s lookup before accepting its first result',async collection=>{
+  const request=vi.fn<Request>(async(_method,resource)=>resource.startsWith('solutions?')?{value:[{solutionid:other}],...(collection==='solutions'?{'@odata.nextLink':'private continuation'}:{})}:resource.startsWith('solutioncomponents?')?{value:[{objectid:id,componenttype:29}]}:{value:[{workflowid:id}],'@odata.nextLink':'private continuation'});
+  await expect(mapTargetComponents(request,'Expense',[{key:'approval',kind:'workflow',logicalName:'approval'}],environment)).rejects.toThrow();
+  expect(request.mock.calls.some(([,resource])=>resource.includes('private continuation'))).toBe(false);
+});
+it.each(['host','credentials','path','fragment','filter','select','extra','duplicate','no-cursor','relative'] as const)('rejects %s membership continuation before dispatch',async fault=>{
+  const link=new URL(continuation());if(fault==='host')link.hostname='untrusted.test';if(fault==='credentials')link.username='secret';if(fault==='path')link.pathname='/api/data/v9.2/systemusers';if(fault==='fragment')link.hash='fragment';if(fault==='filter')link.searchParams.set('$filter','different');if(fault==='select')link.searchParams.set('$select','different');if(fault==='extra')link.searchParams.set('$expand','secrets');if(fault==='duplicate')link.searchParams.append('$filter',link.searchParams.get('$filter')!);if(fault==='no-cursor')link.searchParams.delete('$skiptoken');
+  const request=vi.fn<Request>(async(_method,resource)=>resource.startsWith('solutions?')?{value:[{solutionid:other}]}:{value:[],'@odata.nextLink':fault==='relative'?'/api/data/v9.2/solutioncomponents':link.href});
+  await expect(mapTargetComponents(request,'Expense',[],environment)).rejects.toThrow();expect(request).toHaveBeenCalledTimes(2);
+});
+it.each(['repeat','duplicate-row','unbound','malformed','overflow','alternate'] as const)('denies %s membership inventories without component lookups',async fault=>{
+  const request=vi.fn<Request>(async(_method,resource)=>resource.startsWith('solutions?')?{value:[{solutionid:other}]}:fault==='duplicate-row'?{value:[{objectid:id,componenttype:29},{objectid:id.toUpperCase(),componenttype:29}]}:fault==='malformed'?{value:[{objectid:'not-a-guid',componenttype:29}]}:fault==='overflow'?{value:Array.from({length:5001},()=>({objectid:id,componenttype:29}))}:fault==='alternate'?{value:[],nextLink:continuation()}:{value:[],'@odata.nextLink':continuation()});
+  await expect(mapTargetComponents(request,'Expense',[],fault==='unbound'?undefined:environment)).rejects.toThrow();expect(request.mock.calls.every(([,resource])=>resource.startsWith('solutions?')||resource.startsWith('solutioncomponents?'))).toBe(true);
+});
+it('bounds pagination and never accepts a partial mapping after the page limit',async()=>{
+  let page=0;const request=vi.fn<Request>(async(_method,resource)=>resource.startsWith('solutions?')?{value:[{solutionid:other}]}:{value:[],'@odata.nextLink':continuation(`page-${++page}`)});
+  await expect(mapTargetComponents(request,'Expense',[],environment)).rejects.toThrow('page bound');expect(page).toBe(100);expect(request).toHaveBeenCalledTimes(101);
+});
+it.each(['http://test.crm4.dynamics.com','https://user@test.crm4.dynamics.com','https://test.crm4.dynamics.com:8443','https://test.crm4.dynamics.com/other','https://test.crm4.dynamics.com/?query=1','https://test.crm4.dynamics.com/#fragment'])('rejects an unapproved environment root %s before membership discovery',async target=>{
+  const request=vi.fn<Request>(async()=>({value:[{solutionid:other}]}));
+  await expect(mapTargetComponents(request,'Expense',[],target)).rejects.toThrow('HTTPS environment root');expect(request).toHaveBeenCalledTimes(1);
+});
+it('bounds aggregate membership bytes even when individual rows are valid',async()=>{
+  const request=vi.fn<Request>(async(_method,resource)=>resource.startsWith('solutions?')?{value:[{solutionid:other}]}:{value:[],diagnostic:'x'.repeat(32*1024*1024)});
+  await expect(mapTargetComponents(request,'Expense',[],environment)).rejects.toThrow('byte bound');expect(request).toHaveBeenCalledTimes(2);
+});
+it('bounds aggregate membership rows across otherwise valid pages',async()=>{
+  let page=0;const request=vi.fn<Request>(async(_method,resource)=>{
+    if(resource.startsWith('solutions?'))return {value:[{solutionid:other}]};
+    const offset=page++*5000;return {value:Array.from({length:5000},(_,index)=>({objectid:`${(offset+index).toString(16).padStart(8,'0')}-1111-4111-8111-111111111111`,componenttype:29})),'@odata.nextLink':continuation(`page-${page}`)};
+  });
+  await expect(mapTargetComponents(request,'Expense',[],environment)).rejects.toThrow('row bound');expect(page).toBe(11);
+});
 it('maps imported cloud flows without a unique name by packaged workflow GUID and checks membership', async () => {
   const workflow = 'cdd4902c-b1c4-f111-aaaf-7ced8d76eca6';
   const request = vi.fn<Request>(async (_method, resource) => resource.startsWith('solutions?') ? { value: [{ solutionid: other }] } : resource.startsWith('solutioncomponents?') ? { value: [{ objectid: workflow, componenttype: 29 }] } : { value: [{ workflowid: workflow }] });

@@ -631,7 +631,7 @@ export class DeliveryService {
           for (const [index, item] of manifest.postDeploy.entries()) await mutation(`post-deploy-${index}`, 'post-deploy', item.executable, item.args);
           if (manifest.targetBinding) {
             await verifyTarget(request, manifest.targetBinding);
-            const mapping = await mapTargetComponents(request, manifest.solutionUniqueName, manifest.targetComponents);
+            const mapping = await mapTargetComponents(request, manifest.solutionUniqueName, manifest.targetComponents,run.environmentUrl);
             await atomicWrite(path.join(evidence, 'target-component-map.json'), JSON.stringify({ environmentUrl: run.environmentUrl, binding: manifest.targetBinding, mapping }, null, 2));
             run.evidence.push('target-component-map.json');
             // Verify references before any flow can be activated, regardless of manifest order.
@@ -664,7 +664,7 @@ export class DeliveryService {
         let verifiedMapping: Awaited<ReturnType<typeof mapTargetComponents>> = [];
         if (manifest.targetBinding) {
           await verifyTarget(request, manifest.targetBinding);
-          verifiedMapping = await mapTargetComponents(request, manifest.solutionUniqueName, manifest.targetComponents);
+          verifiedMapping = await mapTargetComponents(request, manifest.solutionUniqueName, manifest.targetComponents,run.environmentUrl);
           const retained = JSON.parse(await fs.readFile(path.join(evidence, 'target-component-map.json'), 'utf8'));
           if (JSON.stringify(retained.mapping) !== JSON.stringify(verifiedMapping)) throw new Error('Target component mapping changed after deployment; inspect the target before retrying');
         }

@@ -40,6 +40,7 @@ const rows = (result: unknown): Record<string, unknown>[] => {
   return parsed.value;
 };
 const unique = (result: unknown, label: string) => {
+  z.object({'@odata.nextLink':z.never().optional(),nextLink:z.never().optional()}).parse(result);
   const found = rows(result);
   if (found.length !== 1) throw new Error(`${label} must resolve to exactly one target component; found ${found.length}`);
   return found[0];
@@ -48,10 +49,33 @@ export async function verifyTarget(request: Request, binding: z.infer<typeof tar
   const who = z.object({ OrganizationId: guid, UserId: guid }).parse(await request('GET', 'WhoAmI'));
   if (who.OrganizationId.toLowerCase() !== binding.organizationId.toLowerCase() || who.UserId.toLowerCase() !== binding.userId.toLowerCase()) throw new Error('Dataverse organization/user does not match the approved target binding');
 }
-export async function mapTargetComponents(request: Request, solutionName: string, components: TargetComponent[]): Promise<MappedComponent[]> {
+/** Complete bounded membership inventory; continuation cannot change tenant,
+ * collection, selected fields or the exact solution filter. */
+async function solutionMembership(request:Request,resource:string,environmentUrl?:string){
+  const output:{objectid:string;componenttype:number}[]=[],seen=new Set<string>(),links=new Set<string>();let next=resource,bytes=0;
+  if(environmentUrl){const target=new URL(environmentUrl);if(target.protocol!=='https:'||target.username||target.password||target.port||target.pathname!=='/'||target.search||target.hash)throw new Error('Solution membership requires an approved HTTPS environment root');}
+  const base=environmentUrl?new URL(`/api/data/v9.2/${resource}`,environmentUrl):undefined;
+  for(let page=0;page<100;page++){
+    const raw=await request('GET',next);bytes+=Buffer.byteLength(JSON.stringify(raw)??'');
+    if(bytes>32*1024*1024)throw new Error('Solution membership inventory exceeded its byte bound');
+    const value=z.object({value:z.array(z.object({objectid:guid,componenttype:z.number().int().nonnegative()})).max(5000),'@odata.nextLink':z.string().min(1).max(16000).optional(),nextLink:z.never().optional()}).parse(raw);
+    for(const row of value.value){const key=`${row.objectid.toLowerCase()}:${row.componenttype}`;if(seen.has(key))throw new Error('Solution membership inventory contains duplicate identities');seen.add(key);output.push(row);}
+    if(output.length>50000)throw new Error('Solution membership inventory exceeded its row bound');
+    if(!value['@odata.nextLink'])return output;
+    if(!base)throw new Error('Paginated solution membership requires the approved environment');
+    const link=new URL(value['@odata.nextLink']);
+    if(link.origin!==base.origin||link.username||link.password||link.hash||link.pathname!==base.pathname)throw new Error('Solution membership continuation differs from the approved target');
+    const parameters=[...link.searchParams];
+    if(new Set(parameters.map(([key])=>key)).size!==parameters.length||parameters.length!==[...base.searchParams].length+1||!link.searchParams.get('$skiptoken')||[...base.searchParams].some(([key,value])=>link.searchParams.get(key)!==value)||parameters.some(([key])=>key!=='$skiptoken'&&!base.searchParams.has(key)))throw new Error('Solution membership continuation changed the approved query');
+    if(links.has(link.href))throw new Error('Solution membership continuation repeated');links.add(link.href);
+    next=link.pathname.slice('/api/data/v9.2/'.length)+link.search;
+  }
+  throw new Error('Solution membership inventory exceeded its page bound');
+}
+export async function mapTargetComponents(request: Request, solutionName: string, components: TargetComponent[],environmentUrl?:string): Promise<MappedComponent[]> {
   const solution = unique(await request('GET', `solutions?$select=solutionid&$filter=${encodeURIComponent(`uniquename eq ${quote(solutionName)}`)}&$top=2`), 'Solution');
   const solutionId = guid.parse(solution.solutionid);
-  const membership = rows(await request('GET', `solutioncomponents?$select=objectid,componenttype&$filter=${encodeURIComponent(`_solutionid_value eq ${solutionId}`)}`));
+  const membership = await solutionMembership(request,`solutioncomponents?$select=objectid,componenttype&$filter=${encodeURIComponent(`_solutionid_value eq ${solutionId}`)}`,environmentUrl);
   const mapped: MappedComponent[] = [];
   for (const component of components) {
     if (component.kind === 'dataverse-table') {
