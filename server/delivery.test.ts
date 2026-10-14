@@ -100,6 +100,43 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   const release = await service.createRelease(repo, plan); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
   return { service, repo, calls, root, deps, release };
 }
+it.each(['manifest','escaped-manifest','required-issue','architecture'] as const)('rejects ambiguous %s preflight evidence without building or importing',async mode=>{
+ const {service,repo,deps,calls}=await fixture(),native=deps.run;
+ deps.run=async(...args)=>{
+   const output=await native(...args),command=args[0];
+   if(mode==='required-issue'&&command.executable==='gh')return '{"state":"OPEN","state":"CLOSED"}';
+   if(command.executable==='git'&&command.args[0]==='show'){
+     if(mode==='architecture'&&command.args[1].endsWith(`${architectureResult.docId}.json`))return `{"repoId":"private-repo",${output.slice(1)}`;
+     if(mode!=='architecture'&&mode!=='required-issue'&&command.args[1].endsWith(':cubefarm.delivery.json'))return `{"${mode==='manifest'?'hasUi':'\\u0068asUi'}":false,${output.slice(1)}`;
+   }
+   return output;
+ };
+ await expect(service.start(repo)).rejects.toThrow('ambiguity');expect(calls).not.toContain('build');expect(calls.some(call=>call.startsWith('pac solution import'))).toBe(false);expect(service.view().runs).toHaveLength(0);expect(JSON.stringify(service.view())).not.toContain('private-repo');
+});
+it.each(['recovery','verification','target-identity'] as const)('refuses ambiguous %s execution evidence without accepting the final winning value',async mode=>{
+ const {service,repo,deps,calls}=await fixture(),native=deps.run;
+ deps.run=async(...args)=>{
+   const command=args[0];if(mode==='target-identity'&&command.executable==='git'&&command.args[0]==='show'&&command.args[1].endsWith(':cubefarm.delivery.json'))return JSON.stringify({...manifest,targetBinding:{organizationId:'11111111-1111-4111-8111-111111111111',userId:'11111111-1111-4111-8111-111111111111'}});
+   if(mode==='target-identity'&&command.executable==='dataverse')return '{"OrganizationId":"private-identity","OrganizationId":"11111111-1111-4111-8111-111111111111","UserId":"11111111-1111-4111-8111-111111111111"}';
+   const output=await native(...args);
+   if(mode==='recovery'&&command.executable==='build'){const file=path.join(args[1],'recovery.json'),content=await fs.readFile(file,'utf8');await fs.writeFile(file,`{"restored":false,${content.slice(1)}`);}
+   if(mode==='verification'&&command.executable==='verify'){const file=args[2].SWARM_DELIVERY_REPORT,content=await fs.readFile(file,'utf8');await fs.writeFile(file,`{"security":"failed",${content.slice(1)}`);}
+   return output;
+ };
+ await service.start(repo);await service.waitForIdle();const result=service.view().runs[0];expect(result.phase).toBe('blocked');expect(result.error).toContain('ambiguity');expect(JSON.stringify(result)).not.toContain('private-identity');
+ if(mode!=='verification')expect(calls.some(call=>call.startsWith('pac solution import'))).toBe(false);else expect(result.evidence).not.toContain('verification.json');
+});
+it.each(['SolutionUniqueName','VersionNumber'])('rejects ambiguous PAC solution inventory %s fields',field=>{
+ const output=`[{"${field}":"wrong","SolutionUniqueName":"Expenses","VersionNumber":"1.0.0.1"}]`;expect(()=>installedSolution(output,'Expenses','1.0.0.1')).toThrow('ambiguity');
+});
+it.each([
+ '[{"UniqueName":"Expenses","uniqueName":"Expenses","Version":"1.0.0.1"}]',
+ '[{"UniqueName":"Expenses","SolutionUniqueName":"Expenses","Version":"1.0.0.1"}]',
+ '[{"UniqueName":"Expenses","Version":"1.0.0.1","VersionNumber":"1.0.0.1"}]',
+ '[{"UniqueName":"Expenses","Version":"1.0.0.1"},{"UniqueName":"EXPENSES","Version":"0.0.0.0"}]',
+ '[{"UniqueName":"Expenses","Version":1001}]',
+ '[{"UniqueName":"Expenses"}]',
+])('refuses ambiguous or incomplete normalized solution identities: %#',output=>expect(()=>installedSolution(output,'Expenses','1.0.0.1')).toThrow());
 const storedRun={id:'synthetic-run',repoId:'synthetic/repo',head:'historical-commit',environmentUrl:target,phase:'blocked',startedAt:new Date().toISOString(),appUrls:[],evidence:[],log:[]};
 it.each(['changed-head','wrong-profile','duplicate-id','missing-end','unreviewed-success'])('rejects %s attempt history instead of trusting its success counts',async fault=>{
   const {service,root,release}=await fixture();await service.close();const state=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));

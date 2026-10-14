@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 import {deliveryManifest,deliveryCommands,type DeliveryDependencies} from './delivery.ts';
 import {platformIdentitySchema} from './platformAuth.ts';
 import {currentOrganizationResource,verifyDataverseIdentity} from './dataverseIdentity.ts';
@@ -71,7 +72,7 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
         if(resource.length>4000){failure='limit';throw new Error('Schema request exceeded its bound');}
         const output=await command('dataverse',['api','request','--target','dataverse','--environment',url.origin,'--method','GET','--path',`/api/data/v9.2/${resource}`]);
         bytes+=Buffer.byteLength(output);if(bytes>8*1024*1024){failure='limit';throw new Error('Schema observation exceeded its byte bound');}
-        let value:unknown;try{value=JSON.parse(output);}catch{failure='provider';throw new Error('Schema provider response is malformed');}
+        let value:unknown;try{value=parseUnambiguousJson(output,{maxBytes:8*1024*1024});}catch{failure='provider';throw new Error('Schema provider response is malformed or ambiguous');}
         if(resource!=='WhoAmI'&&resource!==currentOrganizationResource)observations.push({resource,value});
         if(resource!=='WhoAmI'&&resource!==currentOrganizationResource)metadataReads++;
         if(observations.length>300){failure='limit';throw new Error('Schema observation exceeded its bound');}

@@ -19,6 +19,10 @@ it('denies malformed, unbounded and fabricated architecture records',()=>{
   expect(()=>verifyCommittedArchitecture(JSON.stringify(artifact),'x'.repeat(1024*1024+1),repoId,reference)).toThrow('bound');
   expect(()=>verifyCommittedArchitecture(' '.repeat(8*1024*1024+1),result.markdownContent,repoId,reference)).toThrow('bound');
 });
+it.each(['repoId','sha256','nested-input'])('rejects duplicate committed architecture %s fields despite a matching final digest',field=>{
+ const original=JSON.stringify(artifact),json=field==='nested-input'?original.replace('"problemContext":','"problemContext":"unapproved design","problemContext":'):`{"${field==='sha256'?'\\u0073ha256':field}":"unapproved",${original.slice(1)}`;
+ expect(()=>verifyCommittedArchitecture(json,result.markdownContent,repoId,reference)).toThrow('ambiguity');
+});
 it('requires independent approval of the exact version and never treats a saved draft as approval',()=>{
   const plan={architecture:reference,qaOwner:'qa',owner:'dev'},review={reviewer:'qa',artifactSha256:sha256,decision:'approved'};
   expect(()=>requireArchitectureReview({plan})).toThrow('Independent');

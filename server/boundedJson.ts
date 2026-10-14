@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 
 /** Missing means first run only when opening the file fails with ENOENT.
  * Read at most the observed size plus one byte; changed/unreadable files are errors. */
@@ -27,5 +28,5 @@ export async function readBoundedBytes(file: string, maximum = 16 * 1024 * 1024)
 }
 export async function readBoundedText(file:string,maximum=16*1024*1024):Promise<string|undefined>{const bytes=await readBoundedBytes(file,maximum);return bytes===undefined?undefined:new TextDecoder('utf-8',{fatal:true}).decode(bytes);}
 export async function readBoundedJson(file:string,maximum=16*1024*1024):Promise<unknown>{
-  const text=await readBoundedText(file,maximum);return text===undefined?undefined:JSON.parse(text);
+  const text=await readBoundedText(file,maximum);return text===undefined?undefined:parseUnambiguousJson(text,{maxBytes:maximum});
 }

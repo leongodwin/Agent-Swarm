@@ -7,6 +7,7 @@ import { execFile, spawn } from 'node:child_process';
 import { z } from 'zod';
 import { atomicWrite, SerialWriter } from './atomicFile.ts';
 import { readBoundedJson } from './boundedJson.ts';
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 import { validateDeliveryState, type DeliveryStoredState } from './deliveryState.ts';
 import {inspectDeliveryRecovery,recoverEmptyDelivery} from './deliveryRecovery.ts';
 import {acquireDeliveryLease,type DeliveryLease} from './deliveryLease.ts';
@@ -30,7 +31,7 @@ import { connectFlowAdapter, verifyCloudFlowContext, verifyCloudFlowBindings, ve
 import { reconcileCloudFlow, reconcileCopilot } from './platformLifecycle.ts';
 import { reconcileAdditionalAction, verifyMigrationCompatibility } from './deploymentAdapters.ts';
 import { canvasResource } from './canvasOwnership.ts';
-import { requireLifecycleGovernance, type LifecycleCheck, type GovernancePhase } from './lifecycleGovernance.ts';
+import { lifecycleResultSchema,requireLifecycleGovernance, type LifecycleCheck, type GovernancePhase } from './lifecycleGovernance.ts';
 
 const command = z.object({ executable: z.string().min(1), args: z.array(z.string()).max(100) }).strict();
 export const deliveryManifest = z.object({
@@ -140,11 +141,17 @@ export function installedSolution(output: string, name: string, version: string)
   // PAC may print a connection banner before its JSON array.
   const start = output.indexOf('['), end = output.lastIndexOf(']');
   if (start < 0 || end < start) throw new Error('PAC did not return a solution inventory');
-  const list = JSON.parse(output.slice(start, end + 1)) as Record<string, unknown>[];
-  return list.some((row) => {
-    const fields = Object.fromEntries(Object.entries(row).map(([key, value]) => [key.toLowerCase(), value]));
-    return String(fields.uniquename ?? fields.solutionuniquename).toLowerCase() === name.toLowerCase() && String(fields.version ?? fields.versionnumber) === version;
-  });
+  const list = z.array(z.record(z.string(),z.unknown())).max(5000).parse(parseUnambiguousJson(output.slice(start, end + 1)));
+  const identities=new Set<string>();let found=false;
+  for(const row of list){
+    const names=Object.entries(row).filter(([key])=>['uniquename','solutionuniquename'].includes(key.toLowerCase()));
+    const versions=Object.entries(row).filter(([key])=>['version','versionnumber'].includes(key.toLowerCase()));
+    if(names.length!==1||versions.length!==1)throw new Error('PAC solution inventory identities are ambiguous');
+    const identity=z.string().min(1).max(200).parse(names[0][1]).toLowerCase(),observedVersion=z.string().min(1).max(200).parse(versions[0][1]);
+    if(identities.has(identity))throw new Error('PAC solution inventory contains duplicate solution identities');identities.add(identity);
+    if(identity===name.toLowerCase()&&observedVersion===version)found=true;
+  }
+  return found;
 }
 
 /** One real release at a time. An interrupted/failed release never resumes deployment automatically. */
@@ -360,13 +367,13 @@ export class DeliveryService {
       await this.requireCapabilities(repo, release);
       const git = (args: string[]) => this.command({ executable: 'git', args }, repo.checkoutPath, {}, controller.signal);
       for (const number of release.plan.requiredIssues) {
-        const issue = JSON.parse(await this.command({ executable: 'gh', args: ['issue', 'view', String(number), '--repo', repo.fullName ?? repo.id, '--json', 'state'] }, repo.checkoutPath, {}, controller.signal));
+        const issue = z.object({state:z.enum(['OPEN','CLOSED'])}).parse(parseUnambiguousJson(await this.command({ executable: 'gh', args: ['issue', 'view', String(number), '--repo', repo.fullName ?? repo.id, '--json', 'state'] }, repo.checkoutPath, {}, controller.signal)));
         if (issue.state !== 'CLOSED') throw new Error(`Required issue #${number} is still open`);
       }
       await git(['fetch', 'origin', repo.defaultBranch]);
       // Never substitute a newer commit after QA approval.
       await git(['merge-base', '--is-ancestor', release.head, `origin/${repo.defaultBranch}`]);
-      deliveryManifest.parse(JSON.parse(await git(['show', `${release.head}:cubefarm.delivery.json`])));
+      deliveryManifest.parse(parseUnambiguousJson(await git(['show', `${release.head}:cubefarm.delivery.json`])));
       const run: DeliveryRun = prior ?? { id: crypto.randomUUID(), releaseId: release.id, repoId: repo.id, head: release.head, environmentUrl: release.environmentUrl, phase: 'waiting', startedAt: new Date().toISOString(), appUrls: [], evidence: [], log: [] };
       if (!prior) { run.previousRunId = this.state.runs.find((r) => r.repoId === repo.id && r.environmentUrl === run.environmentUrl && r.phase === 'complete')?.id; this.state.runs.unshift(run); }
       attempt.runId=run.id;attempt.status='running';run.currentAttemptId=attempt.id;
@@ -446,7 +453,7 @@ export class DeliveryService {
         const inventory = await this.command({ executable: 'pac', args: ['solution', 'list', '--environment', run.environmentUrl, '--json'] }, repo.checkoutPath, {}, controller.signal);
         if (!installedSolution(inventory, run.solution!, run.version!)) throw new Error('Installed solution/version drift detected');
         const capabilityHash = await this.requireCapabilities(repo, release);
-        const manifest=deliveryManifest.parse(JSON.parse(await this.command({executable:'git',args:['show',`${run.head}:cubefarm.delivery.json`]},repo.checkoutPath,{},controller.signal)));
+        const manifest=deliveryManifest.parse(parseUnambiguousJson(await this.command({executable:'git',args:['show',`${run.head}:cubefarm.delivery.json`]},repo.checkoutPath,{},controller.signal)));
         await this.governance(run,manifest,'health');
         if (run.health?.capabilityHash && run.health.capabilityHash !== capabilityHash) throw new Error('Capability configuration drift detected; review and issue a new release');
         run.health = { status: 'healthy', checkedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + release.plan.monitoring.intervalMinutes * 60000).toISOString(), capabilityHash, governanceEvidence:run.health?.governanceEvidence };
@@ -485,7 +492,7 @@ export class DeliveryService {
       await this.changed();
     });}
     finally {
-      const decision=await fs.readFile(path.join(directory,file),'utf8').then(value=>JSON.parse(value)).catch(()=>null);
+      const decision=await fs.readFile(path.join(directory,file),'utf8').then(value=>lifecycleResultSchema.parse(parseUnambiguousJson(value))).catch(()=>null);
       if(phase!=='health')for(const field of ['packageInventoryFile','declaredSchemaFile','advancedPolicyFile','connectorCatalogueFile'] as const){
         const file=decision?.[field];if(typeof file==='string'&&!run.evidence.includes(file))run.evidence.push(file);
       }
@@ -519,7 +526,7 @@ export class DeliveryService {
       await atomicWrite(path.join(evidence, 'release.json'), JSON.stringify(release, null, 2));
       run.evidence = ['release.json', ...run.evidence.filter((name) => name.startsWith('recovery-') || name === 'previous-inventory.json' || name === 'target-component-map.json')];
       await command('git', ['diff', '--quiet', run.head, '--']);
-      const manifest = deliveryManifest.parse(JSON.parse(await command('git', ['show', `${run.head}:cubefarm.delivery.json`])));
+      const manifest = deliveryManifest.parse(parseUnambiguousJson(await command('git', ['show', `${run.head}:cubefarm.delivery.json`])));
       if (this.state.policy?.copilotPaused && manifest.targetComponents.some((component) => component.kind === 'copilot')) throw new Error('Copilot Studio delivery is paused by the user');
       if (release.plan.verification.api) {
         if (manifest.hasUi || manifest.targetComponents.some((component) => ['canvas', 'copilot'].includes(component.kind))) throw new Error('API-only verification cannot certify a UI release');
@@ -534,7 +541,7 @@ export class DeliveryService {
         const output = await command('dataverse', ['api', 'request', '--target', 'dataverse', '--environment', run.environmentUrl, '--method', method, '--path', `/api/data/v9.2/${resource}`, ...(body ? ['--body', JSON.stringify(body)] : []), ...Object.entries(headers ?? {}).flatMap(([key, value]) => ['--header', `${key}:${value}`])]);
         if (method !== 'GET' && !output.trim()) return null;
         // Fail closed on unexpected CLI output rather than guessing a JSON fragment.
-        return JSON.parse(output.trim());
+        return parseUnambiguousJson(output.trim());
       };
       if (manifest.targetBinding) await verifyTarget(request, manifest.targetBinding);
       const cloudComponents = manifest.targetComponents.filter((c) => c.kind === 'cloud-flow');
@@ -566,7 +573,7 @@ export class DeliveryService {
       }
       for (const identity of release.plan.verification.identities) {
         const file = path.join(this.root, 'delivery-identities', `${identity.id}.json`);
-        try { const state = JSON.parse(await fs.readFile(file, 'utf8')); if (!Array.isArray(state.cookies) || !Array.isArray(state.origins)) throw new Error('Invalid storage state'); }
+        try { z.object({cookies:z.array(z.unknown()),origins:z.array(z.unknown())}).parse(parseUnambiguousJson(await fs.readFile(file, 'utf8'))); }
         catch { throw new Error(`Connect QA identity ${identity.id} in delivery-identities/${identity.id}.json before deployment`); }
       }
       const zip = await containedFile(checkout, manifest.solutionZip);
@@ -579,7 +586,7 @@ export class DeliveryService {
         const runbook = await containedFile(checkout, manifest.recovery.runbook);
         const reportFile = await containedFile(checkout, manifest.recovery.rehearsalReport);
         const digest = z.string().regex(/^[a-f0-9]{64}$/);
-        const rehearsal = z.object({ sourceCommit: z.string(), performedAt: z.iso.datetime(), environmentUrl: https, procedureSha256: digest, restored: z.literal(true), dataPreserved: z.literal(true), protectedRecords: z.array(z.object({ table: z.string().min(1), id: z.string().min(1), beforeSha256: digest, afterSha256: digest }).strict()).min(1), evidence: z.array(z.string().min(1)).min(1) }).strict().parse(JSON.parse(await fs.readFile(reportFile, 'utf8')));
+        const rehearsal = z.object({ sourceCommit: z.string(), performedAt: z.iso.datetime(), environmentUrl: https, procedureSha256: digest, restored: z.literal(true), dataPreserved: z.literal(true), protectedRecords: z.array(z.object({ table: z.string().min(1), id: z.string().min(1), beforeSha256: digest, afterSha256: digest }).strict()).min(1), evidence: z.array(z.string().min(1)).min(1) }).strict().parse(parseUnambiguousJson(await fs.readFile(reportFile, 'utf8')));
         const runbookBytes = await fs.readFile(runbook);
         if (rehearsal.sourceCommit !== run.head || canonical(rehearsal.environmentUrl) === run.environmentUrl || Date.parse(rehearsal.performedAt) < Date.now() - 30 * 86400000 || Date.parse(rehearsal.performedAt) > Date.now() + 60000 || rehearsal.procedureSha256 !== crypto.createHash('sha256').update(runbookBytes).digest('hex')) throw new Error('Recovery rehearsal must match this commit/runbook, be recent, and use a separate authorized test environment');
         if (rehearsal.protectedRecords.some((record) => record.beforeSha256 !== record.afterSha256) || new Set(rehearsal.protectedRecords.map((record) => `${record.table}:${record.id}`)).size !== rehearsal.protectedRecords.length) throw new Error('Recovery rehearsal did not preserve every protected record');
@@ -665,7 +672,7 @@ export class DeliveryService {
         if (manifest.targetBinding) {
           await verifyTarget(request, manifest.targetBinding);
           verifiedMapping = await mapTargetComponents(request, manifest.solutionUniqueName, manifest.targetComponents,run.environmentUrl);
-          const retained = JSON.parse(await fs.readFile(path.join(evidence, 'target-component-map.json'), 'utf8'));
+          const retained = z.object({mapping:z.array(z.unknown())}).parse(parseUnambiguousJson(await fs.readFile(path.join(evidence, 'target-component-map.json'), 'utf8')));
           if (JSON.stringify(retained.mapping) !== JSON.stringify(verifiedMapping)) throw new Error('Target component mapping changed after deployment; inspect the target before retrying');
         }
         const inventory = await command('pac', ['solution', 'list', '--environment', run.environmentUrl, '--json']);
@@ -703,7 +710,7 @@ export class DeliveryService {
           await atomicWrite(path.join(evidence, 'cloud-flow-verification.json'), JSON.stringify({ environmentUrl: run.environmentUrl, sourceCommit: run.head, observations }, null, 2));
           run.evidence.push('cloud-flow-verification.json');
         }
-        const report = verificationReport.parse(JSON.parse(await fs.readFile(await containedFile(evidence, 'verification.json'), 'utf8')));
+        const report = verificationReport.parse(parseUnambiguousJson(await fs.readFile(await containedFile(evidence, 'verification.json'), 'utf8')));
         if (manifest.hasUi && !report.appUrls.length) throw new Error('UI verification requires deployed app URLs');
         verifyMappedCanvasUrls(verifiedMapping, report.appUrls);
         for (const check of release.plan.verification.copilotChecks ?? []) if (!report.appUrls.some((url) => new URL(url).href === new URL(check.channelUrl).href)) throw new Error('Verification report must include the approved published Copilot channel URL');

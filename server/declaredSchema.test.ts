@@ -33,6 +33,19 @@ it('reads freshly at all six stages, pins identity before/after and never claims
     expect(command.args[command.args.indexOf('--environment')+1]).toBe(environment);expect(command.args[command.args.indexOf('--method')+1]).toBe('GET');
   }
 });
+for(const mode of ['identity','organization','metadata','constraint'] as const)it.each(['build','test','import','post-deploy','verify','health'] as const)(`refuses ambiguous ${mode} responses at %s without retaining verified schema facts`,async phase=>{
+ const {run,observe}=fixture(),original=run.getMockImplementation()!;
+ run.mockImplementation(async command=>{
+   const output=await original(command),resource=command.args[command.args.indexOf('--path')+1]??'';
+   if(command.args[0]!=='api')return output;
+   if(mode==='identity'&&resource.endsWith('WhoAmI'))return `{"OrganizationId":"private-token",${output.slice(1)}`;
+   if(mode==='organization'&&resource.includes('RetrieveCurrentOrganization'))return output.replace('"TenantId":','"TenantId":"private-token","TenantId":');
+   if(mode==='metadata'&&resource.includes('EntityDefinitions')&&!resource.includes('/Attributes('))return `{"\\u0076alue":[],${output.slice(1)}`;
+   if(mode==='constraint'&&resource.includes('/Attributes('))return `{"MaxLength":1,${output.slice(1)}`;
+   return output;
+ });
+ const result=await observe({...input,phase});expect(result.status).toBe('unavailable');expect(result.tables).toEqual([]);expect(result.observations).toEqual([]);expect(result.identity).toBeUndefined();expect(result.binding).toBeUndefined();expect(result.diagnostic?.failure).toBe('provider');expect(JSON.stringify(result)).not.toContain('private-token');expect(run.mock.calls.filter(([command])=>command.args[0]==='api').every(([command])=>command.args[command.args.indexOf('--method')+1]==='GET')).toBe(true);
+});
 
 it.each(['contract','initial-identity','resource-contracts','migration','columns','final-identity','provider','cancelled','limit'])('reports a safe actionable diagnostic for %s and discards partial metadata',async mode=>{
   const {run,observe}=fixture(mode==='columns'?{length:80}:mode==='migration'?{length:120}:mode==='final-identity'?{drift:true}:{}),normal=run.getMockImplementation()!;

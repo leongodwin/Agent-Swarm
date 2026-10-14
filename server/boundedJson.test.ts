@@ -15,6 +15,9 @@ it('distinguishes a missing file from JSON null and reads an exact bounded docum
   await fs.writeFile(target,'null');expect(await readBoundedJson(target)).toBeNull();
   await fs.writeFile(target,'{"a":1}');expect(await readBoundedJson(target,7)).toEqual({a:1});
 });
+it.each(['{"active":true,"active":false}','{"active":true,"\\u0061ctive":false}','{"policy":{"enabled":false,"enabled":true}}'])('preserves ambiguous persisted evidence and refuses it: %s',async content=>{
+ const target=await file();await fs.writeFile(target,content);await expect(readBoundedJson(target)).rejects.toThrow('ambiguity');expect(await fs.readFile(target,'utf8')).toBe(content);
+});
 it.each(['oversized','empty','invalid UTF-8','directory'] as const)('rejects %s input without changing the original file',async kind=>{
   const target=await file();
   if(kind==='directory')await fs.mkdir(target);
