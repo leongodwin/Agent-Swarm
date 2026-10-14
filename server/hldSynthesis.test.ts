@@ -23,6 +23,29 @@ async function fixture(admission:SynthesisDependencies['admission']=async()=>nul
   return {service,root,checkout,start,stop,deps,lease,get callbacks(){return callbacks;},change:()=>{fingerprint='changed';}};
 }
 const success=(structured:unknown=output)=>({ok:true,text:'',structured,costUsd:0.01,turns:1,errors:[]});
+it('coalesces a blocked-disk progress burst and ignores logs after runtime completion while preserving the final artifact',async()=>{
+  const f=await fixture(),job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
+  const original=fs.writeFile.bind(fs);let writes=0,release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});
+  const spy=vi.spyOn(fs,'writeFile').mockImplementation(async(...args:Parameters<typeof fs.writeFile>)=>{if(String(args[0]).includes('architecture-synthesis.json.')&&String(args[0]).endsWith('.tmp')){writes++;if(writes===1)await held;}return original(...args);});
+  try{
+    for(let i=0;i<1000;i++)f.callbacks.log([{kind:'system',text:`Progress ${i}`}]);await vi.waitFor(()=>expect(writes).toBe(1));
+    expect(f.service.view('synthetic/project',job.id)[0].events.at(-1)?.text).toBe('Progress 999');
+    f.callbacks.finished(success());for(let i=0;i<1000;i++)f.callbacks.log([{kind:'system',text:`Late ignored ${i}`}]);release();
+    await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('completed'));await f.service.close();
+    expect(writes).toBeLessThanOrEqual(6);const stored=JSON.parse(await fs.readFile(path.join(f.root,'architecture-synthesis.json'),'utf8'));expect(stored.jobs[0]).toMatchObject({status:'completed',runtimeCleanup:'released'});expect(stored.jobs[0].events.some((event:any)=>event.text==='Progress 999')).toBe(true);expect(stored.jobs[0].events.some((event:any)=>event.text.startsWith('Late ignored'))).toBe(false);
+    expect(await fs.readdir(path.join(f.checkout,'docs','architecture','drafts'))).toContain('current.json');expect(f.lease.release).toHaveBeenCalledOnce();
+  }finally{release();spy.mockRestore();}
+});
+it('closes synthesis after progress persistence failure and retains runtime ownership until completion acknowledgement',async()=>{
+  const f=await fixture(),job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
+  const original=fs.writeFile.bind(fs);let rejected=false;
+  const spy=vi.spyOn(fs,'writeFile').mockImplementation(async(...args:Parameters<typeof fs.writeFile>)=>{if(!rejected&&String(args[0]).includes('architecture-synthesis.json.')){rejected=true;throw new Error('private disk failure');}return original(...args);});
+  try{
+    f.callbacks.log([{kind:'system',text:'Synthetic progress'}]);await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('failed'));expect(f.stop).toHaveBeenCalledOnce();expect(f.lease.stopping).toHaveBeenCalledOnce();expect(f.lease.release).not.toHaveBeenCalled();
+    expect(f.service.view('synthetic/project',job.id)[0].error).not.toContain('private');await expect(f.service.start('synthetic/project',input)).rejects.toThrow('closed');
+    f.callbacks.finished(success());await vi.waitFor(()=>expect(f.lease.release).toHaveBeenCalledOnce());await f.service.close();const stored=JSON.parse(await fs.readFile(path.join(f.root,'architecture-synthesis.json'),'utf8'));expect(stored.jobs[0]).toMatchObject({status:'failed',runtimeCleanup:'released'});
+  }finally{spy.mockRestore();}
+});
 it('denies invented skill bindings before publication and saves validated guidance for independent review',async()=>{
   const f=await fixture(),job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
   f.callbacks.finished(success({...output,skillBindings:[{...output.skillBindings[0],skillId:'invented-skill'}]}));await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('failed'));expect(await fs.readdir(f.checkout)).toEqual([]);
