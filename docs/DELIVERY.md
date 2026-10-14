@@ -40,6 +40,8 @@ QA reviews the actual deployed experience at desktop and mobile widths (1440×90
 
 ## Repository delivery manifest
 
+If the manifest uses `settingsFile`, it must also declare `settingsSha256` as the SHA-256 of the exact approved file bytes. The runner requires a bounded, valid UTF-8 PAC settings JSON file and matching digest before import. Connection references must match exactly one declared connection-reference component and its approved `connection-reference-check` action. Duplicate keys/names, unknown fields and different bindings block deployment. Settings are rechecked before native import and before accepting its result; changing generated settings requires a new manifest digest and reviewed release. Values are not copied into the governance audit. These checks establish content/approval consistency, not live connection ownership, complete environment-variable policy evaluation or tenant acceptance.
+
 ### Target mapping and recoverable actions
 
 Optional manifest fields `targetBinding`, `targetComponents` and `postDeployActions` enable the initial typed Dataverse adapter. Bind `organizationId` and `userId` to the approved target's `WhoAmI` result. Every CLI request explicitly uses the runner's environment URL. The adapter resolves components by logical name in that environment, requires membership in the named solution, and retains target IDs in `target-component-map.json` under the reviewed evidence hash. It rejects ambiguous matches. Canvas mappings retain both the Dataverse row ID and the target's `uniquecanvasappid`; source IDs must not be copied into target links.

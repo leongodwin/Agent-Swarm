@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import {stablePackageDigest} from './deliveryPackage.ts';
+import {verifyDeploymentSettings} from './deploymentSettings.ts';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
@@ -34,7 +35,7 @@ const command = z.object({ executable: z.string().min(1), args: z.array(z.string
 export const deliveryManifest = z.object({
   schemaVersion: z.literal(1), solutionUniqueName: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/),
   solutionVersion: z.string().regex(/^\d+\.\d+\.\d+\.\d+$/), solutionZip: z.string().min(1),
-  settingsFile: z.string().optional(), hasUi: z.boolean(),
+  settingsFile: z.string().min(1).optional(),settingsSha256:z.string().regex(/^[a-f0-9]{64}$/).optional(), hasUi: z.boolean(),
   canvasAuthoringApps: z.array(z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i)).max(30).default([]),
   recovery: z.object({ runbook: z.string().min(1), rehearsalReport: z.string().min(1) }).strict(),
   documentation: z.array(z.string().min(1)).min(3),
@@ -45,6 +46,7 @@ export const deliveryManifest = z.object({
   targetComponents: z.array(targetComponentSchema).max(100).default([]),
   postDeployActions: z.array(targetActionSchema).max(30).default([]),
 }).strict().superRefine((manifest, ctx) => {
+  if(!!manifest.settingsFile!==!!manifest.settingsSha256)ctx.addIssue({code:'custom',message:'Deployment settings require both settingsFile and an approved settingsSha256'});
   if ((manifest.targetComponents.length || manifest.postDeployActions.length) && !manifest.targetBinding) ctx.addIssue({ code: 'custom', message: 'Typed target operations require targetBinding' });
   if (new Set(manifest.targetComponents.map((c) => c.key)).size !== manifest.targetComponents.length || new Set(manifest.postDeployActions.map((a) => a.id)).size !== manifest.postDeployActions.length) ctx.addIssue({ code: 'custom', message: 'Component keys and action IDs must be unique' });
   if (manifest.platformIdentity && !manifest.targetBinding) ctx.addIssue({ code: 'custom', message: 'Platform authentication requires targetBinding' });
@@ -439,10 +441,12 @@ export class DeliveryService {
     if(!releaseId) throw new Error('Lifecycle governance requires a pinned release identity');
     const checkout=path.join(this.root,'delivery-runs',run.id,'checkout');
     let packageSha256:string|undefined;
+    let settingsSha256:string|undefined;
     if(['import','post-deploy','verify','health'].includes(phase)) {
-      const packageFile=await containedFile(checkout,deliveryManifest.parse(manifest).solutionZip);
+      const parsed=deliveryManifest.parse(manifest),packageFile=await containedFile(checkout,parsed.solutionZip);
       packageSha256=await stablePackageDigest(packageFile,this.active?.signal);
       if(run.recovery&&packageSha256!==run.recovery.packageSha256)throw new Error('Pinned deployment package changed; create a new release');
+      if(parsed.settingsFile)settingsSha256=await verifyDeploymentSettings(await containedFile(checkout,parsed.settingsFile),parsed.settingsSha256!,parsed);
     }
     const directory=path.join(this.root,'delivery-runs',run.id,phase==='health'?'health':'evidence');
     const existing=phase==='health'?await fs.readdir(directory).catch((error)=>{if(error.code==='ENOENT')return [] as string[];throw error;}):run.evidence;
@@ -451,7 +455,7 @@ export class DeliveryService {
     if(phase==='health') run.health={...(run.health??{status:'pending',nextCheckAt:new Date().toISOString()}),governanceEvidence:`health/${file}`};
     else run.evidence.push(file);
     await this.save();
-    try {await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,signal:this.active?.signal,evidenceDirectory:directory},directory,index,undefined,async reason=>{
+    try {await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,settingsSha256,signal:this.active?.signal,evidenceDirectory:directory},directory,index,undefined,async reason=>{
       run.log.push(`${new Date().toISOString()} ${phase} governance ${reason==='deadline'?'deadline exceeded':'cancelled'}; waiting for provider cleanup before releasing delivery ownership`);
       await this.changed();
     });}
@@ -543,6 +547,7 @@ export class DeliveryService {
       const zip = await containedFile(checkout, manifest.solutionZip);
       if (run.recovery && await stablePackageDigest(zip,controller.signal) !== run.recovery.packageSha256) throw new Error('Retained deployment package changed; create a new release');
       const settings = manifest.settingsFile ? await containedFile(checkout, manifest.settingsFile) : undefined;
+      if(settings)await verifyDeploymentSettings(settings,manifest.settingsSha256!,manifest);
       // Retain the prior deployment inventory and verify a data-preserving rehearsal before import.
       const priorInventory = await command('pac', ['solution', 'list', '--environment', run.environmentUrl, '--json']);
       if (!run.recovery) {
@@ -576,6 +581,7 @@ export class DeliveryService {
           const output = await command(executable, args,checkout,kind==='import'?async()=>{
             const current=await containedFile(checkout,manifest.solutionZip);
             if(current!==zip||await stablePackageDigest(current,controller.signal)!==run.recovery!.packageSha256)throw new Error('Pinned deployment package changed at native import boundary; reconcile before retrying');
+            if(settings){if(await containedFile(checkout,manifest.settingsFile!)!==settings)throw new Error('Deployment settings path changed at import boundary');await verifyDeploymentSettings(settings,manifest.settingsSha256!,manifest);}
           }:undefined);
           operation.status = 'reported-success'; operation.endedAt = new Date().toISOString();
           if (kind === 'import') operation.platformJobId = importJobId(output);

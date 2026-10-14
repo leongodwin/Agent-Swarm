@@ -8,6 +8,15 @@ const roots:string[]=[];afterEach(async()=>{vi.restoreAllMocks();vi.useRealTimer
 async function fixture(){const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-lifecycle-gate-'));roots.push(root);return root;}
 const request:LifecycleRequest={phase:'import',sourceCommit:'a'.repeat(40),environmentUrl:'https://test.crm4.dynamics.com',releaseId:'release-1',checkout:'unused',manifest:{solution:'Expenses'}};
 const proof=():LifecycleResult=>({...unavailableGovernance(request),status:'clear',artifactSha256:'a'.repeat(64),policySha256:'b'.repeat(64),schemaSha256:'c'.repeat(64),reasons:['Independent complete governance evidence']});
+it.each(['missing','different','matching'])('requires %s settings digest evidence to match the stage context',async state=>{
+  const root=await fixture(),input={...request,settingsSha256:'d'.repeat(64)},result={...proof(),...(state==='missing'?{}:{settingsSha256:(state==='matching'?'d':'e').repeat(64)})};
+  if(state==='matching')await expect(requireLifecycleGovernance(async()=>result,input,root,0)).resolves.toBe('governance-0-import.json');
+  else await expect(requireLifecycleGovernance(async()=>result,input,root,0)).rejects.toThrow('unavailable');
+});
+it.each(['caller','provider'])('rejects settings scope changed by the %s while the provider runs',async actor=>{
+  const root=await fixture(),input={...request,settingsSha256:'d'.repeat(64)};
+  await expect(requireLifecycleGovernance(async provider=>{if(actor==='caller')input.settingsSha256='e'.repeat(64);else provider.settingsSha256='e'.repeat(64);return {...proof(),settingsSha256:'d'.repeat(64)};},input,root,0)).rejects.toThrow('unavailable');
+});
 it.each(['missing-pointer','wrong-archive','missing-content-digest'])('denies clear governance with %s inventory evidence instead of saving a passing receipt',async fault=>{
   const root=await fixture(),value=proof();
   if(fault==='missing-pointer')value.packageInventorySha256='d'.repeat(64);

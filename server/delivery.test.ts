@@ -157,6 +157,19 @@ it('rejects a pinned package replaced before fresh governance even when the prov
   service.checkCapabilities=async(...args)=>{const run=service.view().runs[0];if(run?.recovery)await fs.writeFile(path.join(root,'delivery-runs',run.id,'checkout','release.zip'),'PK replacement after recovery pin');return check(...args);};
   await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];expect(run.phase).toBe('blocked');expect(run.error).toContain('Pinned deployment package changed');expect(calls.some(row=>row.startsWith('pac solution import'))).toBe(false);expect(run.operations).toBeUndefined();
 });
+it.each(['valid','wrong-pin','governance-change','native-change'] as const)('binds %s deployment settings to governance and native import',async mode=>{
+  const {service,repo,deps,calls,root}=await fixture(),native=deps.run,governance=deps.governance!;
+  const content=JSON.stringify({EnvironmentVariables:[{SchemaName:'exp_Environment',Value:'Development'}],ConnectionReferences:[]}),digest=crypto.createHash('sha256').update(content).digest('hex');
+  const configured={...manifest,settingsFile:'deployment-settings.json',settingsSha256:mode==='wrong-pin'?'f'.repeat(64):digest};
+  const change=async()=>{const run=service.view().runs[0];await fs.writeFile(path.join(root,'delivery-runs',run.id,'checkout','deployment-settings.json'),content+' ');};
+  deps.run=async(...args)=>{if(args[0].executable==='git'&&args[0].args[0]==='show'&&args[0].args[1].endsWith(':cubefarm.delivery.json'))return JSON.stringify(configured);const result=await native(...args);if(args[0].executable==='build')await fs.writeFile(path.join(args[1],'deployment-settings.json'),content);if(mode==='native-change'&&args[0].executable==='pac'&&args[0].args[1]==='import')await change();return result;};
+  deps.governance=async request=>{const result={...await governance(request),settingsSha256:request.settingsSha256};if(mode==='governance-change'&&request.phase==='import')await change();return result;};
+  await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
+  expect(calls.filter(row=>row.startsWith('pac solution import'))).toHaveLength(['valid','native-change'].includes(mode)?1:0);
+  if(mode==='valid'){expect(run.phase).toBe('reviewing');const audits=run.evidence.filter(name=>name.startsWith('governance-'));const saved=await Promise.all(audits.map(name=>fs.readFile(path.join(root,'delivery-runs',run.id,'evidence',name),'utf8').then(JSON.parse)));expect(saved.find(row=>row.phase==='import').settingsSha256).toBe(digest);}
+  else {expect(run.phase).toBe('blocked');expect(run.error).toContain('settings');if(mode!=='wrong-pin'){expect(run.operations?.find(row=>row.id==='solution-import')?.status).toBe('unknown');expect(run.recoveryRequired).toBe(true);}}
+});
+it('requires a settings digest and file as a pair in the approved manifest',()=>{expect(deliveryManifest.safeParse({...manifest,settingsFile:'settings.json'}).success).toBe(false);expect(deliveryManifest.safeParse({...manifest,settingsSha256:'a'.repeat(64)}).success).toBe(false);});
 it('requires a committed architecture version before creating a new release',async()=>{
   const {service,repo,calls}=await fixture();const before=calls.length;
   const {architecture:_binding,...unbound}=plan;
