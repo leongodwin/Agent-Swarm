@@ -7,6 +7,28 @@ import {verifyTableStructure} from './tableStructure.ts';
 
 export type AdditionalAction = Extract<TargetAction, { type: 'connection-reference-bind' | 'record-share' | 'schema-check' }>;
 const sameRights = (a: string[], b: string[]) => [...new Set(a)].sort().join(',') === [...new Set(b)].sort().join(',');
+const guid=z.string().uuid();
+const sameId=(a:string,b:string)=>a.toLowerCase()===b.toLowerCase();
+const accessRights=new Set(['ReadAccess','WriteAccess','AppendAccess','AppendToAccess','CreateAccess','DeleteAccess','ShareAccess','AssignAccess']);
+function observedPrincipal(principal:Record<string,unknown>){
+  const declared=principal['@odata.type'];
+  const type=declared===undefined?undefined:z.string().parse(declared).replace(/^#/,'').replace(/^Microsoft\.Dynamics\.CRM\./,'');
+  if(type!==undefined&&type!=='systemuser'&&type!=='team')throw new Error('Unrecognized shared principal type');
+  const keys=['systemuser','team'].filter(key=>principal[`${key}id`]!==undefined);
+  if(keys.length>1||keys.length===1&&type!==undefined&&keys[0]!==type)throw new Error('Conflicting shared principal identities');
+  const kind=type??keys[0];if(!kind)throw new Error('Shared principal identity is missing');
+  const direct=principal[`${kind}id`],owner=principal.ownerid;
+  if(owner!==undefined&&type===undefined)throw new Error('Polymorphic principal requires its declared type');
+  const id=guid.parse(direct??owner);
+  if(owner!==undefined&&!sameId(id,guid.parse(owner)))throw new Error('Conflicting shared principal identities');
+  return {kind,id};
+}
+function observedRights(mask:string){
+  if(mask==='None')return [];
+  const rights=mask.split(',').map(right=>right.trim());
+  if(!rights.length||rights.some(right=>!accessRights.has(right))||new Set(rights).size!==rights.length)throw new Error('Shared access mask is malformed or unsupported');
+  return rights;
+}
 
 export async function reconcileAdditionalAction(action: AdditionalAction, component: MappedComponent, request: Request, run: DeliveryRun, save: () => Promise<void>, owned: () => Promise<void>) {
   let mutate: () => Promise<unknown> = async () => { throw new Error('Schema contract not observed; repair through a reviewed solution import'); };
@@ -36,19 +58,16 @@ export async function reconcileAdditionalAction(action: AdditionalAction, compon
     // polymorphic object. The slash makes the identifier service-root relative.
     const target = { '@odata.id': `/${component.entitySet}(${action.recordId})` };
     observe = async () => {
-      const principal = z.object(action.principalType === 'systemuser' ? { isdisabled: z.literal(false) } : { teamid: z.literal(action.principalId) }).parse(await request('GET', `${action.principalType === 'systemuser' ? 'systemusers' : 'teams'}(${action.principalId})?$select=${action.principalType === 'systemuser' ? 'isdisabled' : 'teamid'}`));
-      void principal;
-      await request('GET', `${component.entitySet}(${action.recordId})`);
-      const result = z.object({ PrincipalAccesses: z.array(z.object({ Principal: z.record(z.string(), z.unknown()), AccessMask: z.string() })) }).parse(await request('GET', `RetrieveSharedPrincipalsAndAccess(Target=@target)?@target=${encodeURIComponent(JSON.stringify(target))}`));
-      const shared = result.PrincipalAccesses.filter((access) => {
-        // Dataverse serializes the polymorphic principal's key as ownerid.
-        // Accept it only when its declared entity type matches the approved principal.
-        const declaredType = String(access.Principal['@odata.type'] ?? '').replace(/^#/, '');
-        const identifier = access.Principal[`${action.principalType}id`] ?? (declaredType === `Microsoft.Dynamics.CRM.${action.principalType}` ? access.Principal.ownerid : undefined);
-        return String(identifier).toLowerCase() === action.principalId.toLowerCase();
-      });
+      const principalResponse=await request('GET', `${action.principalType === 'systemuser' ? 'systemusers' : 'teams'}(${action.principalId})?$select=${action.principalType === 'systemuser' ? 'systemuserid,isdisabled' : 'teamid'}`);
+      const observedId=action.principalType==='systemuser'?z.object({systemuserid:guid,isdisabled:z.literal(false)}).parse(principalResponse).systemuserid:z.object({teamid:guid}).parse(principalResponse).teamid;
+      if(!sameId(observedId,action.principalId))throw new Error('Principal differs from the approved sharing identity');
+      const record=z.object({[component.primaryId!]:guid}).parse(await request('GET', `${component.entitySet}(${action.recordId})?$select=${component.primaryId}`));
+      if(!sameId(record[component.primaryId!] as string,action.recordId))throw new Error('Record differs from the approved sharing identity');
+      const result = z.object({ PrincipalAccesses: z.array(z.object({ Principal: z.record(z.string(), z.unknown()), AccessMask: z.string() })).max(5000),'@odata.nextLink':z.never().optional(),'PrincipalAccesses@odata.nextLink':z.never().optional() }).parse(await request('GET', `RetrieveSharedPrincipalsAndAccess(Target=@target)?@target=${encodeURIComponent(JSON.stringify(target))}`));
+      if(result.PrincipalAccesses.length===5000)throw new Error('Sharing inventory may be truncated');
+      const shared=result.PrincipalAccesses.map(access=>({...observedPrincipal(access.Principal),rights:observedRights(access.AccessMask)})).filter(access=>access.kind===action.principalType&&sameId(access.id,action.principalId));
       if (shared.length > 1) throw new Error('Ambiguous principal access');
-      const rights = shared[0]?.AccessMask.split(',').map((right) => right.trim()).filter((right) => right !== 'None') ?? [];
+      const rights = shared[0]?.rights ?? [];
       if (sameRights(rights, action.rights)) return true;
       if (!sameRights(rights, action.expectedRights)) throw new Error('Sharing changed since approval');
       return false;

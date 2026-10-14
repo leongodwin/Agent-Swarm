@@ -57,9 +57,9 @@ it('grants only the approved record share and recovers a lost response without a
   const action = { id: 'share', type: 'record-share', component: 'reports', recordId: id, principalId: id, principalType: 'systemuser', expectedRights: [], rights: ['ReadAccess'] } as const;
   const request = vi.fn<Request>(async (method, resource) => {
     if (method === 'POST') { shared = true; throw new Error('response lost'); }
-    if (resource.startsWith('systemusers')) return { isdisabled: false };
+    if (resource.startsWith('systemusers')) return { systemuserid:id,isdisabled: false };
     if (resource.startsWith('RetrieveShared')) return { PrincipalAccesses: shared ? [{ Principal: { systemuserid: id }, AccessMask: 'ReadAccess' }] : [] };
-    return {};
+    return {exp_reportid:id};
   });
   const state = run(); const execute = () => reconcileAdditionalAction({ ...action, expectedRights: [], rights: ['ReadAccess'] }, table, request, state, async () => {}, async () => {});
   await expect(execute()).rejects.toThrow('response lost'); await execute();
@@ -72,9 +72,49 @@ it('grants only the approved record share and recovers a lost response without a
 });
 it('recognizes the live polymorphic ownerid principal only with the approved entity type', async () => {
   const action = { id: 'share-team', type: 'record-share', component: 'reports', recordId: id, principalId: id, principalType: 'team', expectedRights: [], rights: ['ReadAccess'] } as const;
-  const request = vi.fn<Request>(async (_method, resource) => resource.startsWith('teams') ? { teamid: id } : resource.startsWith('RetrieveShared') ? { PrincipalAccesses: [{ Principal: { '@odata.type': '#Microsoft.Dynamics.CRM.team', ownerid: id }, AccessMask: 'ReadAccess' }] } : {});
+  const request = vi.fn<Request>(async (_method, resource) => resource.startsWith('teams') ? { teamid: id } : resource.startsWith('RetrieveShared') ? { PrincipalAccesses: [{ Principal: { '@odata.type': '#Microsoft.Dynamics.CRM.team', ownerid: id }, AccessMask: 'ReadAccess' }] } : {exp_reportid:id});
   const state = run();
   await reconcileAdditionalAction({ ...action, expectedRights: [], rights: ['ReadAccess'] }, table, request, state, async () => {}, async () => {});
   expect(state.operations![0].status).toBe('verified');
   expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
+});
+const shareAction={id:'identity-share',type:'record-share' as const,component:'reports',recordId:id,principalId:id,principalType:'systemuser' as const,expectedRights:[],rights:['ReadAccess' as const]};
+const shareRow={Principal:{systemuserid:id},AccessMask:'ReadAccess'};
+function sharingRequest(inventory:unknown,principal:unknown={systemuserid:id,isdisabled:false},record:unknown={exp_reportid:id}){
+  return vi.fn<Request>(async(method,resource)=>{if(method!=='GET')throw new Error('Unexpected mutation');return resource.startsWith('systemusers')?principal:resource.startsWith('RetrieveShared')?inventory:record;});
+}
+it.each([
+  {Principal:{systemuserid:id,'@odata.type':'#Microsoft.Dynamics.CRM.team'},AccessMask:'ReadAccess'},
+  {Principal:{systemuserid:id,teamid:id},AccessMask:'ReadAccess'},
+  {Principal:{systemuserid:id,ownerid:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','@odata.type':'#Microsoft.Dynamics.CRM.systemuser'},AccessMask:'ReadAccess'},
+  {Principal:{ownerid:id},AccessMask:'ReadAccess'},
+  {Principal:{},AccessMask:'ReadAccess'},
+  {Principal:{systemuserid:'invalid'},AccessMask:'ReadAccess'},
+  {Principal:{systemuserid:id,'@odata.type':42},AccessMask:'ReadAccess'},
+  {Principal:{ownerid:id,'@odata.type':'#Microsoft.Dynamics.CRM.businessunit'},AccessMask:'ReadAccess'},
+  {...shareRow,AccessMask:'ReadAccess, None'},
+  {...shareRow,AccessMask:'ReadAccess,ReadAccess'},
+  {...shareRow,AccessMask:'ReadAccess,'},
+  {...shareRow,AccessMask:'ReadAccess,FutureAccess'},
+  {...shareRow,AccessMask:''},
+])('rejects ambiguous principal or access data before granting: %j',async row=>{
+  const request=sharingRequest({PrincipalAccesses:[row]}),state=run();
+  await expect(reconcileAdditionalAction(shareAction,table,request,state,async()=>{},async()=>{})).rejects.toThrow();expect(request.mock.calls.every(([method])=>method==='GET')).toBe(true);expect(state.operations).toEqual([]);
+});
+it.each([{PrincipalAccesses:[shareRow,shareRow]},{PrincipalAccesses:[], '@odata.nextLink':'more'},{PrincipalAccesses:[], 'PrincipalAccesses@odata.nextLink':'more'},{PrincipalAccesses:Array.from({length:5000},()=>shareRow)}])('rejects duplicate or incomplete sharing inventories without writes',async inventory=>{
+  const request=sharingRequest(inventory);await expect(reconcileAdditionalAction(shareAction,table,request,run(),async()=>{},async()=>{})).rejects.toThrow();expect(request.mock.calls.every(([method])=>method==='GET')).toBe(true);
+});
+it.each([
+  [{isdisabled:false},{exp_reportid:id}],
+  [{systemuserid:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',isdisabled:false},{exp_reportid:id}],
+  [{systemuserid:id,isdisabled:true},{exp_reportid:id}],
+  [{systemuserid:id,isdisabled:false},{}],
+  [{systemuserid:id,isdisabled:false},{exp_reportid:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}],
+])('requires both approved principal and record identity before inspecting shares',async(principal,record)=>{
+  const request=sharingRequest({PrincipalAccesses:[]},principal,record);await expect(reconcileAdditionalAction(shareAction,table,request,run(),async()=>{},async()=>{})).rejects.toThrow();expect(request.mock.calls.some(([,resource])=>resource.startsWith('RetrieveShared'))).toBe(false);expect(request.mock.calls.every(([method])=>method==='GET')).toBe(true);
+});
+it('recognizes consistent declared and explicit identities while keeping excessive rights blocked',async()=>{
+  const request=sharingRequest({PrincipalAccesses:[{Principal:{'@odata.type':'#Microsoft.Dynamics.CRM.systemuser',systemuserid:id,ownerid:id},AccessMask:'ReadAccess'}]});
+  await reconcileAdditionalAction(shareAction,table,request,run(),async()=>{},async()=>{});expect(request.mock.calls.every(([method])=>method==='GET')).toBe(true);
+  const excessive=sharingRequest({PrincipalAccesses:[{...shareRow,AccessMask:'ReadAccess, ShareAccess'}]});await expect(reconcileAdditionalAction(shareAction,table,excessive,run(),async()=>{},async()=>{})).rejects.toThrow('Sharing changed since approval');
 });
