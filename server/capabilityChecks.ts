@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -178,6 +179,7 @@ export class CapabilityService {
   private stop = new AbortController();
   private initialized = false;
   private liveResults = new Set<string>();
+  private persistenceFailure=false;
   onChange = () => {};
   constructor(private root: string, private demo: boolean, private probe = runCapabilityProbe) {}
   async init() {
@@ -189,9 +191,9 @@ export class CapabilityService {
       const file = path.join(this.root, 'capabilities.json');
       if ((await fs.stat(file)).size > 4 * 1024 * 1024) {found = true; throw new Error('oversized');}
       found = true;
-      const raw = await fs.readFile(file, 'utf8');
+      const raw = await fs.readFile(file);
       if (Buffer.byteLength(raw) > 4 * 1024 * 1024) throw new Error('oversized');
-      const input = JSON.parse(raw);
+      const input = parseUnambiguousJson(new TextDecoder('utf-8',{fatal:true}).decode(raw),{maxBytes:4*1024*1024}) as {configs?:unknown;results?:unknown};
       for (const map of [input?.configs, input?.results]) if (map && typeof map === 'object') {
         const keys = Object.keys(map);
         if (keys.length > 1024) throw new Error('oversized project map');
@@ -201,13 +203,17 @@ export class CapabilityService {
     } catch (error) { if (found || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Capability state is unreadable or invalid; preserve and repair capabilities.json before execution'); }
     this.initialized = true;
   }
-  private save() { return this.writer.write(() => atomicWrite(path.join(this.root, 'capabilities.json'), JSON.stringify({ configs: this.configs, results: this.results }, null, 2))); }
+  private async persist(configs:typeof this.configs,results:typeof this.results){
+    try{if(this.stop.signal.aborted)throw new Error('Capability service is closing');await atomicWrite(path.join(this.root,'capabilities.json'),JSON.stringify({configs,results},null,2),()=>!this.stop.signal.aborted);if(this.stop.signal.aborted)throw new Error('Capability service is closing');}
+    catch{this.persistenceFailure=true;this.cache.clear();this.liveResults.clear();try{this.onChange();}catch{/* Status remains available through the read API. */}throw new Error('Capability evidence publication failed; repair storage and refresh readiness');}
+    this.persistenceFailure=false;
+  }
   view() {
     const results = Object.values(this.results).map(result => {
-      if (this.liveResults.has(result.repoId) && currentObservation(result)) return result;
+      if (!this.persistenceFailure&&this.liveResults.has(result.repoId) && currentObservation(result)) return result;
       return {...result, status: 'blocked' as const, checks: [...result.checks, {id:'current-evidence', category:'environment', passed:false, detail:'Saved or expired observation is not current verification', remedy:'Refresh capability checks in this office process'}]};
     });
-    return structuredClone({results, configuredProjects: Object.keys(this.configs)});
+    return structuredClone({results, configuredProjects: Object.keys(this.configs),...(this.persistenceFailure?{unavailableReason:'Capability evidence publication failed; repair storage and refresh readiness'}:{})});
   }
   configurationFingerprint(repoIds: string[]) {
     return crypto.createHash('sha256').update(JSON.stringify([...new Set(repoIds)].sort().map(id => [id, this.configs[id] ?? null]))).digest('hex');
@@ -217,23 +223,25 @@ export class CapabilityService {
     projectKey.parse(repoId);
     if (this.stop.signal.aborted) throw new Error('Capability service is closing');
     if (this.demo) throw new HttpError(409, 'Demo cannot configure live capability probes');
-    this.configs[repoId] = capabilityConfigSchema.parse(input);
-    this.liveResults.delete(repoId);
-    for (const [key, entry] of this.cache) if (entry.result.repoId === repoId) this.cache.delete(key);
-    delete this.results[repoId]; await this.save(); this.onChange();
+    const parsed=capabilityConfigSchema.parse(input);
+    await this.writer.write(async()=>{
+      const configs={...this.configs,[repoId]:parsed},results={...this.results};delete results[repoId];
+      await this.persist(configs,results);this.configs=configs;this.results=results;
+      this.liveResults.delete(repoId);for(const [key,entry] of this.cache)if(entry.result.repoId===repoId)this.cache.delete(key);
+    });this.onChange();
   }
   async check(repoId: string, cwd: string, environmentUrl: string | undefined, cli = 'git', force = false): Promise<CapabilityResult> {
     if (!this.initialized) throw new Error('Capability state is not initialized; preserve and repair before execution');
     projectKey.parse(repoId);
     if (this.stop.signal.aborted) throw new Error('Capability service is closing');
     if (this.demo) return { repoId, status: 'ready', checkedAt: new Date().toISOString(), expiresAt: new Date().toISOString(), checks: [] };
-    const config = this.configs[repoId];
+    const config = this.configs[repoId]?structuredClone(this.configs[repoId]):undefined;
     const hash = crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl, cli, cwd: path.resolve(cwd) })).digest('hex');
     const pendingKey = `${repoId}:${hash}`;
     for (const [key, entry] of this.cache) if (!currentObservation(entry.result)) this.cache.delete(key);
     const cache = this.cache.get(pendingKey);
-    if (!force && cache?.key === hash && Date.parse(cache.result.expiresAt) > Date.now()) return structuredClone(cache.result);
-    if (this.pending.has(pendingKey)) return this.pending.get(pendingKey)!;
+    if (!this.persistenceFailure&&!force && cache?.key === hash && Date.parse(cache.result.expiresAt) > Date.now()) return structuredClone(cache.result);
+    if (this.pending.has(pendingKey)) return structuredClone(await this.pending.get(pendingKey)!);
     const work = (async () => {
       const checks: CapabilityResult['checks'] = [];
       const probe = (check: CapabilityConfig['checks'][number]) => this.probe(check, cwd, AbortSignal.any([this.stop.signal, AbortSignal.timeout(15_000)]), this.root);
@@ -250,11 +258,18 @@ export class CapabilityService {
       catch { checks.push({ id: 'worker-cli', category: 'cli', passed: false, detail: 'Worker CLI is unavailable', remedy: 'Install the selected worker CLI and refresh readiness.' }); }
       if (JSON.stringify(config) !== JSON.stringify(this.configs[repoId])) checks.push({ id: 'configuration-changed', category: 'environment', passed: false, detail: 'Configuration changed during the check', remedy: 'Refresh readiness with the latest configuration' });
       const result: CapabilityResult = { repoId, configHash: crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl })).digest('hex'), checkedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), status: checks.every((c) => c.passed) ? 'ready' : 'blocked', checks };
-      const changed = JSON.stringify(this.results[repoId]?.checks) !== JSON.stringify(result.checks);
-      this.results[repoId] = result;
-      this.liveResults.add(repoId);
-      if (this.cache.size >= 1024) {const oldest = this.cache.keys().next().value; if (oldest !== undefined) this.cache.delete(oldest);}
-      this.cache.set(pendingKey, { key: hash, result }); await this.save(); if (changed) this.onChange(); return structuredClone(result);
+      let changed=false;
+      await this.writer.write(async()=>{
+        if(JSON.stringify(config)!==JSON.stringify(this.configs[repoId])&&!result.checks.some(check=>check.id==='configuration-changed')){result.checks.push({id:'configuration-changed',category:'environment',passed:false,detail:'Configuration changed before evidence publication',remedy:'Refresh readiness with the latest configuration'});result.status='blocked';}
+        changed=JSON.stringify(this.results[repoId]?.checks)!==JSON.stringify(result.checks);
+        const results={...this.results,[repoId]:result};await this.persist(this.configs,results);this.results=results;
+        if(currentObservation(result)){
+          this.liveResults.add(repoId);if(this.cache.size>=1024){const oldest=this.cache.keys().next().value;if(oldest!==undefined)this.cache.delete(oldest);}
+          this.cache.set(pendingKey,{key:hash,result});
+        }
+      });
+      if(!currentObservation(result)){changed=true;result.status='blocked';result.checks.push({id:'current-evidence',category:'environment',passed:false,detail:'Observation expired during publication',remedy:'Refresh readiness with current evidence'});}
+      if(changed)this.onChange();return structuredClone(result);
     })().finally(() => this.pending.delete(pendingKey));
     this.pending.set(pendingKey, work); return work;
   }

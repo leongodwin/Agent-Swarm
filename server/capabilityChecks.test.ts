@@ -39,13 +39,43 @@ afterEach(async () => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) 
 const target = 'https://test.crm4.dynamics.com';
 const config = capabilityConfigSchema.parse({ environmentUrl: target, checks: ['authentication', 'environment', 'licence', 'mcp', 'cli', 'connector'].map((category) => ({ id: category, category, remedy: `Reconnect the ${category} capability`, probe: category === 'cli' ? { kind: 'cli', executable: 'node', minimumVersion: '22.0.0' } : category === 'mcp' ? { kind: 'mcp', url: 'http://localhost:1234/mcp', tools: ['compile_canvas'] } : { kind: 'http', url: 'https://provider.test/status', pointer: [category], equals: true } })) });
 async function fixture() { const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-capabilities-')); dirs.push(root); const probe = vi.fn<typeof runCapabilityProbe>(async () => {}); const service = new CapabilityService(root, false, probe); await service.init(); return { root, probe, service }; }
+it('never reuses ready evidence after publication fails and requires fresh probes after repair',async()=>{
+ const {root,service,probe}=await fixture();await service.configure('repo',config);await service.check('repo',root,target);const file=path.join(root,'capabilities.json'),before=await fs.readFile(file),count=probe.mock.calls.length,changed=vi.fn();service.onChange=changed;
+ vi.spyOn(fs,'rename').mockRejectedValueOnce(new Error('private-storage-detail'));await expect(service.check('repo',root,target,'git',true)).rejects.toThrow('publication failed');
+ expect(service.view()).toMatchObject({unavailableReason:expect.stringContaining('publication failed'),results:[{status:'blocked'}]});expect(JSON.stringify(service.view())).not.toContain('private-storage-detail');expect(await fs.readFile(file)).toEqual(before);expect(changed).toHaveBeenCalledOnce();
+ const afterFailure=probe.mock.calls.length;expect(afterFailure).toBeGreaterThan(count);expect((await service.check('repo',root,target)).status).toBe('ready');expect(probe.mock.calls.length).toBeGreaterThan(afterFailure);expect(service.view().unavailableReason).toBeUndefined();
+});
+it('does not publish a failed configuration change to its live fingerprint or disk',async()=>{
+ const {root,service}=await fixture();await service.configure('repo',config);await service.check('repo',root,target);const fingerprint=service.configurationFingerprint(['repo']),file=path.join(root,'capabilities.json'),before=await fs.readFile(file),updated={...config,environmentUrl:'https://changed.crm4.dynamics.com'};
+ vi.spyOn(fs,'rename').mockRejectedValueOnce(new Error('private-storage-detail'));await expect(service.configure('repo',updated)).rejects.toThrow('publication failed');expect(service.configurationFingerprint(['repo'])).toBe(fingerprint);expect(await fs.readFile(file)).toEqual(before);expect(service.view().results[0].status).toBe('blocked');
+ await service.configure('repo',updated);expect(service.configurationFingerprint(['repo'])).not.toBe(fingerprint);expect(service.view().unavailableReason).toBeUndefined();
+});
+async function holdRename(){
+ const original=fs.rename;let entered=false,release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+ vi.spyOn(fs,'rename').mockImplementationOnce(async(...args)=>{entered=true;await gate;return original(...args);});
+ return {release,wait:()=>vi.waitFor(()=>expect(entered).toBe(true))};
+}
+it('publishes readiness only after acknowledged storage and isolates concurrent callers',async()=>{
+ const {root,service}=await fixture();await service.configure('repo',config);const gate=await holdRename(),first=service.check('repo',root,target),second=service.check('repo',root,target);await gate.wait();expect(service.view().results).toEqual([]);gate.release();const [a,b]=await Promise.all([first,second]);expect(a.status).toBe('ready');expect(b.status).toBe('ready');a.status='blocked';a.checks[0].passed=false;expect(b.status).toBe('ready');expect(b.checks[0].passed).toBe(true);expect(service.view().results[0].status).toBe('ready');
+});
+it('rechecks configuration at publication after a queued configuration change',async()=>{
+ const {root,service}=await fixture();await service.configure('repo',config);const fingerprint=service.configurationFingerprint(['repo']),gate=await holdRename(),configure=service.configure('repo',{...config,environmentUrl:'https://changed.crm4.dynamics.com'});await gate.wait();expect(service.configurationFingerprint(['repo'])).toBe(fingerprint);
+ const check=service.check('repo',root,target);gate.release();await configure;const result=await check;expect(result.status).toBe('blocked');expect(result.checks.some(row=>row.id==='configuration-changed'&&!row.passed)).toBe(true);expect(service.view().results[0].status).toBe('blocked');
+});
+it('withholds readiness that expires while publication is awaiting acknowledgement',async()=>{
+ const {root,service}=await fixture();await service.configure('repo',config);const gate=await holdRename(),check=service.check('repo',root,target);await gate.wait();vi.useFakeTimers();
+ try{vi.setSystemTime(Date.now()+61000);gate.release();const result=await check;expect(result.status).toBe('blocked');expect(result.checks.some(row=>row.id==='current-evidence'&&!row.passed)).toBe(true);expect(service.view().results[0].status).toBe('blocked');}finally{vi.useRealTimers();}
+});
+it('cannot publish live readiness after shutdown begins during storage acknowledgement',async()=>{
+ const {root,service}=await fixture();await service.configure('repo',config);const gate=await holdRename(),check=service.check('repo',root,target).then(()=>null,error=>error);await gate.wait();const close=service.close().then(()=>null,error=>error);gate.release();expect((await check).message).toContain('publication failed');expect((await close).message).toContain('publication failed');expect(service.view().results.every(row=>row.status==='blocked')).toBe(true);await expect(service.check('repo',root,target)).rejects.toThrow('closing');
+});
 
 it('rejects malformed or contradictory saved capability state without running probes or replacing its bytes',async()=>{
   const {root,probe}=await fixture();const file=path.join(root,'capabilities.json');
   const checkedAt=new Date().toISOString(),expiresAt=new Date(Date.now()+60000).toISOString();
   const good={repoId:'repo',checkedAt,expiresAt,status:'ready',checks:[{id:'worker-cli',category:'cli',passed:true,detail:'Observed',remedy:''}]};
   const badConfig={...config,checks:config.checks.map(check=>check.category==='cli'?{...check,probe:{kind:'cli',executable:'unapproved-executable',minimumVersion:'1.0.0'}}:check)};
-  for(const raw of ['broken JSON','null','[]','{"configs":{"__proto__":{}},"results":{}}','{"configs":{"constructor":{}},"results":{}}',JSON.stringify({configs:{repo:badConfig},results:{}}),JSON.stringify({configs:{},results:{},schemaVersion:99}),
+  for(const raw of ['broken JSON','null','[]','{"configs":{"private":"unknown"},"configs":{},"results":{}}','{"configs":{},"results":{},"\\u0072esults":{}}','{"configs":{"__proto__":{}},"results":{}}','{"configs":{"constructor":{}},"results":{}}',JSON.stringify({configs:{repo:badConfig},results:{}}),JSON.stringify({configs:{},results:{},schemaVersion:99}),
     JSON.stringify({configs:{},results:{repo:{...good,checks:[]}}}),JSON.stringify({configs:{},results:{repo:{...good,repoId:'different-project'}}}),
     JSON.stringify({configs:{},results:{repo:{...good,expiresAt:checkedAt}}}),JSON.stringify({configs:{},results:{repo:{...good,checks:[{...good.checks[0],passed:false}]}}}),
     JSON.stringify({configs:{},results:{repo:{...good,checks:[...good.checks,...good.checks]}}})]) {
