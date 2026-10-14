@@ -168,15 +168,18 @@ it('rejects package drift and omitted components/bindings while keeping unsuppor
 });
 
 it('rejects independently packaged undeclared relationships at each stage before policy observation',async()=>{
-  const custom='<Entities><Entity><Name>exp_report</Name><EntityInfo><entity Name="exp_report"><attributes><attribute><LogicalName>exp_code</LogicalName><Type>nvarchar</Type><RequiredLevel>none</RequiredLevel></attribute></attributes></entity></EntityInfo></Entity></Entities><EntityRelationships><EntityRelationship Name="exp_Report_Line"><EntityRelationshipType>OneToMany</EntityRelationshipType><ReferencedEntityName>exp_report</ReferencedEntityName><ReferencingEntityName>exp_line</ReferencingEntityName><ReferencingAttributeName>exp_report</ReferencingAttributeName><CascadeDelete>Restrict</CascadeDelete></EntityRelationship></EntityRelationships>';
+  const custom='<Entities><Entity><Name>exp_report</Name><EntityInfo><entity Name="exp_report"><attributes><attribute><LogicalName>exp_reportid</LogicalName><Type>primarykey</Type><RequiredLevel>systemrequired</RequiredLevel></attribute><attribute><LogicalName>exp_code</LogicalName><Type>nvarchar</Type><RequiredLevel>none</RequiredLevel></attribute></attributes></entity></EntityInfo></Entity></Entities><EntityRelationships><EntityRelationship Name="exp_Report_Line"><EntityRelationshipType>OneToMany</EntityRelationshipType><ReferencedEntityName>exp_report</ReferencedEntityName><ReferencingEntityName>exp_line</ReferencingEntityName><ReferencingAttributeName>exp_report</ReferencingAttributeName><CascadeDelete>Restrict</CascadeDelete></EntityRelationship></EntityRelationships>';
   const input=await packaged(custom,'<RootComponent type="1" schemaName="exp_report" behavior="0"/>');
-  const declared={...input.manifest,targetComponents:[...input.manifest.targetComponents,{key:'report',kind:'dataverse-table',logicalName:'exp_report'}],postDeployActions:[...input.manifest.postDeployActions,{id:'schema',type:'schema-check',component:'report',columns:[{name:'exp_code',type:'String',required:'None'}]}]};
+  const declared={...input.manifest,targetComponents:[...input.manifest.targetComponents,{key:'report',kind:'dataverse-table',logicalName:'exp_report'}],postDeployActions:[...input.manifest.postDeployActions,{id:'schema',type:'schema-check',component:'report',columns:[{name:'exp_code',type:'String',required:'None'},{name:'exp_reportid',type:'Uniqueidentifier',required:'SystemRequired'}]}]};
   const observe=vi.fn(()=>observation());const check=createDeliveryGovernance({observation:observe});
   for(const phase of ['build','test','import','post-deploy','verify','health'] as const){
     const denied=await check({...input,manifest:declared,phase});expect(denied.status).toBe('blocked');expect(denied.reasons[0]).toContain('Package relationship');expect(denied.packageInventoryFile).toBeDefined();
   }
   expect(observe).not.toHaveBeenCalled();
   const fixed=structuredClone(declared);Object.assign(fixed.postDeployActions[fixed.postDeployActions.length-1],{structure:{relationships:[{kind:'one-to-many',schemaName:'exp_Report_Line',referencedEntity:'exp_report',referencedAttribute:'exp_reportid',referencingEntity:'exp_line',referencingAttribute:'exp_report',cascade:{Delete:'Restrict'}}]}});
+  const wrong=structuredClone(fixed);const action=wrong.postDeployActions[wrong.postDeployActions.length-1] as any;action.structure.relationships[0].referencedAttribute='exp_wrongid';
+  for(const phase of ['build','test','import','post-deploy','verify','health'] as const){const denied=await check({...input,manifest:wrong,phase});expect(denied.status).toBe('blocked');expect(denied.reasons.join(' ')).toContain('Package relationship');}
+  expect(observe).not.toHaveBeenCalled();
   const result=await check({...input,manifest:fixed});expect(result.status).toBe('unavailable');expect(result.reasons.join(' ')).toContain('Supported packaged');
 });
 it('rejects conflicting packaged column limits at every stage without granting after a declaration repair',async()=>{

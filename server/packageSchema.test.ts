@@ -7,25 +7,26 @@ const roots:string[]=[];afterEach(async()=>{await Promise.all(roots.splice(0).ma
 const relation='<EntityRelationship Name="exp_Report_Line"><EntityRelationshipType>OneToMany</EntityRelationshipType><ReferencedEntityName>exp_Report</ReferencedEntityName><ReferencingEntityName>exp_Line</ReferencingEntityName><ReferencingAttributeName>exp_Report</ReferencingAttributeName><CascadeDelete>Restrict</CascadeDelete><CascadeAssign>NoCascade</CascadeAssign></EntityRelationship>';
 const many='<EntityRelationship Name="exp_Report_Tag"><EntityRelationshipType>ManyToMany</EntityRelationshipType><FirstEntityName>exp_Report</FirstEntityName><SecondEntityName>exp_Tag</SecondEntityName><IntersectEntityName>exp_Report_Tag</IntersectEntityName></EntityRelationship>';
 const key='<EntityKey><Name>exp_Report_Key</Name><EntityKeyAttributes><AttributeName>exp_code</AttributeName></EntityKeyAttributes></EntityKey>';
-async function fixture(options:{relationships?:string;keys?:string;type?:string;behavior?:string;constraints?:string}={}){
+async function fixture(options:{relationships?:string;keys?:string;type?:string;behavior?:string;constraints?:string;primary?:string}={}){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-schema-package-'));roots.push(root);
-  const entries={'solution.xml':`<ImportExportXml><SolutionManifest><UniqueName>Expenses</UniqueName><Version>1.0.0.0</Version><Managed>0</Managed><RootComponents><RootComponent type="1" schemaName="exp_report" behavior="${options.behavior??'0'}"/></RootComponents></SolutionManifest></ImportExportXml>`,'customizations.xml':`<ImportExportXml><Entities><Entity><Name>exp_Report</Name><EntityInfo><entity Name="exp_Report"><attributes><attribute><LogicalName>exp_code</LogicalName><Type>${options.type??'nvarchar'}</Type><RequiredLevel>none</RequiredLevel>${options.constraints??''}</attribute></attributes><EntityKeys>${options.keys??key}</EntityKeys></entity></EntityInfo></Entity></Entities><EntityRelationships>${options.relationships??relation+many}</EntityRelationships></ImportExportXml>`};
+  const entries={'solution.xml':`<ImportExportXml><SolutionManifest><UniqueName>Expenses</UniqueName><Version>1.0.0.0</Version><Managed>0</Managed><RootComponents><RootComponent type="1" schemaName="exp_report" behavior="${options.behavior??'0'}"/></RootComponents></SolutionManifest></ImportExportXml>`,'customizations.xml':`<ImportExportXml><Entities><Entity><Name>exp_Report</Name><EntityInfo><entity Name="exp_Report"><attributes>${options.primary??'<attribute><LogicalName>exp_reportid</LogicalName><Type>primarykey</Type><RequiredLevel>systemrequired</RequiredLevel></attribute>'}<attribute><LogicalName>exp_code</LogicalName><Type>${options.type??'nvarchar'}</Type><RequiredLevel>none</RequiredLevel>${options.constraints??''}</attribute></attributes><EntityKeys>${options.keys??key}</EntityKeys></entity></EntityInfo></Entity></Entities><EntityRelationships>${options.relationships??relation+many}</EntityRelationships></ImportExportXml>`};
   const zip=new ZipFile();const chunks:Buffer[]=[];const done=new Promise<Buffer>((resolve,reject)=>{zip.outputStream.on('data',chunk=>chunks.push(chunk));zip.outputStream.on('end',()=>resolve(Buffer.concat(chunks)));zip.outputStream.on('error',reject);});for(const [name,value] of Object.entries(entries))zip.addBuffer(Buffer.from(value),name);zip.end();const file=path.join(root,'release.zip');await fs.writeFile(file,await done);return inspectSolutionPackage(file);
 }
-const manifest: {targetComponents:TargetComponent[];postDeployActions:TargetAction[]}={targetComponents:[{key:'report',kind:'dataverse-table',logicalName:'exp_report'}],postDeployActions:[{id:'schema',type:'schema-check',component:'report',columns:[{name:'exp_code',type:'String',required:'None'}],structure:{keys:[{schemaName:'exp_Report_Key',attributes:['exp_code']}],relationships:[{kind:'one-to-many',schemaName:'exp_Report_Line',referencedEntity:'exp_report',referencedAttribute:'exp_reportid',referencingEntity:'exp_line',referencingAttribute:'exp_report',cascade:{Delete:'Restrict',Assign:'NoCascade'}},{kind:'many-to-many',schemaName:'exp_Report_Tag',entity1:'exp_report',entity2:'exp_tag',intersectEntity:'exp_report_tag'}]}}]};
+const manifest: {targetComponents:TargetComponent[];postDeployActions:TargetAction[]}={targetComponents:[{key:'report',kind:'dataverse-table',logicalName:'exp_report'}],postDeployActions:[{id:'schema',type:'schema-check',component:'report',columns:[{name:'exp_code',type:'String',required:'None'},{name:'exp_reportid',type:'Uniqueidentifier',required:'SystemRequired'}],structure:{keys:[{schemaName:'exp_Report_Key',attributes:['exp_code']}],relationships:[{kind:'one-to-many',schemaName:'exp_Report_Line',referencedEntity:'exp_report',referencedAttribute:'exp_reportid',referencingEntity:'exp_line',referencingAttribute:'exp_report',cascade:{Delete:'Restrict',Assign:'NoCascade'}},{kind:'many-to-many',schemaName:'exp_Report_Tag',entity1:'exp_report',entity2:'exp_tag',intersectEntity:'exp_report_tag'}]}}]};
 it('extracts checksum-bound native XML structures and matches the scoped approved facts',async()=>{
   const inventory=await fixture();expect(inventory.archiveComplete).toBe(true);expect(inventory.complianceVerified).toBe(false);
   expect(inventory.tables[0].keys).toEqual([{schemaName:'exp_Report_Key',attributes:['exp_code'],metadataSha256:expect.stringMatching(/^[a-f0-9]{64}$/)}]);
-  expect(inventory.relationships).toHaveLength(2);expect(inventory.relationships[0]).toMatchObject({kind:'one-to-many',complete:true,referencingAttribute:'exp_report',cascade:{Delete:'Restrict'}});
+  expect(inventory.relationships).toHaveLength(2);expect(inventory.relationships[0]).toMatchObject({kind:'one-to-many',complete:true,referencedAttribute:'exp_reportid',referencingAttribute:'exp_report',cascade:{Delete:'Restrict'}});
   expect(comparePackageSchema(inventory,manifest)).toMatchObject({status:'matched'});
   expect(inventory.resourceInventoryComplete).toBe(false);expect(inventory.issues.join(' ')).toContain('effective security');
 });
-it.each(['table','column','type','required','key','relationship','cascade','intersect','duplicate-contract'] as const)('rejects packaged %s not covered by the exact approved declaration',async mode=>{
+it.each(['table','column','type','required','key','relationship','cascade','intersect','duplicate-contract','referenced-column'] as const)('rejects packaged %s not covered by the exact approved declaration',async mode=>{
   const inventory=await fixture(),modified=structuredClone(manifest);const action=modified.postDeployActions[0];if(action.type!=='schema-check')throw new Error('fixture');
   if(mode==='table')modified.targetComponents=[];if(mode==='column')action.columns=[];if(mode==='type')action.columns[0].type='Integer';if(mode==='required')action.columns[0].required='ApplicationRequired';
   if(mode==='key')action.structure!.keys![0].attributes=['exp_other'];if(mode==='relationship')action.structure!.relationships=[];
   if(mode==='cascade'){const expected=action.structure!.relationships![0];if(expected.kind==='one-to-many')expected.cascade.Assign='Cascade';}
   if(mode==='intersect'){const expected=action.structure!.relationships![1];if(expected.kind==='many-to-many')expected.intersectEntity='different';}
+  if(mode==='referenced-column'){const expected=action.structure!.relationships![0];if(expected.kind==='one-to-many')expected.referencedAttribute='exp_wrongid';}
   if(mode==='duplicate-contract')modified.postDeployActions.push({...action,id:'second'});
   expect(comparePackageSchema(inventory,modified).status).toBe('blocked');
 });
@@ -51,4 +52,36 @@ it('binds native XML character/access constraints to exact reviewed declarations
   action.columns[0].constraints.access!.secured=false;expect(comparePackageSchema(inventory,modified).status).toBe('blocked');
   const unavailable=await fixture({constraints:'<Format>unsupported</Format>'});delete action.columns[0].constraints;
   expect(comparePackageSchema(unavailable,modified).status).toBe('unavailable');
+});
+
+it.each(['missing','ambiguous','external','ordinary-guid'] as const)('does not infer a referenced column from %s source metadata',async mode=>{
+  const primary=mode==='ambiguous'?'<attribute><LogicalName>exp_reportid</LogicalName><Type>primarykey</Type><RequiredLevel>systemrequired</RequiredLevel></attribute><attribute><LogicalName>exp_secondid</LogicalName><Type>primarykey</Type><RequiredLevel>none</RequiredLevel></attribute>':mode==='ordinary-guid'?'<attribute><LogicalName>exp_reportid</LogicalName><Type>uniqueidentifier</Type><RequiredLevel>systemrequired</RequiredLevel></attribute>':'';
+  const relationships=mode==='external'?relation.replace('<ReferencedEntityName>exp_Report</ReferencedEntityName>','<ReferencedEntityName>systemuser</ReferencedEntityName>').replace('<ReferencingEntityName>exp_Line</ReferencingEntityName>','<ReferencingEntityName>exp_Report</ReferencingEntityName>'):relation;
+  const inventory=await fixture({primary,relationships}),modified=structuredClone(manifest),action=modified.postDeployActions[0];if(action.type!=='schema-check')throw new Error('fixture');
+  if(mode==='ambiguous')action.columns.push({name:'exp_secondid',type:'Uniqueidentifier',required:'None'});
+  if(mode==='external'){const expected=action.structure!.relationships![0];if(expected.kind!=='one-to-many')throw new Error('fixture');expected.referencedEntity='systemuser';expected.referencingEntity='exp_report';}
+  expect(comparePackageSchema(inventory,modified).status).toBe('unavailable');
+  expect(inventory.relationships[0].referencedAttribute).toBeUndefined();
+  expect(inventory.relationships[0].complete).toBe(false);
+});
+it.each(['missing-delete','invalid-endpoint','invalid-cascade','missing-primary'] as const)('retains known relationship denials alongside %s uncertainty',async mode=>{
+  let relationships=relation;
+  if(mode==='missing-delete')relationships=relationships.replace('<CascadeDelete>Restrict</CascadeDelete>','');
+  if(mode==='invalid-endpoint')relationships=relationships.replace('<ReferencedEntityName>exp_Report</ReferencedEntityName>','<ReferencedEntityName>invalid-name</ReferencedEntityName>');
+  if(mode==='invalid-cascade')relationships=relationships.replace('Restrict','Unknown');
+  const inventory=await fixture({relationships, ...(mode==='missing-primary'?{primary:''}:{})});
+  const modified=structuredClone(manifest),action=modified.postDeployActions[0];if(action.type!=='schema-check')throw new Error('fixture');const expected=action.structure!.relationships![0];if(expected.kind!=='one-to-many')throw new Error('fixture');expected.cascade.Assign='Cascade';
+  expect(inventory.relationships[0].cascade.Assign).toBe('NoCascade');
+  expect(comparePackageSchema(inventory,modified).status).toBe('blocked');
+});
+
+it.each(['one-to-many','many-to-many'] as const)('retains independently parsed endpoints after invalid %s fields',async kind=>{
+  const relationships=kind==='one-to-many'?relation.replace('exp_Report</ReferencedEntityName>','invalid-name</ReferencedEntityName>').replace('exp_Line</ReferencingEntityName>','exp_other</ReferencingEntityName>'):many.replace('exp_Report</FirstEntityName>','invalid-name</FirstEntityName>').replace('exp_Tag</SecondEntityName>','exp_other</SecondEntityName>');
+  const inventory=await fixture({relationships});expect(inventory.relationships[0].complete).toBe(false);
+  // The remaining valid endpoint is undeclared even though a different endpoint is malformed.
+  expect(comparePackageSchema(inventory,manifest).status).toBe('blocked');
+});
+it('keeps unidentified malformed endpoints unavailable rather than guessing a contract',async()=>{
+  const relationships=relation.replace('exp_Report</ReferencedEntityName>','invalid-name</ReferencedEntityName>').replace('exp_Line</ReferencingEntityName>','invalid-name</ReferencingEntityName>');
+  const inventory=await fixture({relationships});expect(comparePackageSchema(inventory,manifest).status).toBe('unavailable');
 });

@@ -14,7 +14,7 @@ const logical=(value:any)=>{const name=text(value).toLowerCase();if(!/^[a-z_][a-
 const guid=(value:string)=>{const id=value.replace(/[{}]/g,'').toLowerCase();if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))throw new Error('Invalid component ID');return id;};
 export interface PackageFile {path:string;bytes:number;sha256:string}
 export interface PackageResource {id:string;kind:'cloud-flow'|'canvas';complete:boolean;connectors:string[];tables:string[];schemaReferences?:ResourceSchemaReference[];operations:{type:string;operationId?:string;connector?:string}[]}
-export interface PackageRelationship {schemaName:string;kind:'one-to-many'|'many-to-many'|'unsupported';complete:boolean;metadataSha256:string;referencedEntity?:string;referencingEntity?:string;referencingAttribute?:string;entity1?:string;entity2?:string;intersectEntity?:string;cascade:Record<string,string>}
+export interface PackageRelationship {schemaName:string;kind:'one-to-many'|'many-to-many'|'unsupported';complete:boolean;metadataSha256:string;referencedEntity?:string;referencedAttribute?:string;referencingEntity?:string;referencingAttribute?:string;entity1?:string;entity2?:string;intersectEntity?:string;cascade:Record<string,string>}
 export interface PackageInventory {
   schemaVersion:1;scope:'package-metadata-inventory';packageSha256:string;archiveComplete:boolean;resourceInventoryComplete:boolean;
   solution?:{name:string;version:string;managed:boolean};files:PackageFile[];
@@ -116,15 +116,20 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
       const schemaName=text(relationship['@_Name']);if(!/^[A-Za-z_][A-Za-z0-9_]{0,199}$/.test(schemaName)||relationshipNames.has(schemaName.toLowerCase()))throw new Error('Ambiguous package relationship');relationshipNames.add(schemaName.toLowerCase());
       const kind=text(relationship.EntityRelationshipType)==='OneToMany'?'one-to-many':text(relationship.EntityRelationshipType)==='ManyToMany'?'many-to-many':'unsupported';
       const fact:PackageRelationship={schemaName,kind,complete:false,metadataSha256:sha(JSON.stringify(relationship)),cascade:{}};
-      try{
-        if(kind==='one-to-many'){
-          fact.referencedEntity=logical(relationship.ReferencedEntityName);fact.referencingEntity=logical(relationship.ReferencingEntityName);fact.referencingAttribute=logical(relationship.ReferencingAttributeName);
-          for(const action of ['Assign','Delete','Archive','Reparent','Share','Unshare','Merge','RollupView'])if(relationship[`Cascade${action}`]!==undefined){const value=text(relationship[`Cascade${action}`]);if(!['NoCascade','Cascade','Active','UserOwned','RemoveLink','Restrict'].includes(value))throw new Error('Unknown cascade behavior');fact.cascade[action]=value;}
-          fact.complete=!!fact.cascade.Delete;
-        }else if(kind==='many-to-many'){
-          fact.entity1=logical(relationship.FirstEntityName);fact.entity2=logical(relationship.SecondEntityName);fact.intersectEntity=logical(relationship.IntersectEntityName);fact.complete=true;
-        }
-      }catch{fact.complete=false;}
+      let valid=true;
+      const endpoint=(field:'referencedEntity'|'referencingEntity'|'referencingAttribute'|'entity1'|'entity2'|'intersectEntity',source:unknown)=>{try{fact[field]=logical(source);}catch{valid=false;}};
+      if(kind==='one-to-many'){
+        endpoint('referencedEntity',relationship.ReferencedEntityName);endpoint('referencingEntity',relationship.ReferencingEntityName);endpoint('referencingAttribute',relationship.ReferencingAttributeName);
+        // Native relationship XML omits the referenced column. Resolve only
+        // an explicit, unique primarykey column from this package's table.
+        const primary=report.tables.find(table=>table.name===fact.referencedEntity)?.attributes.filter(attribute=>attribute.type.toLowerCase()==='primarykey');
+        if(primary?.length===1)fact.referencedAttribute=primary[0].name;
+        else issue(`Relationship ${schemaName} has no unique packaged referenced primary column`);
+        for(const action of ['Assign','Delete','Archive','Reparent','Share','Unshare','Merge','RollupView'])if(relationship[`Cascade${action}`]!==undefined){const value=text(relationship[`Cascade${action}`]);if(!['NoCascade','Cascade','Active','UserOwned','RemoveLink','Restrict'].includes(value)){valid=false;continue;}fact.cascade[action]=value;}
+        fact.complete=valid&&!!fact.referencedAttribute&&!!fact.cascade.Delete;
+      }else if(kind==='many-to-many'){
+        endpoint('entity1',relationship.FirstEntityName);endpoint('entity2',relationship.SecondEntityName);endpoint('intersectEntity',relationship.IntersectEntityName);fact.complete=valid;
+      }
       report.relationships.push(fact);
       if(!fact.complete)issue(`Relationship ${schemaName} requires additional structure validation`);
       issue(`Relationship ${schemaName} still requires navigation, hierarchy and effective security validation`);

@@ -35,7 +35,10 @@ export function comparePackageSchema(inventory:PackageInventory,manifest:{target
     }
   }
   for(const relation of inventory.relationships){
-    if(!relation.complete){pending.push(`Package relationship ${relation.schemaName} has unsupported source semantics`);continue;}
+    if(!relation.complete)pending.push(`Package relationship ${relation.schemaName} has unsupported source semantics`);
+    if(relation.kind==='unsupported')continue;
+    if(relation.kind==='one-to-many'?!relation.referencedEntity&&!relation.referencingEntity:!relation.entity1&&!relation.entity2)continue;
+    if(relation.kind==='one-to-many'&&!relation.referencedAttribute)pending.push(`Package relationship ${relation.schemaName} lacks a unique referenced primary column`);
     const declared=actions.flatMap(action=>{
       const table=manifest.targetComponents.find(component=>component.key===action.component&&component.kind==='dataverse-table')?.logicalName.toLowerCase();
       const belongs=relation.kind==='one-to-many'?table===relation.referencedEntity||table===relation.referencingEntity:table===relation.entity1||table===relation.entity2;
@@ -43,7 +46,14 @@ export function comparePackageSchema(inventory:PackageInventory,manifest:{target
     }).filter(row=>row.schemaName.toLowerCase()===relation.schemaName.toLowerCase());
     if(!declared.length)return {status:'blocked',reasons:[`Package relationship ${relation.schemaName} lacks an approved declaration`]};
     for(const expected of declared){
-      const matches=expected.kind===relation.kind&&(expected.kind==='one-to-many'?expected.referencedEntity===relation.referencedEntity&&expected.referencingEntity===relation.referencingEntity&&expected.referencingAttribute===relation.referencingAttribute&&Object.entries(relation.cascade).every(([key,value])=>expected.cascade[key as keyof typeof expected.cascade]===value):expected.entity1===relation.entity1&&expected.entity2===relation.entity2&&expected.intersectEntity===relation.intersectEntity);
+      // Missing facts remain unavailable, but cannot hide a known contradiction.
+      const matches=expected.kind===relation.kind&&(expected.kind==='one-to-many'?
+        (!relation.referencedEntity||expected.referencedEntity===relation.referencedEntity)&&
+        (!relation.referencedAttribute||expected.referencedAttribute===relation.referencedAttribute)&&
+        (!relation.referencingEntity||expected.referencingEntity===relation.referencingEntity)&&
+        (!relation.referencingAttribute||expected.referencingAttribute===relation.referencingAttribute)&&
+        Object.entries(relation.cascade).every(([key,value])=>expected.cascade[key as keyof typeof expected.cascade]===value):
+        (!relation.entity1||expected.entity1===relation.entity1)&&(!relation.entity2||expected.entity2===relation.entity2)&&(!relation.intersectEntity||expected.intersectEntity===relation.intersectEntity));
       if(!matches)return {status:'blocked',reasons:[`Package relationship ${relation.schemaName} differs from its approved endpoints/cascade declaration`]};
     }
   }
