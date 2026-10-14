@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import {stablePackageDigest} from './deliveryPackage.ts';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
@@ -207,8 +207,10 @@ export class DeliveryService {
   }
   private async command(command:DeliveryCommand,cwd:string,env:Record<string,string>,signal:AbortSignal,additionalOwnership?:()=>Promise<void>){
     await this.assertLeaseOwned();await additionalOwnership?.();signal.throwIfAborted();
+    await this.assertLeaseOwned();signal.throwIfAborted();
     const output=await this.deps.run(command,cwd,env,signal);
     await this.assertLeaseOwned();await additionalOwnership?.();signal.throwIfAborted();
+    await this.assertLeaseOwned();signal.throwIfAborted();
     return output;
   }
   private requireReady() { if (this.closed || !this.ready) throw new HttpError(409, 'Delivery service is not ready or is closed'); }
@@ -438,9 +440,9 @@ export class DeliveryService {
     const checkout=path.join(this.root,'delivery-runs',run.id,'checkout');
     let packageSha256:string|undefined;
     if(['import','post-deploy','verify','health'].includes(phase)) {
-      const packageFile=await containedFile(checkout,deliveryManifest.parse(manifest).solutionZip),hash=crypto.createHash('sha256');
-      for await(const chunk of createReadStream(packageFile,{signal:this.active?.signal}))hash.update(chunk);
-      packageSha256=hash.digest('hex');
+      const packageFile=await containedFile(checkout,deliveryManifest.parse(manifest).solutionZip);
+      packageSha256=await stablePackageDigest(packageFile,this.active?.signal);
+      if(run.recovery&&packageSha256!==run.recovery.packageSha256)throw new Error('Pinned deployment package changed; create a new release');
     }
     const directory=path.join(this.root,'delivery-runs',run.id,phase==='health'?'health':'evidence');
     const existing=phase==='health'?await fs.readdir(directory).catch((error)=>{if(error.code==='ENOENT')return [] as string[];throw error;}):run.evidence;
@@ -473,7 +475,7 @@ export class DeliveryService {
     // The target lease is absent only during local checkout preparation. Once acquired,
     // recheck it at every native boundary, including after asynchronous governance.
     let targetLease: Awaited<ReturnType<typeof acquireResourceLease>> | undefined;
-    const command = (executable: string, args: string[], cwd = checkout) => this.command({ executable, args }, cwd, env, controller.signal,async()=>{await targetLease?.assertOwned();});
+    const command = (executable: string, args: string[], cwd = checkout,boundary?:()=>Promise<void>) => this.command({ executable, args }, cwd, env, controller.signal,async()=>{await boundary?.();await targetLease?.assertOwned();});
     const step = async (phase: DeliveryRun['phase'], fn: () => Promise<unknown>) => {
       run.phase = phase; run.log.push(`${new Date().toISOString()} ${phase}`); await this.save(); await fn();
     };
@@ -539,7 +541,7 @@ export class DeliveryService {
         catch { throw new Error(`Connect QA identity ${identity.id} in delivery-identities/${identity.id}.json before deployment`); }
       }
       const zip = await containedFile(checkout, manifest.solutionZip);
-      if (run.recovery && crypto.createHash('sha256').update(await fs.readFile(zip)).digest('hex') !== run.recovery.packageSha256) throw new Error('Retained deployment package changed; create a new release');
+      if (run.recovery && await stablePackageDigest(zip,controller.signal) !== run.recovery.packageSha256) throw new Error('Retained deployment package changed; create a new release');
       const settings = manifest.settingsFile ? await containedFile(checkout, manifest.settingsFile) : undefined;
       // Retain the prior deployment inventory and verify a data-preserving rehearsal before import.
       const priorInventory = await command('pac', ['solution', 'list', '--environment', run.environmentUrl, '--json']);
@@ -555,7 +557,7 @@ export class DeliveryService {
         await atomicWrite(path.join(evidence, 'previous-inventory.json'), priorInventory);
         await fs.copyFile(reportFile, path.join(evidence, 'recovery-rehearsal.json'));
         await fs.writeFile(path.join(evidence, 'recovery-runbook.md'), runbookBytes);
-        run.recovery = { inventoryFile: 'previous-inventory.json', runbook: 'recovery-runbook.md', drillReport: 'recovery-rehearsal.json', packageSha256: crypto.createHash('sha256').update(await fs.readFile(zip)).digest('hex') };
+        run.recovery = { inventoryFile: 'previous-inventory.json', runbook: 'recovery-runbook.md', drillReport: 'recovery-rehearsal.json', packageSha256: await stablePackageDigest(zip,controller.signal) };
         run.evidence.push('previous-inventory.json', 'recovery-rehearsal.json', 'recovery-runbook.md'); await this.save();
       }
       const capabilityHash = await this.requireCapabilities(repo, release);
@@ -571,11 +573,14 @@ export class DeliveryService {
           commandSha256: crypto.createHash('sha256').update(JSON.stringify({ executable, args })).digest('hex'), startedAt: new Date().toISOString() };
         run.operations.push(operation); await this.save();
         try {
-          const output = await command(executable, args);
+          const output = await command(executable, args,checkout,kind==='import'?async()=>{
+            const current=await containedFile(checkout,manifest.solutionZip);
+            if(current!==zip||await stablePackageDigest(current,controller.signal)!==run.recovery!.packageSha256)throw new Error('Pinned deployment package changed at native import boundary; reconcile before retrying');
+          }:undefined);
           operation.status = 'reported-success'; operation.endedAt = new Date().toISOString();
           if (kind === 'import') operation.platformJobId = importJobId(output);
           await this.save();
-        } catch (error) { operation.status = 'unknown'; operation.endedAt = new Date().toISOString(); await this.save(); throw error; }
+        } catch (error) { operation.status = 'unknown'; operation.endedAt = new Date().toISOString();run.recoveryRequired=true; await this.save(); throw error; }
       };
 
       if (run.checkpoint === 'import-started') {

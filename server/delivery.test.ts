@@ -144,6 +144,19 @@ it.each(['governance','native-result'] as const)('fences a target lease displace
   const persisted=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8')).runs[0];expect(persisted.recoveryRequired).toBe(true);expect(persisted.operations[0].status).toBe('unknown');
   expect(JSON.parse(await fs.readFile(file,'utf8')).owner).toBe('synthetic-successor');
 });
+it.each(['governance','native-result'] as const)('rejects a package changed during %s instead of dispatching or accepting the import',async point=>{
+  const {service,repo,deps,calls,root}=await fixture(),governance=deps.governance!,native=deps.run;
+  const change=async()=>{const run=service.view().runs[0];await fs.writeFile(path.join(root,'delivery-runs',run.id,'checkout','release.zip'),'PK changed unreviewed package');};
+  if(point==='governance')deps.governance=async request=>{const result=await governance(request);if(request.phase==='import')await change();return result;};
+  else deps.run=async(...args)=>{const result=await native(...args);if(args[0].executable==='pac'&&args[0].args[1]==='import')await change();return result;};
+  await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
+  expect(calls.filter(call=>call.startsWith('pac solution import'))).toHaveLength(point==='governance'?0:1);expect(calls).not.toContain('verify');expect(run.phase).toBe('blocked');expect(run.error).toContain('package changed');expect(run.operations?.find(row=>row.id==='solution-import')?.status).toBe('unknown');expect(run.recoveryRequired).toBe(true);
+});
+it('rejects a pinned package replaced before fresh governance even when the provider would approve the new bytes',async()=>{
+  const {service,repo,root,calls}=await fixture(),check=service.checkCapabilities!;
+  service.checkCapabilities=async(...args)=>{const run=service.view().runs[0];if(run?.recovery)await fs.writeFile(path.join(root,'delivery-runs',run.id,'checkout','release.zip'),'PK replacement after recovery pin');return check(...args);};
+  await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];expect(run.phase).toBe('blocked');expect(run.error).toContain('Pinned deployment package changed');expect(calls.some(row=>row.startsWith('pac solution import'))).toBe(false);expect(run.operations).toBeUndefined();
+});
 it('requires a committed architecture version before creating a new release',async()=>{
   const {service,repo,calls}=await fixture();const before=calls.length;
   const {architecture:_binding,...unbound}=plan;
