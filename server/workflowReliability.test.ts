@@ -51,3 +51,18 @@ it('refuses attempt-count overload and expired read admission rather than return
   const overloaded=Array.from({length:41},(_,index)=>run(index+1,{run_attempt:50}));const read=reader(overloaded);expect((await observeWorkflowReliability(repo,read,now)).status).toBe('unavailable');expect(read.mock.calls.some(([resource])=>resource.includes('/attempts/'))).toBe(false);
   let clock=now;const bounded=new WorkflowReliabilityService(reader([run()]),()=>{clock+=30000;return clock;});expect((await bounded.observe(repo)).status).toBe('unavailable');
 });
+it.each(['late-first','late-last','rollback'])('refuses to cache an observation with %s read completion',async mode=>{
+  let clock=now,calls=0;const raw=reader([run()]);
+  const read=vi.fn(async(resource:string)=>{calls++;const result=await raw(resource);if(mode==='late-first'&&calls===1||mode==='late-last'&&calls===6)clock=now+50000;if(mode==='rollback'&&calls===6)clock=now-1;return result;});
+  const service=new WorkflowReliabilityService(read,()=>clock),result=await service.observe(repo);
+  expect(result).toMatchObject({status:'unavailable',complete:false,successPercent:null,completed:null,observedMeetsTarget:null,failures:[]});expect(result.evidenceSha256).toBeUndefined();expect(result.reason).toContain('observation budget');
+  const prior=read.mock.calls.length;clock=now+60000;await service.observe(repo);expect(read.mock.calls.length).toBeGreaterThan(prior);
+});
+it('records the successful completion time and does not treat work duration as cache freshness',async()=>{
+  let clock=now;const raw=reader([run()]),read=vi.fn(async(resource:string)=>{const value=await raw(resource);clock+=1000;return value;});const service=new WorkflowReliabilityService(read,()=>clock);
+  expect((await service.observe(repo)).observedAt).toBe(new Date(now+6000).toISOString());clock=now+65000;await service.observe(repo);expect(read).toHaveBeenCalledTimes(6);clock=now+66000;await service.observe(repo);expect(read).toHaveBeenCalledTimes(12);
+});
+it.each(['latest','older'])('rejects impossible %s attempt chronology',async mode=>{
+  const invalid=run(1,{created_at:'2026-10-12T12:00:00Z',updated_at:'2026-10-12T11:59:59Z'});
+  const read=reader(mode==='latest'?[invalid]:[run(1,{run_attempt:2})],invalid);expect((await observeWorkflowReliability(repo,read,now)).status).toBe('unavailable');
+});

@@ -8,7 +8,7 @@ const repoSchema=z.object({id:z.number().int().positive(),full_name:name});
 const runSchema=z.object({id:z.number().int().positive(),workflow_id:z.number().int().positive(),run_attempt:z.number().int().min(1).max(50),head_sha:z.string().regex(/^[a-f0-9]{40}$/i),
   name:z.string().max(400).nullable(),status:z.enum(['completed','queued','in_progress','waiting','pending','requested']),conclusion:z.enum(['success','failure','cancelled','timed_out','action_required','neutral','skipped','stale','startup_failure']).nullable(),
   created_at:z.iso.datetime({offset:true}),updated_at:z.iso.datetime({offset:true}),repository:repoSchema,
-}).superRefine((run,ctx)=>{if((run.status==='completed')!==(run.conclusion!==null))ctx.addIssue({code:'custom',message:'Outcome/status mismatch'});});
+}).superRefine((run,ctx)=>{if((run.status==='completed')!==(run.conclusion!==null))ctx.addIssue({code:'custom',message:'Outcome/status mismatch'});if(Date.parse(run.updated_at)<Date.parse(run.created_at))ctx.addIssue({code:'custom',message:'Run chronology is inconsistent'});});
 const pageSchema=z.object({total_count:z.number().int().nonnegative().max(999),workflow_runs:z.array(runSchema).max(100)});
 type Run=z.infer<typeof runSchema>;
 const fingerprint=(runs:Run[])=>crypto.createHash('sha256').update(JSON.stringify(runs.slice().sort((a,b)=>a.id-b.id))).digest('hex');
@@ -62,11 +62,16 @@ export class WorkflowReliabilityService {
   private cache=new Map<string,{at:number;value:WorkflowReliability}>();private pending=new Map<string,Promise<WorkflowReliability>>();
   constructor(private read:WorkflowReader=resource=>ghJson(['api','--hostname','github.com','--method','GET',resource],{timeoutMs:8000}),private clock=Date.now){}
   observe(repo:string){
-    name.parse(repo);const key=repo.toLowerCase(),cached=this.cache.get(key);if(cached&&this.clock()-cached.at>=0&&this.clock()-cached.at<60000)return Promise.resolve(structuredClone(cached.value));
+    name.parse(repo);const started=this.clock(),key=repo.toLowerCase(),cached=this.cache.get(key);if(cached&&started-cached.at>=0&&started-cached.at<60000)return Promise.resolve(structuredClone(cached.value));
     const existing=this.pending.get(key);if(existing)return existing.then(value=>structuredClone(value));
-    const started=this.clock();let calls=0;
-    const bounded=async(resource:string)=>{if(++calls>2040||this.clock()-started>50000)throw new Error('History read exceeded its deadline');return this.read(resource);};
-    const work=observeWorkflowReliability(repo,bounded,started).then(value=>{if(this.cache.size>=100)this.cache.clear();if(value.status==='observed')this.cache.set(key,{at:this.clock(),value});return value;}).finally(()=>this.pending.delete(key));
+    let calls=0,budgetLost=false;
+    const checkBudget=()=>{const elapsed=this.clock()-started;if(budgetLost||elapsed<0||elapsed>=50000){budgetLost=true;throw new Error('History observation budget expired');}};
+    const bounded=async(resource:string)=>{checkBudget();if(++calls>2040)throw new Error('History read limit exceeded');const value=await this.read(resource);checkBudget();return value;};
+    const work=observeWorkflowReliability(repo,bounded,started).then(value=>{
+      const finished=this.clock();if(finished-started<0||finished-started>=50000)budgetLost=true;
+      if(budgetLost)return {...value,status:'unavailable' as const,complete:false,completed:null,successful:null,unsuccessful:null,active:null,rerunAttempts:null,successPercent:null,observedMeetsTarget:null,evidenceSha256:undefined,failures:[],reason:'GitHub Actions history exceeded its observation budget or the clock changed; no partial statistics were accepted'};
+      if(this.cache.size>=100)this.cache.clear();if(value.status==='observed'){value.observedAt=new Date(finished).toISOString();this.cache.set(key,{at:finished,value});}return value;
+    }).finally(()=>this.pending.delete(key));
     this.pending.set(key,work);return work.then(value=>structuredClone(value));
   }
 }
