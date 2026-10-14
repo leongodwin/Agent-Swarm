@@ -15,6 +15,31 @@ it.each(['missing-pointer','wrong-archive','missing-content-digest'])('denies cl
   await expect(requireLifecycleGovernance(async()=>value,request,root,0)).rejects.toThrow('unavailable');expect(JSON.parse(await fs.readFile(path.join(root,'governance-0-import.json'),'utf8')).status).toBe('unavailable');
 });
 it('persists a bound complete decision before permitting a stage',async()=>{const root=await fixture();const file=await requireLifecycleGovernance(async()=>proof(),request,root,0);expect(file).toBe('governance-0-import.json');expect(JSON.parse(await fs.readFile(path.join(root,file),'utf8'))).toMatchObject({status:'clear',manifestSha256:manifestDigest(request.manifest)});});
+it('isolates provider manifest mutations and rejects a matching hash for the altered input',async()=>{
+  const root=await fixture(),input={...request,manifest:{solution:'Expenses'}};
+  await expect(requireLifecycleGovernance(async supplied=>{(supplied.manifest as any).solution='Different';return {...proof(),manifestSha256:manifestDigest(supplied.manifest)};},input,root,0)).rejects.toThrow('unavailable');
+  expect(input.manifest).toEqual({solution:'Expenses'});expect(JSON.parse(await fs.readFile(path.join(root,'governance-0-import.json'),'utf8'))).toMatchObject({status:'unavailable',manifestSha256:manifestDigest(request.manifest)});
+});
+it('includes input capture in the stage budget and does not admit a provider after capture expiry',async()=>{
+  const root=await fixture();let elapsed=0;vi.spyOn(performance,'now').mockImplementation(()=>elapsed);const clone=structuredClone;
+  vi.spyOn(globalThis,'structuredClone').mockImplementation((value,options)=>{const result=clone(value,options);elapsed=60000;return result;});const provider=vi.fn(async()=>proof());
+  await expect(requireLifecycleGovernance(provider,request,root,0)).rejects.toThrow('unavailable');expect(provider).not.toHaveBeenCalled();
+});
+it.each(['phase','sourceCommit','environmentUrl','releaseId','checkout','manifest','packageSha256','evidenceDirectory','resourceSchemaReferences','signal'])('rejects caller %s drift while a provider is pending and preserves the original audit scope',async field=>{
+  const root=await fixture(),input:LifecycleRequest={...request,manifest:{solution:'Expenses'},resourceSchemaReferences:[{resource:'flow',entitySet:'exp_reports',columns:['exp_name']}]};let complete!:(value:LifecycleResult)=>void;
+  const pending=requireLifecycleGovernance(async()=>new Promise(resolve=>{complete=resolve;}),input,root,0);const denied=expect(pending).rejects.toThrow('unavailable');await Promise.resolve();
+  if(field==='manifest')(input.manifest as any).solution='Different';else if(field==='resourceSchemaReferences')input.resourceSchemaReferences![0].columns.push('secret');else if(field==='signal')input.signal=new AbortController().signal;else (input as any)[field]=field==='phase'?'test':'changed';
+  complete(proof());await denied;const saved=JSON.parse(await fs.readFile(path.join(root,'governance-0-import.json'),'utf8'));expect(saved).toMatchObject({status:'unavailable',phase:request.phase,environmentUrl:request.environmentUrl,sourceCommit:request.sourceCommit,releaseId:request.releaseId,manifestSha256:manifestDigest(request.manifest)});
+});
+it('rejects provider schema-reference changes even when the returned manifest hash is unchanged',async()=>{
+  const root=await fixture(),input={...request,resourceSchemaReferences:[{resource:'flow',entitySet:'exp_reports',columns:['exp_name']}]};
+  await expect(requireLifecycleGovernance(async supplied=>{supplied.resourceSchemaReferences![0].columns.length=0;return proof();},input,root,0)).rejects.toThrow('unavailable');expect(input.resourceSchemaReferences[0].columns).toEqual(['exp_name']);
+});
+it('rejects scope drift during audit commit and replaces the clear receipt in its original location',async()=>{
+  const root=await fixture(),input={...request,manifest:{solution:'Expenses'}},rename=fs.rename.bind(fs);let first=true;
+  vi.spyOn(fs,'rename').mockImplementation(async(...args:Parameters<typeof fs.rename>)=>{await rename(...args);if(first){first=false;input.manifest.solution='Different';input.phase='test';}});
+  await expect(requireLifecycleGovernance(async()=>proof(),input,root,0)).rejects.toThrow('unavailable');expect(JSON.parse(await fs.readFile(path.join(root,'governance-0-import.json'),'utf8'))).toMatchObject({status:'unavailable',phase:'import',manifestSha256:manifestDigest(request.manifest)});expect(await fs.readdir(root)).toEqual(['governance-0-import.json']);
+});
 it.each(['elapsed','rollback'])('rejects a settled provider when its %s budget is invalid even before the timer fires',async mode=>{
   const root=await fixture();vi.useFakeTimers();let elapsed=0;vi.spyOn(performance,'now').mockImplementation(()=>elapsed);const start=Date.now();
   await expect(requireLifecycleGovernance(async()=>{if(mode==='elapsed')elapsed=60000;else vi.setSystemTime(start-1);return proof();},request,root,0)).rejects.toThrow('unavailable');

@@ -36,12 +36,17 @@ export function unavailableGovernance(request:LifecycleRequest,reasons=['Complet
  * Unconfigured providers, exceptions, mismatched evidence and stale approvals cannot permit execution. */
 export async function requireLifecycleGovernance(check:LifecycleCheck|undefined,request:LifecycleRequest,evidenceDirectory:string,index:number,now?:number,onCancellationPending?:(reason:'deadline'|'cancelled')=>void|Promise<void>) {
   const started=performance.now(),startedWall=now??Date.now();
+  const captured={...request,manifest:structuredClone(request.manifest),resourceSchemaReferences:request.resourceSchemaReferences?structuredClone(request.resourceSchemaReferences):undefined};
+  const scopeDigest=(value:LifecycleRequest)=>manifestDigest({phase:value.phase,sourceCommit:value.sourceCommit,environmentUrl:value.environmentUrl,releaseId:value.releaseId,checkout:value.checkout,manifest:value.manifest,packageSha256:value.packageSha256,evidenceDirectory:value.evidenceDirectory,resourceSchemaReferences:value.resourceSchemaReferences});
+  const pinned=scopeDigest(captured),manifestSha256=manifestDigest(captured.manifest),signal=request.signal;
+  let providerInput:LifecycleRequest|undefined,providerSignal:AbortSignal|undefined;
+  const unchanged=()=>{try{return request.signal===signal&&scopeDigest(request)===pinned&&(!providerInput||providerInput.signal===providerSignal&&scopeDigest(providerInput)===pinned);}catch{return false;}};
   const current=(at:number)=>{const elapsed=performance.now()-started;return elapsed>=0&&elapsed<60000&&at>=startedWall;};
   const fresh=(value:LifecycleResult,at:number)=>at-Date.parse(value.checkedAt)<=60000&&Date.parse(value.checkedAt)<=at+30000;
-  const authorized=(value:LifecycleResult)=>{const at=now??Date.now();return !request.signal?.aborted&&current(at)&&fresh(value,at);};
+  const authorized=(value:LifecycleResult)=>{const at=now??Date.now();return !signal?.aborted&&unchanged()&&current(at)&&fresh(value,at);};
   let result:LifecycleResult;
   try {
-    if(request.signal?.aborted) throw new Error('cancelled');
+    if(signal?.aborted||!unchanged()) throw new Error('cancelled or changed');
     const controller=new AbortController();
     let cancellationNotice:Promise<void>|undefined;
     const cancel=(reason:'deadline'|'cancelled')=>{
@@ -51,33 +56,34 @@ export async function requireLifecycleGovernance(check:LifecycleCheck|undefined,
       cancellationNotice=Promise.resolve().then(()=>onCancellationPending?.(reason)).then(()=>undefined,()=>undefined);
     };
     const abort=()=>cancel('cancelled'),timer=setTimeout(()=>cancel('deadline'),60_000);
-    request.signal?.addEventListener('abort',abort,{once:true});
+    signal?.addEventListener('abort',abort,{once:true});
     let value:LifecycleResult;
     try{
       // A timeout revokes authority, not the outstanding provider task. Await its
       // settlement so the caller retains delivery/resource leases through cleanup.
       value=await Promise.resolve().then(()=>{
-        if(request.signal?.aborted)abort();
-        if(controller.signal.aborted)throw new Error('cancelled');
-        return (check??(async request=>unavailableGovernance(request)))({...request,signal:controller.signal});
+        if(signal?.aborted)abort();
+        if(controller.signal.aborted||!current(now??Date.now())||!unchanged())throw new Error('cancelled, expired or changed');
+        providerSignal=controller.signal;providerInput={...captured,manifest:structuredClone(captured.manifest),resourceSchemaReferences:captured.resourceSchemaReferences?structuredClone(captured.resourceSchemaReferences):undefined,signal:providerSignal};
+        return (check??(async request=>unavailableGovernance(request)))(providerInput);
       });
     }finally{
-      clearTimeout(timer);request.signal?.removeEventListener('abort',abort);
+      clearTimeout(timer);signal?.removeEventListener('abort',abort);
       if(cancellationNotice)await cancellationNotice;
     }
-    if(controller.signal.aborted||request.signal?.aborted) throw new Error('cancelled');
+    if(controller.signal.aborted||signal?.aborted||!unchanged()) throw new Error('cancelled or changed');
     result=resultSchema.parse(value);
     const evaluatedAt=now??Date.now();
-    if(!current(evaluatedAt)||!fresh(result,evaluatedAt)||result.phase!==request.phase||result.sourceCommit!==request.sourceCommit||result.environmentUrl!==request.environmentUrl||result.releaseId!==request.releaseId||result.manifestSha256!==manifestDigest(request.manifest)||(result.status==='clear'&&request.packageSha256&&result.artifactSha256!==request.packageSha256)) throw new Error('mismatch');
-  } catch {result=unavailableGovernance(request,['Governance provider failed or returned stale, incomplete or mismatched evidence']);}
-  const file=`governance-${index}-${request.phase}.json`;
+    if(!current(evaluatedAt)||!fresh(result,evaluatedAt)||result.phase!==captured.phase||result.sourceCommit!==captured.sourceCommit||result.environmentUrl!==captured.environmentUrl||result.releaseId!==captured.releaseId||result.manifestSha256!==manifestSha256||(result.status==='clear'&&captured.packageSha256&&result.artifactSha256!==captured.packageSha256)) throw new Error('mismatch');
+  } catch {result=unavailableGovernance(captured,['Governance provider failed or returned stale, incomplete or mismatched evidence']);}
+  const file=`governance-${index}-${captured.phase}.json`;
   try{await atomicWrite(path.join(evidenceDirectory,file),JSON.stringify(result,null,2),()=>result.status!=='clear'||authorized(result));}
   catch(error){if(result.status!=='clear'||authorized(result))throw error;}
   if(result.status==='clear'&&!authorized(result)){
-    result=unavailableGovernance(request,['Governance authority expired or execution was cancelled while persisting its audit; repeat the stage with current evidence']);
+    result=unavailableGovernance(captured,['Governance authority changed, expired or execution was cancelled while persisting its audit; repeat the stage with current evidence']);
     await atomicWrite(path.join(evidenceDirectory,file),JSON.stringify(result,null,2));
   }
-  if(request.signal?.aborted) throw new Error(`Lifecycle governance unavailable at ${request.phase}: execution was cancelled`);
-  if(result.status!=='clear') throw new Error(`Lifecycle governance ${result.status} at ${request.phase}: ${result.reasons.join('; ')}`);
+  if(signal?.aborted) throw new Error(`Lifecycle governance unavailable at ${captured.phase}: execution was cancelled`);
+  if(result.status!=='clear') throw new Error(`Lifecycle governance ${result.status} at ${captured.phase}: ${result.reasons.join('; ')}`);
   return file;
 }
