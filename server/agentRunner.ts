@@ -97,14 +97,29 @@ export interface SessionHandle {
 export function screenshotFile(cwd: string, text: string): { data: Buffer; mime: string } | null {
   const file = text.match(/\]\(([^)\s]+\.(png|jpe?g))\)/i);
   if (!file) return null;
-  try {
-    return { data: fs.readFileSync(path.resolve(cwd, file[1])), mime: /png$/i.test(file[2]) ? 'image/png' : 'image/jpeg' };
-  } catch {
-    return null;
-  }
+  return readScreenshot(cwd,path.resolve(cwd,file[1]));
 }
 
 const IMAGE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
+const SCREENSHOT_LIMIT=10*1024*1024;
+/** Capture bounded bytes from an ordinary file contained in the evidence root. */
+export function readScreenshot(root:string,file:string):{data:Buffer;mime:string}|null {
+  let fd:number|undefined;
+  try{
+    const mime=IMAGE_MIME[path.extname(file).toLowerCase()];if(!mime)return null;
+    const base=fs.realpathSync(root),resolved=fs.realpathSync(file),relative=path.relative(base,resolved);
+    if(!relative||relative==='..'||relative.startsWith(`..${path.sep}`)||path.isAbsolute(relative)||fs.lstatSync(file).isSymbolicLink())return null;
+    const intended=fs.statSync(resolved);
+    fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+    const before=fs.fstatSync(fd);if(before.dev!==intended.dev||before.ino!==intended.ino||!before.isFile()||before.size<4||before.size>SCREENSHOT_LIMIT)return null;
+    const data=Buffer.alloc(before.size+1);let length=0,read:number;
+    while(length<data.length&&(read=fs.readSync(fd,data,length,data.length-length,null))>0)length+=read;
+    const after=fs.fstatSync(fd),current=fs.statSync(file);if(length!==before.size||after.size!==before.size||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs||current.dev!==before.dev||current.ino!==before.ino||fs.realpathSync(file)!==resolved)return null;
+    const bytes=data.subarray(0,length);
+    const valid=mime==='image/png'?bytes.length>=8&&bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):bytes[0]===255&&bytes[1]===216&&bytes[length-2]===255&&bytes[length-1]===217;
+    return valid?{data:bytes,mime}:null;
+  }catch{return null;}finally{if(fd!==undefined)try{fs.closeSync(fd);}catch{/* already invalid evidence */}}
+}
 
 /**
  * Screenshots in a browser's output folder that aren't in `seen` yet, oldest first (Playwright names them
@@ -123,7 +138,7 @@ export function newScreenshots(dir: string, seen: Set<string>, now = Date.now())
     const file = path.join(dir, name);
     if (!mime || seen.has(name)) continue;
     try {
-      if (now - fs.statSync(file).mtimeMs < 1000) continue;
+      const stat=fs.lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>SCREENSHOT_LIMIT||stat.size<4||now-stat.mtimeMs<1000)continue;
     } catch {
       continue;
     }

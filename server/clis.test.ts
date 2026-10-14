@@ -171,10 +171,11 @@ describe('screenshotFile', () => {
   it("reads a Playwright screenshot that was saved to a file instead of returned inline", () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-shot-'));
     fs.mkdirSync(path.join(cwd, '.playwright-mcp'));
-    fs.writeFileSync(path.join(cwd, '.playwright-mcp', 'pr16-375.png'), 'png-bytes');
+    const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0l8AAAAASUVORK5CYII=','base64');
+    fs.writeFileSync(path.join(cwd, '.playwright-mcp', 'pr16-375.png'), png);
     const shot = screenshotFile(cwd, '### Result\n- [Screenshot of viewport](.playwright-mcp/pr16-375.png)');
     expect(shot?.mime).toBe('image/png');
-    expect(shot?.data.toString()).toBe('png-bytes');
+    expect(shot?.data).toEqual(png);
     expect(screenshotFile(cwd, '### Result\n- no link here')).toBeNull();
     fs.rmSync(cwd, { recursive: true, force: true });
   });
@@ -193,7 +194,7 @@ describe('newScreenshots', () => {
   it("picks up the images a browser saved, oldest first, once they're written and only once", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-browser-'));
     const later = Date.now() + 5000;
-    for (const f of ['page-2026-09-29T10-00-02-000Z.jpeg', 'page-2026-09-29T10-00-01-000Z.png', 'page-2026-09-29T10-00-00-000Z.yml']) fs.writeFileSync(path.join(dir, f), 'x');
+    for (const f of ['page-2026-09-29T10-00-02-000Z.jpeg', 'page-2026-09-29T10-00-01-000Z.png', 'page-2026-09-29T10-00-00-000Z.yml']) fs.writeFileSync(path.join(dir, f), 'fixture');
     const seen = new Set<string>();
     expect(newScreenshots(dir, seen)).toEqual([]); // just written: may still be in progress
     const found = newScreenshots(dir, seen, later);

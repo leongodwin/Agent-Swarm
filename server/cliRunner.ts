@@ -19,6 +19,7 @@ import {
   newScreenshots,
   resultText,
   screenshotFile,
+  readScreenshot,
   summariseResult,
   tidyPaths,
   todoLines,
@@ -472,7 +473,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     for (const shot of newScreenshots(path.join(l.dir, 'browser'), l.shots, all ? Infinity : Date.now())) {
       l.shots.add(shot.name);
       try {
-        cb.screenshot(fs.readFileSync(shot.file), shot.mime);
+        const captured=readScreenshot(path.join(l.dir,'browser'),shot.file);
+        if(captured)cb.screenshot(captured.data,captured.mime);
       } catch {
         // removed before we got to it
       }
