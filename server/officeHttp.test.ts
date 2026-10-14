@@ -110,6 +110,14 @@ it('keeps HTTP admission and maintenance unchanged when the owning launcher cann
   expect(await (await request('/api/runtime')).json()).toMatchObject({pid:process.pid,draining:true,reload:{supported:false}});
   expect((await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true})).status).toBe(200);
 });
+it.each(['checking','cancelled'] as const)('holds reload and handoff for pending runtime readiness (%s)',async state=>{
+ const prepare=vi.fn(async()=>({operationId:'11111111-1111-4111-8111-111111111111',commit:async()=>'accepted' as const,cancel:vi.fn()}));
+ const handoff=vi.fn(),{request,swarm}=await office(false,handoff,undefined,{prepare,view:()=>({supported:true,phase:'idle'})});await request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});
+ const entry={id:'digest',agentId:'stopped-worker',cli:'codex',startedAt:1,state,scope:'process-local-runtime-readiness' as const};swarm.runtimeCleanup=()=>({records:[],readiness:[entry]});
+ expect(await (await request('/api/runtime')).json()).toMatchObject({sessionUsage:{used:1,readiness:[entry]}});
+ expect((await request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(409);expect(prepare).not.toHaveBeenCalled();
+ const held=await request('/api/office/prepare-handoff','POST',{expectedPid:process.pid});expect(held.status).toBe(409);expect((await held.json()).error).toContain('Wait for active');expect(handoff).not.toHaveBeenCalled();
+});
 it.each(['active','cleanup','undrained'])('rechecks %s work after asynchronous reload preparation and cancels before acceptance',async mode=>{
   const commit=vi.fn(async()=>'accepted' as const),cancel=vi.fn();let intervene=()=>{};
   const prepare=vi.fn(async()=>{intervene();return {operationId:'11111111-1111-4111-8111-111111111111',commit,cancel};});

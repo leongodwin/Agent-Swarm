@@ -5,7 +5,7 @@ import {z} from 'zod';
 import type {CleanupFailureCode} from '../shared/sessionUsage.ts';
 export const cleanupRecord=z.strictObject({id:z.string().min(1).max(200),agentId:z.string().max(200),cli:z.string().max(100),pid:z.number().int().nonnegative(),keeperInstance:z.uuid().nullable(),requestedAt:z.number().int().nonnegative(),state:z.enum(['stopping','unverified'])});
 export type CleanupRecord=z.infer<typeof cleanupRecord>;
-export interface CleanupView {records:CleanupRecord[];unavailableReason?:string;failureCode?:CleanupFailureCode;failureSystemCode?:string}
+export interface CleanupView {records:CleanupRecord[];readiness?:import('../shared/sessionUsage.ts').RuntimeReadiness[];unavailableReason?:string;failureCode?:CleanupFailureCode;failureSystemCode?:string}
 const systemCode=(error:unknown)=>{
   const value=error as {code?:string;name?:string};
   return ['ENOENT','EACCES','EPERM','EEXIST','ENOTEMPTY','EBUSY','ENOTDIR','CLEANUP_BUSY','CLEANUP_EVIDENCE'].includes(value?.code??'')?value.code:value?.name==='ZodError'?'INVALID_SHAPE':value?.name==='SyntaxError'?'INVALID_JSON':'MUTEX_STATE';

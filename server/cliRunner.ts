@@ -195,13 +195,16 @@ interface LiveCli {
 }
 const lives = new Map<AgentTerminal, LiveCli>();
 const preparing=new Map<AgentTerminal,symbol>();
+const readiness=new Map<symbol,{view:import('../shared/sessionUsage.ts').RuntimeReadiness;settled:Promise<void>;cancel:()=>void}>();
+let releaseWork:Promise<void>|null=null;
+let releaseRestart:boolean|null=null;
 let cleanupChanged=()=>{};
 const cleanup=new RuntimeCleanupStore(path.join(HOME_DIR,'runtime-cleanup.json'),()=>cleanupChanged());
 const closing=new Map<string,Pty>();
 const closeWaiters=new Map<string,{promise:Promise<void>;resolve:()=>void}>();
-export const runtimeCleanupView=()=>{const view=cleanup.view();return {...view,records:view.records.map(record=>({...record,id:crypto.createHash('sha256').update(record.id).digest('hex')}))};};
+export const runtimeCleanupView=()=>{const view=cleanup.view();return {...view,readiness:[...readiness.values()].map(entry=>({...entry.view})),records:view.records.map(record=>({...record,id:crypto.createHash('sha256').update(record.id).digest('hex')}))};};
 export const onRuntimeCleanupChanged=(callback:()=>void)=>{cleanupChanged=callback;};
-const cleanupBlocker=()=>{const view=cleanup.view();return view.unavailableReason??(view.records.length?'Native runtime cleanup is pending or unverified; new work is quarantined':null);};
+const cleanupBlocker=()=>{const view=cleanup.view();return view.unavailableReason??(view.records.length?'Native runtime cleanup is pending or unverified; new work is quarantined':[...readiness.values()].some(entry=>entry.view.state==='cancelled')?'Cancelled runtime readiness work is still pending; execution is held':null);};
 function observeCleanup(id:string,p:Pty){
   closing.set(id,p);
   if(!closeWaiters.has(id)){let resolve!:()=>void;const promise=new Promise<void>(yes=>{resolve=yes;});closeWaiters.set(id,{promise,resolve});}
@@ -360,15 +363,20 @@ export function officeProcesses(): { pids: number[]; markers: string[] } {
  * The office is stopping. On a restart its CLIs carry on in the terminal keeper, which holds their output and hooks
  * until it's back; when it quits for good they stop with it (once they're gone, their Codex threads are archived).
  */
-export async function releaseClis(restart: boolean): Promise<void> {
-  if(!restart){
-    const stops=[...lives.values()].map(endLive);
-    const stopped=Promise.all([...stops,...[...closeWaiters.values()].map(waiter=>waiter.promise)]).then(()=>{const blocker=cleanupBlocker();if(blocker)throw new Error(blocker);});
+export function releaseClis(restart: boolean): Promise<void> {
+  if(releaseWork)return restart===releaseRestart?releaseWork:Promise.reject(new Error('A different runtime shutdown mode is already pending'));
+  releaseRestart=restart;
+  releaseWork=Promise.resolve().then(async()=>{
+    for(const entry of readiness.values())entry.cancel();
+    const pending=[...readiness.values()].map(entry=>entry.settled);
+    const stops=restart?[]:[...lives.values()].map(endLive);
+    const stopped=Promise.all([...pending,...stops,...(!restart?[...closeWaiters.values()].map(waiter=>waiter.promise):[])]).then(()=>{const blocker=cleanupBlocker();if(blocker)throw new Error(blocker);});
     let timer:NodeJS.Timeout|undefined;
-    try{await Promise.race([stopped,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Native runtime exit remains unverified; cleanup quarantine is retained')),5000);})]);}
+      try{await Promise.race([stopped,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Runtime readiness or native exit remains unverified; pending work is retained')),5000);})]);}
     finally{clearTimeout(timer);}
-  }
   leaveKeeper();
+  }).finally(()=>{releaseWork=null;releaseRestart=null;});
+  return releaseWork;
 }
 
 /** A CLI waiting at its prompt: what the manager types there becomes a follow-up. */
@@ -421,6 +429,7 @@ export function codexRecoveredIdle(screen:string):boolean {
 }
 
 export function startCliSession(opts: SessionOptions, callbacks: SessionCallbacks): SessionHandle {
+  if(releaseWork)throw new Error('Runtime shutdown is in progress; execution denied');
   const pendingCleanup=cleanupBlocker();if(pendingCleanup)throw new Error(pendingCleanup);
   const requestedCli=opts.cli??'codex';
   const requestedPolicyError=runtimeModelError(requestedCli,opts.model);if(requestedPolicyError)throw new Error(requestedPolicyError);
@@ -498,6 +507,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const finish = (r: Omit<SessionResult, 'costUsd' | 'turns'>, keep = false, preserveRecovery = false) => {
     if (done) return;
     done = true;
+    const pending=readiness.get(admission);if(pending){pending.view.state='cancelled';quietly(cleanupChanged);}
     releaseAdmission();
     for (const t of [finishTimer, bootTimer,geminiStartupTimer]) clearTimeout(t);
     clearInterval(screenTimer);
@@ -787,6 +797,12 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     writeHelpers();const hookPath=path.join(BIN_DIR,'codex-hook.cjs');
     return prepareCodexHooks(command,opts.cwd,hookPath,CODEX_HOOK_SOURCE,CODEX_HOOK_EVENTS.map(event=>({event,command:codexHookInvocation(hookPath,event),timeout:event==='Interrupt'?3:10})),opts.model);
   };
+  const trackReadiness=(work:()=>Promise<unknown>)=>{
+    const promise=Promise.resolve().then(()=>done?undefined:work());
+    const settled=promise.then(()=>undefined,()=>undefined).finally(()=>{readiness.delete(admission);quietly(cleanupChanged);});
+    readiness.set(admission,{view:{id:crypto.createHash('sha256').update(token).digest('hex'),agentId:opts.agentId??'',cli,startedAt:Date.now(),state:'checking',scope:'process-local-runtime-readiness'},settled,cancel:()=>handle.stop()});quietly(cleanupChanged);
+    return promise;
+  };
   if (adopt && prev) {
     preparing.set(term,admission);
     const commitAdoption=async()=>{
@@ -808,7 +824,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     shotTimer = setInterval(collectShots, 2000);
     monitorCapacity();
     };
-    void (cli==='codex'?verifyCodex().then(()=>commitAdoption()):commitAdoption()).catch(error=>finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Retained runtime readiness or ownership could not be verified; follow-up denied'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})}));
+    void trackReadiness(()=>cli==='codex'?verifyCodex().then(()=>commitAdoption()):commitAdoption()).catch(error=>finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Retained runtime readiness or ownership could not be verified; follow-up denied'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})}));
     return handle;
   }
   if (opts.reattach) {
@@ -961,7 +977,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       if (!done && !begun && cli === 'claude') log([{ kind: 'error', text: `⚠ ${label} hasn't started on the task yet. Open the terminal to see what it's waiting for.` }]);
     }, BOOT_MS);
   };
-  const begin=()=>{void (async()=>{
+  const begin=()=>{return (async()=>{
     await validateAdmission();if(done)return;
     if(prev)await endLive(prev);
     if(done)return;
@@ -972,10 +988,10 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   preparing.set(term,admission);
   // Codex won't resume a thread the office archived (see codexThread): it's unarchived first.
   if(cli==='codex'){
-    void verifyCodex().then(async verified=>{if(done)return;codexTrustReady=true;log([{kind:'system',text:`Verified native trust for ${verified.verified} generated office hooks.`}]);if(opts.resumeSessionId)await codexThread('unarchive',opts.resumeSessionId);if(!done)begin();}).catch(error=>{if(!done)finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Codex office hook trust or resume readiness could not be verified; no task was sent. Inspect native hook policy and source integrity.'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})});});
+    void trackReadiness(()=>verifyCodex().then(async verified=>{if(done)return;codexTrustReady=true;log([{kind:'system',text:`Verified native trust for ${verified.verified} generated office hooks.`}]);if(opts.resumeSessionId)await codexThread('unarchive',opts.resumeSessionId);if(!done)await begin();})).catch(error=>{if(!done)finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Codex office hook trust or resume readiness could not be verified; no task was sent. Inspect native hook policy and source integrity.'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})});});
   }
-  else if(cli==='gemini')void verifyGeminiProfile(cmd,opts.browserTesting).then(blocker=>{if(done)return;if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}begin();},()=>finish({ok:false,text:'',errors:['Gemini protected-profile validation failed; execution denied']}));
-  else begin();
+  else if(cli==='gemini')void trackReadiness(()=>verifyGeminiProfile(cmd,opts.browserTesting).then(blocker=>{if(done)return;if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}return begin();})).catch(()=>finish({ok:false,text:'',errors:['Gemini protected-profile validation failed; execution denied']}));
+  else void trackReadiness(begin);
 
   return handle;
 }

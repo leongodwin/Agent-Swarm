@@ -23,7 +23,7 @@ vi.mock('./ptyClient.ts', () => ({
 }));
 import { HOME_DIR } from './config.ts';
 import { handleHook, releaseClis, startCliSession as startRealCliSession,reconnectClis,runtimeCleanupView } from './cliRunner.ts';
-import {startKeeper,discardPty,adoptPty} from './ptyClient.ts';
+import {startKeeper,discardPty,adoptPty,leaveKeeper} from './ptyClient.ts';
 import { setToolGovernanceGate } from './toolGovernance.ts';
 import {OPENCODE_PLUGIN_SOURCE} from './clis.ts';
 import {GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
@@ -222,6 +222,7 @@ it.each(['cancel','revoked','owner-exit','success'] as const)('keeps replacement
  const fixture=await replacementFixture();let ready!:(value:{verified:number;hashes:never[]})=>void;
  vi.mocked(prepareCodexHooks).mockImplementationOnce(()=>new Promise(resolve=>{ready=resolve as typeof ready;}));let authorized=true;
  const pending=startRealCliSession({...fixture.opts,prompt:'Replacement task',authorizeTool:()=>authorized?null:'Task was cancelled'},fixture.replacement);
+ for(let i=0;i<25;i++)await Promise.resolve();
  expect(()=>startRealCliSession(fixture.opts,fixture.replacement)).toThrow('admission is already being checked');expect(native.kill).not.toHaveBeenCalled();expect(fixture.term.onInput).toBe(fixture.watch);
  if(mode==='cancel')pending.stop();if(mode==='revoked')authorized=false;if(mode==='owner-exit')native.exit?.(0);
  ready({verified:5,hashes:[]});for(let i=0;i<100;i++)await Promise.resolve();
@@ -234,6 +235,22 @@ it('preserves idle retained ownership when follow-up trust validation fails',asy
  await startCliSession({...fixture.opts,reattach:true},fixture.replacement);for(let i=0;i<100;i++)await Promise.resolve();
  expect(fixture.replacement.finished).toHaveBeenCalledOnce();expect(native.kill).not.toHaveBeenCalled();expect(fixture.term.bind).not.toHaveBeenCalled();expect(fixture.term.releaseIdle).toBe(release);expect(native.token).toBe(fixture.token);
  const decision:any=await handleHook(fixture.token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});expect(decision.hookSpecificOutput.permissionDecision).toBe('deny');
+});
+it.each([false,true])('waits for cancelled readiness settlement before shutdown completes (restart %s)',async restart=>{
+ const fixture=await replacementFixture();let ready!:(value:{verified:number;hashes:never[]})=>void;
+ vi.mocked(prepareCodexHooks).mockImplementationOnce(()=>new Promise(resolve=>{ready=resolve as typeof ready;}));
+ startRealCliSession({...fixture.opts,prompt:'Confidential replacement'},fixture.replacement);for(let i=0;i<25;i++)await Promise.resolve();
+ const snapshot=runtimeCleanupView();expect(snapshot.readiness).toHaveLength(1);expect(snapshot.readiness[0]).toMatchObject({state:'checking',cli:'codex',scope:'process-local-runtime-readiness'});expect(JSON.stringify(snapshot)).not.toContain('Confidential replacement');expect(snapshot.readiness[0].id).not.toBe(native.token);snapshot.readiness[0].state='cancelled';expect(runtimeCleanupView().readiness[0].state).toBe('checking');
+ vi.mocked(leaveKeeper).mockClear();let settled=false;const shutdown=releaseClis(restart);expect(releaseClis(restart)).toBe(shutdown);void shutdown.then(()=>{settled=true;});
+ for(let i=0;i<25;i++)await Promise.resolve();
+ expect(runtimeCleanupView().readiness[0].state).toBe('cancelled');expect(()=>startRealCliSession(fixture.opts,fixture.replacement)).toThrow('shutdown is in progress');for(let i=0;i<25;i++)await Promise.resolve();expect(settled).toBe(false);expect(leaveKeeper).not.toHaveBeenCalled();
+ ready({verified:5,hashes:[]});await shutdown;expect(runtimeCleanupView().readiness).toEqual([]);expect(leaveKeeper).toHaveBeenCalledOnce();expect(native.token).toBe(fixture.token);expect(fixture.replacement.finished).toHaveBeenCalledOnce();
+});
+it('retains cancelled readiness after shutdown times out and clears it only after settlement',async()=>{
+ const fixture=await replacementFixture();let ready!:(value:{verified:number;hashes:never[]})=>void;
+ vi.mocked(prepareCodexHooks).mockImplementationOnce(()=>new Promise(resolve=>{ready=resolve as typeof ready;}));startRealCliSession(fixture.opts,fixture.replacement);for(let i=0;i<25;i++)await Promise.resolve();
+ vi.mocked(leaveKeeper).mockClear();const result=releaseClis(true).then(()=>null,error=>error);await vi.advanceTimersByTimeAsync(5000);expect((await result).message).toContain('pending work is retained');expect(leaveKeeper).not.toHaveBeenCalled();expect(runtimeCleanupView().readiness[0].state).toBe('cancelled');expect(()=>startRealCliSession(fixture.opts,fixture.replacement)).toThrow('Cancelled runtime readiness');
+ ready({verified:5,hashes:[]});for(let i=0;i<100;i++)await Promise.resolve();expect(runtimeCleanupView().readiness).toEqual([]);expect(native.token).toBe(fixture.token);fixture.handle.stop();
 });
 
 it.each(['idle','changing','active','follow-up','completion'] as const)('reconciles retained idle Codex conservatively: %s',async mode=>{

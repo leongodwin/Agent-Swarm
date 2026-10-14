@@ -319,9 +319,10 @@ export class Swarm {
   sessionUsage():import('../shared/sessionUsage.ts').SessionUsage {
     const agentSessions=this.state.agents.filter(a=>BUSY.includes(a.status)).length,limit=this.state.settings.sessionLimit;
     const cleanup=this.runtimeCleanup(),busyIds=new Set(this.state.agents.filter(a=>BUSY.includes(a.status)).map(a=>a.id));
-    const blockedReason=this.sessionCapacityBlocker??cleanup.unavailableReason??(cleanup.records.length?'Native runtime cleanup is pending or unverified; new work is quarantined':undefined);
-    const auxiliary=[...this.auxiliarySessions.values()].map(item=>({...item})),used=agentSessions+auxiliary.length+cleanup.records.filter(record=>!busyIds.has(record.agentId)).length;
-    return {limit,used,agentSessions,freeSlots:blockedReason?null:limit>0?Math.max(0,limit-used):null,auxiliary,...(cleanup.records.length?{cleanup:cleanup.records}:{}),...(blockedReason?{blockedReason}:{}),...(cleanup.failureCode?{cleanupFailureCode:cleanup.failureCode}:{})};
+    const readiness=cleanup.readiness??[];
+    const blockedReason=this.sessionCapacityBlocker??cleanup.unavailableReason??(cleanup.records.length?'Native runtime cleanup is pending or unverified; new work is quarantined':readiness.some(entry=>entry.state==='cancelled')?'Cancelled runtime readiness work is still pending; execution is held':undefined);
+    const auxiliary=[...this.auxiliarySessions.values()].map(item=>({...item})),used=agentSessions+auxiliary.length+cleanup.records.filter(record=>!busyIds.has(record.agentId)).length+readiness.filter(entry=>!busyIds.has(entry.agentId)&&!cleanup.records.some(record=>record.agentId===entry.agentId)).length;
+    return {limit,used,agentSessions,freeSlots:blockedReason?null:limit>0?Math.max(0,limit-used):null,auxiliary,...(readiness.length?{readiness}:{}),...(cleanup.records.length?{cleanup:cleanup.records}:{}),...(blockedReason?{blockedReason}:{}),...(cleanup.failureCode?{cleanupFailureCode:cleanup.failureCode}:{})};
   }
   reserveArchitectureSession(repoId:string,jobId:string):import('../shared/sessionUsage.ts').AuxiliarySessionLease {
     this.requireOpen();this.repo(repoId);

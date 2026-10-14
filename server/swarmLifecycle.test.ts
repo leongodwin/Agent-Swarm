@@ -249,6 +249,13 @@ it('quarantines cancelled worker roots even with an unlimited session budget',as
   swarm.runtimeCleanup=()=>({records:[]});const lease=swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111');lease.release();
   swarm.runtimeCleanup=()=>({records:[],unavailableReason:'Unreadable native cleanup evidence',failureCode:'evidence'});expect(swarm.sessionUsage().cleanupFailureCode).toBe('evidence');expect(()=>swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111')).toThrow('Unreadable native');
 });
+it('retains pending readiness capacity after cancellation, including an unlimited budget',async()=>{
+ const {swarm}=await office(true);swarm.updateSettings({sessionLimit:0});
+ const entry={id:'digest',agentId:'stopped-worker',cli:'codex',startedAt:1,state:'checking' as 'checking'|'cancelled',scope:'process-local-runtime-readiness' as const};
+ swarm.runtimeCleanup=()=>({records:[],readiness:[entry]});expect(swarm.sessionUsage()).toMatchObject({used:1,agentSessions:0,readiness:[entry]});expect(swarm.sessionUsage().blockedReason).toBeUndefined();
+ entry.state='cancelled';expect(swarm.sessionUsage()).toMatchObject({used:1,freeSlots:null,blockedReason:expect.stringContaining('Cancelled runtime readiness')});expect(()=>swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111')).toThrow('capacity is unverified');
+ swarm.runtimeCleanup=()=>({records:[]});expect(swarm.sessionUsage().used).toBe(0);const lease=swarm.reserveArchitectureSession('synthetic/repo','11111111-1111-4111-8111-111111111111');lease.release();
+});
 afterEach(async () => {
   vi.useRealTimers(); // allow real terminal-emulator flushes during cleanup
   await Promise.all(offices.splice(0).map(swarm => swarm.shutdown().catch(() => {})));
