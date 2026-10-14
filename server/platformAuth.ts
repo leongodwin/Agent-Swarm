@@ -1,14 +1,13 @@
 import { z } from 'zod';
 import type { Request } from './targetOperations.ts';
-import { verifyTarget, dataverseGuid } from './targetOperations.ts';
+import { dataverseGuid,targetBindingSchema,type TargetAction } from './targetOperations.ts';
+import {verifyDataverseIdentity} from './dataverseIdentity.ts';
+import {platformIdentitySchema,identityField,identityRoot,type PlatformIdentity,type Command} from './identityContracts.ts';
 
-export const platformIdentitySchema = z.object({ tenantId: z.uuid(), username: z.email(), environmentId: z.string().regex(/^(?:Default-)?[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i) }).strict();
-export type PlatformIdentity = z.infer<typeof platformIdentitySchema>;
-export type Command = (executable: string, args: string[]) => Promise<string>;
+export {platformIdentitySchema,type PlatformIdentity,type Command} from './identityContracts.ts';
 export function parsePacIdentity(output: string) {
-  const field = (label: string) => output.match(new RegExp(`^\\s*${label}:\\s*(.+)$`, 'mi'))?.[1]?.trim();
   return z.object({ organizationId: dataverseGuid, userId: dataverseGuid, environmentUrl: z.url(), environmentId: z.string().min(1), username: z.email() }).parse({
-    organizationId: field('Org ID'), userId: field('User ID'), environmentUrl: field('Org URL'), environmentId: field('Environment ID'), username: field('User Email'),
+    organizationId: identityField(output,'Org ID'), userId: identityField(output,'User ID'), environmentUrl: identityRoot(identityField(output,'Org URL')), environmentId: identityField(output,'Environment ID'), username: identityField(output,'User Email'),
   });
 }
 export function verifyFlowIdentity(value: unknown, identity: PlatformIdentity) {
@@ -22,14 +21,27 @@ export function verifyFlowIdentity(value: unknown, identity: PlatformIdentity) {
 /** Consolidate readiness and target identity, while providers keep their own secure caches. */
 export async function verifyPlatformAuthentication(command: Command, request: Request, environmentUrl: string,
   binding: { organizationId: string; userId: string }, identity: PlatformIdentity, flowWho?: () => Promise<unknown>) {
-  const pac = parsePacIdentity(await command('pac', ['org', 'who', '--environment', environmentUrl]));
-  if (new URL(pac.environmentUrl).origin !== new URL(environmentUrl).origin || pac.organizationId.toLowerCase() !== binding.organizationId.toLowerCase() || pac.userId.toLowerCase() !== binding.userId.toLowerCase() || pac.environmentId.toLowerCase() !== identity.environmentId.toLowerCase() || pac.username.toLowerCase() !== identity.username.toLowerCase()) throw new Error('PAC authentication does not match the approved platform target/account');
-  await verifyTarget(request, binding);
-  const profile = await command('dataverse', ['auth', 'who']);
-  const tenant = profile.match(/^\s*Tenant:\s*([a-f0-9-]{36})\s*$/mi)?.[1];
-  const user = profile.match(/^\s*User:\s*(\S+)\s*$/mi)?.[1];
-  const environment = profile.match(/^\s*Environment:\s*(https:\/\/\S+)\s*$/mi)?.[1];
-  if (!tenant || tenant.toLowerCase() !== identity.tenantId.toLowerCase() || user?.toLowerCase() !== identity.username.toLowerCase() || !environment || new URL(environment).origin !== new URL(environmentUrl).origin) throw new Error('Dataverse profile differs from the approved platform tenant/account/environment');
-  if (flowWho) verifyFlowIdentity(await flowWho(), identity);
-  return { checkedAt: new Date().toISOString(), environmentUrl: new URL(environmentUrl).origin, ...identity, ...binding, providers: ['pac', 'dataverse', ...(flowWho ? ['flowagent'] : [])] };
+  platformIdentitySchema.parse(identity);targetBindingSchema.parse(binding);const target=identityRoot(environmentUrl);
+  const checks=await Promise.allSettled([
+    Promise.resolve().then(async()=>{
+      const pac=parsePacIdentity(await command('pac',['org','who','--environment',target]));
+      if(pac.environmentUrl!==target||pac.organizationId.toLowerCase()!==binding.organizationId.toLowerCase()||pac.userId.toLowerCase()!==binding.userId.toLowerCase()||pac.environmentId.toLowerCase()!==identity.environmentId.toLowerCase()||pac.username.toLowerCase()!==identity.username.toLowerCase())throw new Error('PAC authentication does not match the approved platform target/account');
+    }),
+    Promise.resolve().then(()=>verifyDataverseIdentity(command,request,target,binding,identity)),
+    ...(flowWho?[Promise.resolve().then(async()=>verifyFlowIdentity(await flowWho(),identity))]:[]),
+  ]);
+  const failed=checks.find((check):check is PromiseRejectedResult=>check.status==='rejected');if(failed)throw failed.reason;
+  // Re-read the actual Dataverse account after the potentially slower provider reads.
+  await verifyDataverseIdentity(command,request,target,binding,identity);
+  return { checkedAt: new Date().toISOString(), environmentUrl: target, ...identity, ...binding, scope:'platform-identity-observation',pacObservationPasses:1,dataverseObservationPasses:2, providers: ['pac', 'dataverse', ...(flowWho ? ['flowagent'] : [])] };
+}
+
+/** Typed actions verify their executing providers; PAC publication retains the full check. */
+export async function verifyTypedActionAuthentication(action:TargetAction,command:Command,request:Request,environmentUrl:string,binding:z.infer<typeof targetBindingSchema>,identity:PlatformIdentity,flowWho?:()=>Promise<unknown>){
+  if(action.type==='copilot-publish')return verifyPlatformAuthentication(command,request,environmentUrl,binding,identity,flowWho);
+  if(action.type==='cloud-flow-state'&&!flowWho)throw new Error('Cloud-flow action requires FlowAgent authentication');
+  await verifyDataverseIdentity(command,request,environmentUrl,binding,identity);
+  if(action.type==='cloud-flow-state')verifyFlowIdentity(await flowWho!(),identity);
+  const receipt=await verifyDataverseIdentity(command,request,environmentUrl,binding,identity);
+  return {...receipt,scope:'typed-action-identity-observation',actionId:action.id,dataverseObservationPasses:2,providers:['dataverse',...(action.type==='cloud-flow-state'?['flowagent']:[])]};
 }

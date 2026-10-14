@@ -471,6 +471,7 @@ describe('Release reliability', () => {
         if (cmd.args[0] === 'auth') return `Tenant: ${id}\nUser: maker@example.com\nEnvironment: ${target}`;
         const resource = cmd.args[cmd.args.indexOf('--path') + 1];
         if (resource.endsWith('WhoAmI')) return JSON.stringify({ OrganizationId: id, UserId: id });
+        if (resource.includes('RetrieveCurrentOrganization')) return JSON.stringify({ Detail: { OrganizationId:id,EnvironmentId:id,TenantId:id,State:'Enabled' } });
         if (resource.includes('/solutioncomponents?')) return JSON.stringify({ value: [{ objectid: id, componenttype: 10030 }] });
         if (resource.includes('/solutions?')) return JSON.stringify({ value: [{ solutionid: solutionId }] });
         if (resource.includes('/bots?')) return JSON.stringify({ value: [{ botid: id }] });
@@ -529,6 +530,7 @@ describe('Release reliability', () => {
         if (cmd.args[0] === 'auth') return `Tenant: ${id}\nUser: maker@example.com\nEnvironment: ${target}`;
         const resource = cmd.args[cmd.args.indexOf('--path') + 1];
         if (resource.endsWith('WhoAmI')) return JSON.stringify({ OrganizationId: id, UserId: id });
+        if (resource.includes('RetrieveCurrentOrganization')) return JSON.stringify({ Detail: { OrganizationId:id,EnvironmentId:id,TenantId:id,State:'Enabled' } });
         if (resource.includes('/solutioncomponents?')) return JSON.stringify({ value: [{ objectid: id, componenttype: 29 }, { objectid: referenceId, componenttype: 10039 }] });
         if (resource.includes('/solutions?')) return JSON.stringify({ value: [{ solutionid: solutionId }] });
         if (resource.includes('/connectionreferences?')) return JSON.stringify({ value: [{ connectionreferenceid: referenceId }] });
@@ -551,6 +553,7 @@ describe('Release reliability', () => {
     expect(run.operations?.find((operation) => operation.id === 'typed:binding')?.status).toBe('verified');
     const evidence = path.join(root, 'delivery-runs', run.id, 'evidence');
     expect(JSON.parse(await fs.readFile(path.join(evidence, 'platform-authentication.json'), 'utf8')).providers).toContain('flowagent');
+    expect(JSON.parse(await fs.readFile(path.join(evidence, 'platform-authentication-binding.json'), 'utf8'))).toMatchObject({actionId:'binding',providers:['dataverse'],scope:'typed-action-identity-observation'});
     expect(JSON.parse(await fs.readFile(path.join(evidence, 'cloud-flow-verification.json'), 'utf8')).observations[0].correlationId).toBe(run.id);
   });
   it('resumes typed post-deployment reconciliation without another import or activation', async () => {

@@ -22,8 +22,8 @@ import { verifyIndependently } from './independentVerification.ts';
 import { verifyApiIndependently } from './apiVerification.ts';
 import { discoverSkills, selectSkills } from './skillRegistry.ts';
 import { acquireResourceLease } from './resourceLease.ts';
-import { targetBindingSchema, targetComponentSchema, targetActionSchema, verifyTarget, mapTargetComponents, verifyMappedCanvasUrls, reconcileWorkflowAction, verifyConnectionReference, type Request } from './targetOperations.ts';
-import { platformIdentitySchema, verifyPlatformAuthentication } from './platformAuth.ts';
+import { targetBindingSchema, targetComponentSchema, targetActionSchema, verifyTarget, mapTargetComponents, verifyMappedCanvasUrls, reconcileWorkflowAction, verifyConnectionReference, type Request,type TargetAction } from './targetOperations.ts';
+import { platformIdentitySchema, verifyPlatformAuthentication,verifyTypedActionAuthentication } from './platformAuth.ts';
 import { connectFlowAdapter, verifyCloudFlowContext, verifyCloudFlowBindings, verifyCloudFlowActivationBindings, verifyCloudFlowRun, type FlowAdapter } from './flowAdapter.ts';
 import { reconcileCloudFlow, reconcileCopilot } from './platformLifecycle.ts';
 import { reconcileAdditionalAction, verifyMigrationCompatibility } from './deploymentAdapters.ts';
@@ -495,12 +495,15 @@ export class DeliveryService {
       if (cloudComponents.length) flow = await connectOwnedFlowAdapter(
         ()=>(this.deps.flow??connectFlowAdapter)(checkout,controller.signal),
         async()=>{await this.assertLeaseOwned();await targetLease!.assertOwned();},controller.signal);
-      const checkAuthentication = async () => {
-        if (manifest.targetBinding) await verifyTarget(request, manifest.targetBinding);
-        if (!manifest.platformIdentity || !manifest.targetBinding) return;
-        const receipt = await verifyPlatformAuthentication(command, request, run.environmentUrl, manifest.targetBinding, manifest.platformIdentity, flow ? () => flow!.call('whoami', {}) : undefined);
-        await atomicWrite(path.join(evidence, 'platform-authentication.json'), JSON.stringify(receipt, null, 2));
-        if (!run.evidence.includes('platform-authentication.json')) run.evidence.push('platform-authentication.json');
+      const checkAuthentication = async (action?:TargetAction) => {
+        if (!manifest.platformIdentity || !manifest.targetBinding) {if(manifest.targetBinding)await verifyTarget(request,manifest.targetBinding);return;}
+        const flowWho=flow?()=>flow!.call('whoami',{}):undefined;
+        const receipt=action
+          ?await verifyTypedActionAuthentication(action,command,request,run.environmentUrl,manifest.targetBinding,manifest.platformIdentity,flowWho)
+          :await verifyPlatformAuthentication(command,request,run.environmentUrl,manifest.targetBinding,manifest.platformIdentity,flowWho);
+        const file=action?`platform-authentication-${action.id}.json`:'platform-authentication.json';
+        await atomicWrite(path.join(evidence,file), JSON.stringify(receipt, null, 2));
+        if (!run.evidence.includes(file)) run.evidence.push(file);
       };
       await checkAuthentication();
       for (const doc of manifest.documentation) await containedFile(checkout, doc);
@@ -580,7 +583,7 @@ export class DeliveryService {
             const orderedActions = [...manifest.postDeployActions].sort((a, b) => priority(a.type) - priority(b.type));
             for (const action of orderedActions) {
               await this.governance(run,manifest,'post-deploy');
-              await checkAuthentication();
+              await checkAuthentication(action);
               const component = mapping.find((c) => c.key === action.component)!;
               const save = () => this.save(), owned = async () => {await this.assertLeaseOwned();await targetLease!.assertOwned();};
               if (action.type === 'workflow-state') await reconcileWorkflowAction(action, component, request, run, save, owned);
