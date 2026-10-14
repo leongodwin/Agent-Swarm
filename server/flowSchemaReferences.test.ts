@@ -1,0 +1,14 @@
+import {expect,it} from 'vitest';
+import {inspectFlowSchemaReferences,resourceSchemaReference} from './flowSchemaReferences.ts';
+it('extracts explicit table and selected/write column names without retaining row values',()=>{
+  const result=inspectFlowSchemaReferences('CreateRecord',{entityName:'exp_reports','item/exp_title':'private value',item:{exp_total:42}});expect(result).toEqual({entitySet:'exp_reports',columns:['exp_title','exp_total'],unavailable:[]});expect(JSON.stringify(result)).not.toContain('private');
+  expect(inspectFlowSchemaReferences('ListRecords',{entityName:'exp_reports',$select:' exp_title,exp_total,exp_title '})).toEqual({entitySet:'exp_reports',columns:['exp_title','exp_total'],unavailable:[]});
+});
+it.each(['ListRecords','GetItem','CreateRecord','UpdateOnlyRecord','UpdateRecord','DeleteRecord'])('recognizes current-environment explicit table identity for %s',id=>{expect(inspectFlowSchemaReferences(id,{entityName:'exp_reports',$select:'exp_title'}).entitySet).toBe('exp_reports');});
+it.each([{entityName:"@{variables('table')}"},{entityName:'https://untrusted.test'},{entityName:'exp_reports',organization:'other'},{entityName:'exp_reports',$select:'*'},{entityName:'exp_reports',$select:'@{outputs()}'},{entityName:'exp_reports','item/exp_owner@odata.bind':'/systemusers(id)'},{entityName:'exp_reports',item:'@{body()}'},null])('preserves unsupported reference gaps without guessing table/column identities: %#',parameters=>{expect(inspectFlowSchemaReferences('CreateRecord',parameters).unavailable.length).toBeGreaterThan(0);});
+it.each(['$filter','$orderby','$expand','fetchXml','filteringattributes','filterexpression'])('does not certify unresolved %s schema references',key=>{const result=inspectFlowSchemaReferences('ListRecords',{entityName:'exp_reports',$select:'exp_title',[key]:'private query'});expect(result.unavailable).not.toEqual([]);expect(JSON.stringify(result)).not.toContain('private');});
+it('bounds explicit columns and retains unsupported operation/read scope',()=>{
+  expect(inspectFlowSchemaReferences('UnknownAction',{}).unavailable).not.toEqual([]);expect(inspectFlowSchemaReferences('ListRecords',{entityName:'exp_reports'}).unavailable).not.toEqual([]);
+  const fields=Object.fromEntries(Array.from({length:101},(_,i)=>[`item/exp_column${i}`,i]));const result=inspectFlowSchemaReferences('CreateRecord',{entityName:'exp_reports',...fields});expect(result.columns).toHaveLength(100);expect(result.unavailable).toContain('Dataverse explicit column references exceed their bound');
+});
+it('requires exactly one bounded table identity',()=>{for(const value of [{resource:'flow',columns:[]},{resource:'flow',logicalName:'exp_report',entitySet:'exp_reports',columns:[]}])expect(resourceSchemaReference.safeParse(value).success).toBe(false);});

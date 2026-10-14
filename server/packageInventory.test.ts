@@ -5,13 +5,14 @@ const roots:string[]=[];afterEach(async()=>{await Promise.all(roots.splice(0).ma
 const id='11111111-1111-4111-8111-111111111111';
 const solution=(roots=`<RootComponent type="29" id="{${id}}" behavior="0"/>`)=>`<ImportExportXml><SolutionManifest><UniqueName>Expenses</UniqueName><Version>1.0.0.0</Version><Managed>0</Managed><RootComponents>${roots}</RootComponents></SolutionManifest></ImportExportXml>`;
 const custom=(extra='')=>`<ImportExportXml><connectionreferences><connectionreference connectionreferencelogicalname="exp_dataverse"><connectorid>/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps</connectorid></connectionreference></connectionreferences><Workflows><Workflow WorkflowId="{${id}}"><Category>5</Category><JsonFileName>/Workflows/flow.json</JsonFileName></Workflow></Workflows>${extra}</ImportExportXml>`;
-const flow=(type='OpenApiConnection',api='shared_commondataserviceforapps')=>JSON.stringify({properties:{connectionReferences:{dv:{api:{name:'shared_commondataserviceforapps'},connection:{connectionReferenceLogicalName:'exp_dataverse'}}},definition:{triggers:{tick:{type:'Recurrence'}},actions:{query:{type,inputs:{host:{connectionName:'dv',apiId:`/providers/Microsoft.PowerApps/apis/${api}`,operationId:'ListRecords'}}}}}}});
+const flow=(type='OpenApiConnection',api='shared_commondataserviceforapps')=>JSON.stringify({properties:{connectionReferences:{dv:{api:{name:'shared_commondataserviceforapps'},connection:{connectionReferenceLogicalName:'exp_dataverse'}}},definition:{triggers:{tick:{type:'Recurrence'}},actions:{query:{type,inputs:{host:{connectionName:'dv',apiId:`/providers/Microsoft.PowerApps/apis/${api}`,operationId:'ListRecords'},parameters:{entityName:'exp_reports',$select:'exp_title'}}}}}}});
 async function zip(entries:Record<string,string|Buffer>,compress=false){const archive=new ZipFile();const chunks:Buffer[]=[];const ready=new Promise<Buffer>((resolve,reject)=>{archive.outputStream.on('data',chunk=>chunks.push(chunk));archive.outputStream.on('end',()=>resolve(Buffer.concat(chunks)));archive.outputStream.on('error',reject);});for(const [name,body] of Object.entries(entries))archive.addBuffer(Buffer.from(body),name,{compress});archive.end();return ready;}
 async function fixture(entries:Record<string,string|Buffer>={'solution.xml':solution(),'customizations.xml':custom(),'Workflows/flow.json':flow()}){const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-package-inventory-'));roots.push(root);const file=path.join(root,'solution.zip');await fs.writeFile(file,await zip(entries));return {root,file};}
 const limits:ArchiveLimits={compressedBytes:64*1024*1024,entryBytes:32*1024*1024,expandedBytes:256*1024*1024,entries:10000,ratio:1000};
 it('derives actual flow references and operations from a checksum-verified package without extracting files',async()=>{
   const {file,root}=await fixture();const report=await inspectSolutionPackage(file);
   expect(report).toMatchObject({archiveComplete:true,resourceInventoryComplete:true,complianceVerified:false,solution:{name:'Expenses',version:'1.0.0.0',managed:false}});
+  expect(report.resources[0].schemaReferences).toEqual([{resource:id,entitySet:'exp_reports',columns:['exp_title']}]);
   expect(report.resources[0]).toMatchObject({id,complete:true,connectors:['shared_commondataserviceforapps'],operations:[{type:'Recurrence'},{type:'OpenApiConnection',connector:'shared_commondataserviceforapps',operationId:'ListRecords'}]});
   expect(report.packageSha256).toBe(crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex'));expect(report.files).toHaveLength(3);expect(await fs.readdir(root)).toEqual(['solution.zip']);
 });
@@ -32,6 +33,17 @@ it('inventories nested Canvas datasource metadata while retaining its formula/ru
   const msapp=await zip({'References/DataSources.json':JSON.stringify({DataSources:[{Type:'NativeCDSDataSourceInfo',Name:'Reports',LogicalName:'exp_report',DatasetName:'default.cds'},{Type:'FutureSource'}]}),'Properties.json':'{}','Header.json':'{}'});
   const {file}=await fixture({'solution.xml':solution(`<RootComponent type="300" schemaName="exp_app"/>`),'customizations.xml':'<ImportExportXml><CanvasApps><CanvasApp><Name>exp_app</Name><DocumentUri>/CanvasApps/app.msapp</DocumentUri></CanvasApp></CanvasApps></ImportExportXml>','CanvasApps/app.msapp':msapp});
   const report=await inspectSolutionPackage(file);expect(report.archiveComplete).toBe(true);expect(report.resourceInventoryComplete).toBe(false);expect(report.files.some(file=>file.path.includes('!/References/DataSources.json'))).toBe(true);expect(report.resources[0]).toMatchObject({kind:'canvas',complete:false,tables:['exp_report'],connectors:['shared_commondataserviceforapps']});expect(report.issues.join(' ')).toContain('unsupported datasource');
+});
+it('keeps schema-reference overflow explicit rather than certifying a truncated inventory',async()=>{
+  const definition=JSON.parse(flow()),operation=definition.properties.definition.actions.query;
+  definition.properties.definition.actions=Object.fromEntries(Array.from({length:301},(_,index)=>[`query_${index}`,operation]));
+  const {file}=await fixture({'solution.xml':solution(),'customizations.xml':custom(),'Workflows/flow.json':JSON.stringify(definition)});const report=await inspectSolutionPackage(file);
+  expect(report.archiveComplete).toBe(true);expect(report.resourceInventoryComplete).toBe(false);expect(report.resources[0].schemaReferences).toHaveLength(300);expect(report.issues.join(' ')).toContain('schema references exceed');
+});
+it('does not silently approve legacy Dataverse schema/environment semantics',async()=>{
+  const definition=JSON.parse(flow());definition.properties.connectionReferences.dv.api.name='shared_commondataservice';definition.properties.definition.actions.query.inputs.host.apiId='shared_commondataservice';
+  const {file}=await fixture({'solution.xml':solution(),'customizations.xml':custom().replaceAll('shared_commondataserviceforapps','shared_commondataservice'),'Workflows/flow.json':JSON.stringify(definition)});const report=await inspectSolutionPackage(file);
+  expect(report.archiveComplete).toBe(true);expect(report.resourceInventoryComplete).toBe(false);expect(report.issues.join(' ')).toContain('legacy Dataverse connector');
 });
 it('rejects traversal and special-file ZIP entries without touching the filesystem',async()=>{
   const {file,root}=await fixture({'solution.xml':solution(),'customizations.xml':custom(),'Workflows/flow.json':flow(),'safe.txt':'payload'});

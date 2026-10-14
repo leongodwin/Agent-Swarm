@@ -7,6 +7,7 @@ import {baseAttribute,verifyColumns} from './columnContracts.ts';
 import {governancePhase,manifestDigest,type LifecycleRequest} from './lifecycleGovernance.ts';
 import {targetBindingSchema,type Request} from './targetOperations.ts';
 import {verifyTableStructure} from './tableStructure.ts';
+import {verifyResourceSchemaReferences} from './resourceSchema.ts';
 
 export const declaredSchemaObservation=z.strictObject({
   scope:z.literal('declared-target-schema'),complete:z.literal(false),status:z.enum(['observed','unavailable']),
@@ -50,6 +51,7 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
         return value;
       };
       await verifyDataverseIdentity(command,request,url.origin,binding,identity);
+      await verifyResourceSchemaReferences(input.resourceSchemaReferences??[],tables,actions,request);
       if(['build','test','import'].includes(input.phase))await verifyMigrationCompatibility(actions,tables,request);
       else for(const table of tables){
         const action=actions.find(action=>action.component===table.key)!;

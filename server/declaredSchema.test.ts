@@ -63,6 +63,13 @@ it('bounds total schema response bytes before parsing and publishing evidence',a
   run.mockImplementation(async command=>command.args.includes('api')?JSON.stringify({OrganizationId:guid,UserId:guid,padding:'x'.repeat(8*1024*1024)}):normal(command));
   const result=await observe(input);expect(result.status).toBe('unavailable');expect(result.observations).toEqual([]);
 });
+it('checks resource-derived table and column references against the approved schema before publishing observations',async()=>{
+  const {run,observe}=fixture(),normal=run.getMockImplementation()!;
+  run.mockImplementation(async command=>command.args.some(arg=>arg.includes('EntityDefinitions?$select=LogicalName,EntitySetName'))?JSON.stringify({value:[{LogicalName:'exp_report',EntitySetName:'exp_reports',MetadataId:metadata}]}):normal(command));
+  const refs=[{resource:'flow',entitySet:'exp_reports',columns:['exp_title']}];
+  const result=await observe({...input,resourceSchemaReferences:refs});expect(result.status).toBe('observed');expect(result.observations).toHaveLength(3);expect(result.complete).toBe(false);
+  const denied=await observe({...input,resourceSchemaReferences:[{...refs[0],columns:['exp_undeclared']}]});expect(denied.status).toBe('unavailable');expect(denied.observations).toEqual([]);
+});
 
 it.each(['build','test','import','post-deploy','verify','health'] as const)('binds declared relationship/key reads and rejects their drift during %s',async phase=>{
   const structure={relationships:[{kind:'one-to-many',schemaName:'exp_Report_Line',referencedEntity:'exp_report',referencedAttribute:'exp_reportid',referencingEntity:'exp_line',referencingAttribute:'exp_report',cascade:{Delete:'Restrict'}}],keys:[{schemaName:'exp_Report_Key',attributes:['exp_title']}]};

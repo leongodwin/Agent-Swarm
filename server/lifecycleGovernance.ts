@@ -2,12 +2,13 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { atomicWrite } from './atomicFile.ts';
 import path from 'node:path';
+import type {ResourceSchemaReference} from './flowSchemaReferences.ts';
 
 const digest=z.string().regex(/^[a-f0-9]{64}$/);
 export const governancePhase=z.enum(['build','test','import','post-deploy','verify','health']);
 export type GovernancePhase=z.infer<typeof governancePhase>;
 export interface LifecycleRequest {
-  phase:GovernancePhase;sourceCommit:string;environmentUrl:string;releaseId:string;checkout:string;manifest:unknown;packageSha256?:string;signal?:AbortSignal;evidenceDirectory?:string;
+  phase:GovernancePhase;sourceCommit:string;environmentUrl:string;releaseId:string;checkout:string;manifest:unknown;packageSha256?:string;signal?:AbortSignal;evidenceDirectory?:string;resourceSchemaReferences?:ResourceSchemaReference[];
 }
 const resultSchema=z.object({status:z.enum(['clear','blocked','unavailable']),phase:governancePhase,sourceCommit:digest.or(z.string().regex(/^[a-f0-9]{40}$/)),
   environmentUrl:z.url(),releaseId:z.string().min(1),manifestSha256:digest,checkedAt:z.iso.datetime(),

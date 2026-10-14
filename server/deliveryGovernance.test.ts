@@ -16,7 +16,7 @@ async function packaged(customizationExtra='',rootExtra='') {
   const definition = {
     triggers: { tick: { type: 'Recurrence' } },
     actions: {
-      query: { type: 'OpenApiConnection', inputs: { host: { connectionName: 'dv', apiId: 'shared_commondataserviceforapps', operationId: 'ListRecords' } } },
+      query: { type: 'OpenApiConnection', inputs: { host: { connectionName: 'dv', apiId: 'shared_commondataserviceforapps', operationId: 'ListRecords' },parameters:{entityName:'exp_reports',$select:'exp_title'} } },
       mail: { type: 'OpenApiConnection', inputs: { host: { connectionName: 'mail', apiId: 'shared_office365', operationId: 'SendEmailV2' } } },
     },
   };
@@ -107,6 +107,11 @@ it('evaluates connectors together inside the actual packaged flow and persists i
   const input=await packaged();const source={observation:()=>observation([{name:'policy',environmentType:'AllEnvironments',environments:[],defaultConnectorsClassification:'General',connectorGroups:[{classification:'Confidential',connectors:[{id:'shared_commondataserviceforapps'}]}]}])};
   const result=await createDeliveryGovernance(source)(input);expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('separates Business and Non-Business');
   const inventory=JSON.parse(await fs.readFile(path.join(input.evidenceDirectory,result.packageInventoryFile!),'utf8'));expect(inventory.archiveComplete).toBe(true);expect(inventory.resources[0].connectors).toEqual(['shared_commondataserviceforapps','shared_office365']);
+});
+it('passes independently packaged schema references to the fresh schema observer',async()=>{
+  const input=await packaged(),seen:LifecycleRequest[]=[];
+  const schema=async(value:LifecycleRequest):Promise<DeclaredSchemaObservation>=>{seen.push(value);return {scope:'declared-target-schema',complete:false,status:'unavailable',phase:value.phase,sourceCommit:value.sourceCommit,releaseId:value.releaseId,environmentUrl:value.environmentUrl,manifestSha256:manifestDigest(value.manifest),checkedAt:new Date().toISOString(),reason:'Resource schema correlation remains incomplete',tables:[],observations:[]};};
+  const result=await createDeliveryGovernance({observation:()=>observation()},schema)(input);expect(result.status).toBe('unavailable');expect(seen).toHaveLength(1);expect(seen[0].resourceSchemaReferences).toContainEqual({resource:guid,entitySet:'exp_reports',columns:['exp_title']});expect(seen[0].packageSha256).toBe(input.packageSha256);
 });
 it('rejects package drift and omitted components/bindings while keeping unsupported overall acceptance unavailable',async()=>{
   const input=await packaged();const check=createDeliveryGovernance({observation:()=>observation()});

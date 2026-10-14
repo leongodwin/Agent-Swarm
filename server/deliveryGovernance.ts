@@ -1,5 +1,5 @@
 import { deliveryManifest,containedFile } from './delivery.ts';
-import { unavailableGovernance,type LifecycleCheck } from './lifecycleGovernance.ts';
+import { unavailableGovernance,type LifecycleCheck,type LifecycleRequest } from './lifecycleGovernance.ts';
 import {manifestDigest} from './lifecycleGovernance.ts';
 import { evaluateStandardPolicies } from './standardPolicy.ts';
 import { inspectSolutionPackage } from './packageInventory.ts';
@@ -19,6 +19,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     let packageInventoryFile:string|undefined;
     let resources:{id:string;complete:true;connectors:string[]}[]|undefined;
     let packageIssues:string[]=[];
+    let resourceSchemaReferences:LifecycleRequest['resourceSchemaReferences'];
     if(request.packageSha256) {
       const inventory=await inspectSolutionPackage(await containedFile(request.checkout,manifest.solutionZip),request.signal);
       if(request.evidenceDirectory){packageInventoryFile=`package-inventory-${inventory.packageSha256||request.packageSha256}.json`;await atomicWrite(path.join(request.evidenceDirectory,packageInventoryFile),JSON.stringify(inventory,null,2));}
@@ -30,6 +31,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
         if(!found)return {...base,status:'blocked',reasons:[`Package root component type ${component.type} lacks its exact approved component declaration`]};
       }
       const packageSchema=comparePackageSchema(inventory,manifest);
+      resourceSchemaReferences=inventory.resources.flatMap(resource=>resource.schemaReferences??[]);
       if(packageSchema.status==='blocked')return {...base,status:'blocked',reasons:packageSchema.reasons};
       packageIssues.push(...packageSchema.reasons);
       resources=inventory.resources.filter(resource=>resource.complete).map(resource=>({id:resource.id,complete:true,connectors:resource.connectors}));
@@ -53,7 +55,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     }catch{advancedReason='Advanced policy observation could not be bound to this stage or persisted';}};
     let schemaReason='Fresh identity-bound declared target schema evidence is unavailable';
     const schemaWork=async()=>{if(observeSchema)try{
-      const schema=declaredSchemaObservation.parse(await observeSchema(request));
+      const schema=declaredSchemaObservation.parse(await observeSchema({...request,resourceSchemaReferences}));
       const age=Date.now()-Date.parse(schema.checkedAt);
       if(request.signal?.aborted||schema.phase!==request.phase||schema.sourceCommit!==request.sourceCommit||schema.releaseId!==request.releaseId||schema.environmentUrl!==request.environmentUrl||schema.manifestSha256!==manifestDigest(request.manifest)||age>60_000||age < -30_000||(schema.status==='observed'&&(schema.identity?.tenantId.toLowerCase()!==identity.tenantId.toLowerCase()||schema.identity?.username.toLowerCase()!==identity.caller.toLowerCase()||schema.identity?.environmentId.toLowerCase()!==platformIdentity.environmentId.toLowerCase()||schema.binding?.organizationId.toLowerCase()!==manifest.targetBinding?.organizationId.toLowerCase()||schema.binding?.userId.toLowerCase()!==manifest.targetBinding?.userId.toLowerCase())))throw new Error('Schema context differs');
       schemaReason=schema.reason;
