@@ -1,5 +1,6 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {performance} from 'node:perf_hooks';
 import {z} from 'zod';
 import {atomicWrite,SerialWriter} from './atomicFile.ts';
 import {readBoundedJson} from './boundedJson.ts';
@@ -33,7 +34,7 @@ export class HldSynthesisService {
   private jobs:SynthesisJob[]=[];private writer=new SerialWriter();private closed=false;private ready=false;
   private historyStartedAt=Date.now();
   private progressPersist?:Promise<void>;private progressDirty=false;private progressJob?:SynthesisJob;
-  private active?:{job:SynthesisJob;controller:AbortController;handle?:SessionHandle;timer:NodeJS.Timeout;work?:Promise<void>;lease:AuxiliarySessionLease;started:boolean;acknowledged:boolean};
+  private active?:{job:SynthesisJob;controller:AbortController;handle?:SessionHandle;timer:NodeJS.Timeout;work?:Promise<void>;lease:AuxiliarySessionLease;started:boolean;acknowledged:boolean;startedMonotonic:number};
   constructor(private home:string,private deps:SynthesisDependencies){}
   private file(){return path.join(this.home,'architecture-synthesis.json');}
   pendingCleanup(){return this.jobs.filter(job=>job.runtimeCleanup==='awaiting-completion').map(job=>({jobId:job.id,repoId:job.repoId,reservedAt:job.startedAt}));}
@@ -62,7 +63,9 @@ export class HldSynthesisService {
   view(repoId:string,id?:string){
     if(!this.ready)throw new HttpError(503,'Architecture synthesis is unavailable');
     const jobs=this.jobs.filter(job=>job.repoId===repoId&&(!id||job.id===id));if(id&&!jobs.length)throw new HttpError(404,'Architecture job is outside this project');
-    return structuredClone(id?jobs:jobs.slice(0,30));
+    const rows=structuredClone(id?jobs:jobs.slice(0,30));
+    for(const row of rows)if(this.active?.job.id===row.id&&!terminal(row)){const elapsed=performance.now()-this.active.startedMonotonic;if(Number.isFinite(elapsed)&&elapsed>=0)row.monotonicElapsedMs=Math.floor(elapsed);}
+    return rows;
   }
   summary(repoId:string){if(!this.ready)throw new HttpError(503,'Architecture synthesis is unavailable');return synthesisSummary(this.jobs.filter(job=>job.repoId===repoId),this.historyStartedAt);}
   async result(repoId:string,id:string){
@@ -71,6 +74,7 @@ export class HldSynthesisService {
     return loadHldVersion(context.checkoutPath,repoId,job.result.docId,job.result.artifactSha256,()=>{this.deps.assertOpen();if(this.closed)throw new HttpError(503,'Synthesis service is closed');});
   }
   async start(repoId:string,raw:unknown){
+    const startedAt=Date.now(),startedMonotonic=performance.now();
     this.deps.assertOpen();if(this.closed||!this.ready)throw new HttpError(503,'Architecture synthesis is closed');
     if(this.active)throw new HttpError(409,terminal(this.active.job)?'Architecture runtime cleanup remains unverified; preserve its records before replacement':'An architecture synthesis job is already running');
     // Keep failures rather than making a healthy-looking metric by pruning them.
@@ -81,11 +85,11 @@ export class HldSynthesisService {
     if(Buffer.byteLength(requirements)>128*1024)throw new HttpError(413,'Synthesis requirements exceed their bound');
     if(auditDlpCompliance(requirements,'architecture-requirements').length)throw new HttpError(409,'Architecture requirements failed the local connector safeguard');
     try{synthesisRequirements(input);}catch(error){throw new HttpError(413,errorText(error));}
-    const job:SynthesisJob={id:crypto.randomUUID(),repoId,status:'queued',runtime:'codex-cli',startedAt:Date.now(),deadlineMs:DEADLINE,events:[],costUsd:0,turns:0};
+    const job:SynthesisJob={id:crypto.randomUUID(),repoId,status:'queued',runtime:'codex-cli',startedAt,deadlineMs:DEADLINE,events:[],costUsd:0,turns:0};
     const lease=this.deps.reserve(repoId,job.id);
     const controller=new AbortController();
-    const timer=setTimeout(()=>this.finish(job,'failed','Architecture synthesis exceeded its five-minute deadline; late output is denied'),DEADLINE);
-    this.active={job,controller,timer,lease,started:false,acknowledged:false};this.jobs.unshift(job);
+    const timer=setTimeout(()=>this.finish(job,'failed','Architecture synthesis exceeded its five-minute deadline; late output is denied'),Math.max(0,DEADLINE-(performance.now()-startedMonotonic)));
+    this.active={job,controller,timer,lease,started:false,acknowledged:false,startedMonotonic};this.jobs.unshift(job);
     try{await this.persist();}catch(error){this.finish(job,'failed',errorText(error));throw error;}
     const active=this.active;
     if(active?.job===job)active.work=this.run(job,input,context,controller.signal).catch(error=>this.finish(job,'failed',errorText(error)));
@@ -94,10 +98,13 @@ export class HldSynthesisService {
   private finish(job:SynthesisJob,status:SynthesisJob['status'],error?:string){
     if(terminal(job))return;
     const endedAt=Date.now(),elapsedMs=Math.max(0,endedAt-job.startedAt);
+    const owner=this.active?.job===job?this.active:undefined;
+    const monotonic=owner?performance.now()-owner.startedMonotonic:undefined;
+    if(monotonic!==undefined&&Number.isFinite(monotonic)&&monotonic>=0)job.monotonicElapsedMs=Math.floor(monotonic);
     // The last publication guard and completion timestamp are separate reads.
     // Crossing the deadline (or a backwards clock) between them cannot create
     // a successful record that the persisted-state validator later rejects.
-    if(status==='completed'&&(endedAt<job.startedAt||elapsedMs>=DEADLINE)){
+    if(status==='completed'&&(endedAt<job.startedAt||elapsedMs>=DEADLINE||monotonic===undefined||!Number.isFinite(monotonic)||monotonic<0||monotonic>=DEADLINE)){
       status='failed';error='Synthesis completion missed its consistent five-minute deadline; any saved draft remains unaccepted';delete job.result;this.event(job,'error',error);
     }
     job.status=status;job.error=error?.slice(0,4000);job.endedAt=endedAt;job.elapsedMs=elapsedMs;
@@ -111,6 +118,8 @@ export class HldSynthesisService {
   private guard(job:SynthesisJob,captured:SynthesisContext,signal:AbortSignal){
     signal.throwIfAborted();this.deps.assertOpen();
     if(this.closed||this.active?.job!==job||terminal(job))throw new HttpError(409,'Synthesis no longer owns this job');
+    const monotonic=performance.now()-this.active.startedMonotonic;
+    if(!Number.isFinite(monotonic)||monotonic<0||monotonic>=DEADLINE)throw new HttpError(409,'Architecture synthesis monotonic deadline expired or its clock is inconsistent');
     if(Date.now()-job.startedAt>=DEADLINE)throw new HttpError(409,'Architecture synthesis deadline expired');
     const current=this.deps.context(job.repoId);
     if(current.checkoutPath!==captured.checkoutPath||current.fingerprint!==captured.fingerprint)throw new HttpError(409,'Architecture project, skills or platform scope changed; repeat synthesis with current requirements');

@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import {existsSync} from 'node:fs';
+import {performance} from 'node:perf_hooks';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
@@ -23,6 +24,19 @@ async function fixture(admission:SynthesisDependencies['admission']=async()=>nul
   return {service,root,checkout,start,stop,deps,lease,get callbacks(){return callbacks;},change:()=>{fingerprint='changed';}};
 }
 const success=(structured:unknown=output)=>({ok:true,text:'',structured,costUsd:0.01,turns:1,errors:[]});
+it.each(['expired','backwards'] as const)('rejects an %s monotonic clock while wall-clock elapsed remains below the deadline',async mode=>{
+  const mono=vi.spyOn(performance,'now').mockReturnValue(1000),wall=vi.spyOn(Date,'now').mockReturnValue(2000000);const f=await fixture();
+  try{const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());wall.mockReturnValue(job.startedAt+1000);mono.mockReturnValue(mode==='expired'?301001:999);f.callbacks.finished(success());await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('failed'));expect(f.service.view('synthetic/project',job.id)[0].result).toBeUndefined();expect(f.service.summary('synthetic/project').successfulDurationMs.count).toBe(0);}finally{mono.mockRestore();wall.mockRestore();}
+});
+it('records and restores monotonic timing despite a different wall-clock duration',async()=>{
+  const mono=vi.spyOn(performance,'now').mockReturnValue(1000),wall=vi.spyOn(Date,'now').mockReturnValue(2000000);const f=await fixture();
+  try{const job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());wall.mockReturnValue(job.startedAt+1000);mono.mockReturnValue(131000);f.callbacks.finished(success());await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('completed'));await f.service.close();expect(f.service.view('synthetic/project',job.id)[0]).toMatchObject({elapsedMs:1000,monotonicElapsedMs:130000});const restored=new HldSynthesisService(f.root,f.deps);try{await restored.init();expect(restored.summary('synthetic/project').successfulDurationMs.median).toBe(130000);expect(restored.summary('synthetic/project').durationCoverage).toEqual({monotonic:1,wallClockOnly:0});}finally{await restored.close();}}finally{mono.mockRestore();wall.mockRestore();}
+});
+it('rejects a monotonic deadline crossed at the final completion boundary',async()=>{
+  const mono=vi.spyOn(performance,'now').mockReturnValue(1000),f=await fixture(),job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());const original=f.deps.context;let published=0;
+  f.deps.context=id=>{const context=original(id);if(existsSync(path.join(f.checkout,'docs','architecture','drafts','current.json'))&&++published===2)mono.mockReturnValue(301000);return context;};
+  try{f.callbacks.finished(success());await vi.waitFor(()=>expect(f.service.view('synthetic/project',job.id)[0].status).toBe('failed'));const failed=f.service.view('synthetic/project',job.id)[0];expect(failed.error).toContain('completion missed');expect(failed.result).toBeUndefined();expect(failed.monotonicElapsedMs).toBe(300000);}finally{mono.mockRestore();f.deps.context=original;}
+});
 it('coalesces a blocked-disk progress burst and ignores logs after runtime completion while preserving the final artifact',async()=>{
   const f=await fixture(),job=await f.service.start('synthetic/project',input);await vi.waitFor(()=>expect(f.start).toHaveBeenCalledOnce());
   const original=fs.writeFile.bind(fs);let writes=0,release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});
