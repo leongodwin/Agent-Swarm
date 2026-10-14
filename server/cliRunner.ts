@@ -421,16 +421,20 @@ export function codexRecoveredIdle(screen:string):boolean {
 
 export function startCliSession(opts: SessionOptions, callbacks: SessionCallbacks): SessionHandle {
   const pendingCleanup=cleanupBlocker();if(pendingCleanup)throw new Error(pendingCleanup);
+  const requestedCli=opts.cli??'codex';
+  const requestedPolicyError=runtimeModelError(requestedCli,opts.model);if(requestedPolicyError)throw new Error(requestedPolicyError);
   const term = opts.terminal!;
   // A follow-up to the session a CLI is still waiting in picks that CLI up again, and so does an office that restarted
   // while it worked (reattach); anything else replaces it.
   const prev = lives.get(term);
+  if(opts.reattach&&prev&&prev.cli!==requestedCli)throw new Error('Retained terminal provider differs from the requested runtime; current work was preserved');
   const waiting = !!prev?.proc && !prev.session;
+  if(opts.reattach&&prev&&!waiting)throw new Error('Retained terminal already has an active task owner; current work was preserved');
   const adopt = waiting && (!!opts.reattach || (prev!.cli === (opts.cli ?? 'codex') && !!opts.resumeSessionId && prev!.resumeId === opts.resumeSessionId));
-  const replaced=prev&&!adopt?endLive(prev):Promise.resolve();
   let live: LiveCli | null = adopt ? prev! : null;
   const cli = live?.cli ?? opts.cli ?? 'codex';
   const policyError=runtimeModelError(cli,opts.model);if(policyError)throw new Error(policyError);
+  const replaced=prev&&!adopt?endLive(prev):Promise.resolve();
   const label = cliLabel(cli);
 
   const token = crypto.randomUUID();

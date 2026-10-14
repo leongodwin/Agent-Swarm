@@ -171,6 +171,33 @@ it('rejects a disallowed CLI before spawning a terminal process',()=>{
  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
  expect(()=>startRealCliSession({cwd:HOME_DIR,prompt:'synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'ceo',cli:'copilot',terminal:term},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()})).toThrow('Only Codex');
 });
+it.each([{cli:'claude',model:''},{cli:'copilot',model:''},{cli:'opencode',model:'unqualified'},{cli:'codex',model:'anthropic/claude'}] as const)('preserves an admitted task when a forbidden replacement is requested: $cli / $model',async replacement=>{
+ vi.useFakeTimers();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+ const opts:SessionOptions={cwd:HOME_DIR,prompt:'Original synthetic task',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,authorizeTool:()=>null};
+ const original={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()},rejected={...original,finished:vi.fn()};
+ const handle=await startCliSession(opts,original),token=native.token;native.kill.mockClear();native.write.mockClear();vi.mocked(term.bind).mockClear();
+ expect(()=>startRealCliSession({...opts,...replacement,prompt:'Rejected task'},rejected)).toThrow();
+ expect(native.kill).not.toHaveBeenCalled();expect(native.write).not.toHaveBeenCalled();expect(term.bind).not.toHaveBeenCalled();expect(native.token).toBe(token);expect(original.finished).not.toHaveBeenCalled();expect(rejected.finished).not.toHaveBeenCalled();
+ setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic admitted decision'}));
+ const result:any=await handleHook(token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});expect(result.hookSpecificOutput.permissionDecision).toBe('allow');handle.stop();
+});
+it.each([{cli:'gemini',model:'gemini-synthetic'},{cli:'opencode',model:'openai/gpt-synthetic'}] as const)('preserves a retained Codex terminal when reattachment requests $cli',async requested=>{
+ vi.useFakeTimers();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal,callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
+ const opts:SessionOptions={cwd:HOME_DIR,prompt:'Original task',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,keepAlive:true,authorizeTool:()=>null};
+ const handle=await startCliSession(opts,callbacks),token=native.token;
+ await handleHook(token,{hook_event_name:'Stop',last_assistant_message:'Synthetic original response'});await vi.advanceTimersByTimeAsync(4000);
+ native.kill.mockClear();native.write.mockClear();vi.mocked(term.bind).mockClear();
+ expect(()=>startRealCliSession({...opts,...requested,reattach:true},callbacks)).toThrow('Retained terminal provider differs');
+ expect(native.kill).not.toHaveBeenCalled();expect(native.write).not.toHaveBeenCalled();expect(term.bind).not.toHaveBeenCalled();expect(native.token).toBe(token);
+ const decision:any=await handleHook(token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});expect(decision.hookSpecificOutput.permissionDecision).toBe('deny');handle.stop();
+});
+it('rejects reattachment over a task that already owns the retained terminal',async()=>{
+ vi.useFakeTimers();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal,callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()};
+ const opts:SessionOptions={cwd:HOME_DIR,prompt:'Original task',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,authorizeTool:()=>null};
+ const handle=await startCliSession(opts,callbacks),token=native.token;native.kill.mockClear();native.write.mockClear();
+ expect(()=>startRealCliSession({...opts,reattach:true},callbacks)).toThrow('active task owner');expect(native.kill).not.toHaveBeenCalled();expect(native.write).not.toHaveBeenCalled();expect(callbacks.finished).not.toHaveBeenCalled();
+ setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic admitted decision'}));const decision:any=await handleHook(token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});expect(decision.hookSpecificOutput.permissionDecision).toBe('allow');handle.stop();
+});
 
 it.each(['idle','changing','active','follow-up','completion'] as const)('reconciles retained idle Codex conservatively: %s',async mode=>{
   vi.useFakeTimers();native.kill.mockClear();
