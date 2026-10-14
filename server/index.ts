@@ -27,6 +27,7 @@ import {OfficeReloadRequester} from './officeReload.mjs';
 import { parseBody } from './requestSchemas.ts';
 import { OfficeMaintenance } from './officeMaintenance.ts';
 import {createDeclaredSchemaObserver} from './declaredSchema.ts';
+import {createAdvancedPolicyObserver} from './advancedPolicy.ts';
 import {HldSynthesisService} from './hldSynthesis.ts';
 import {discoverSkills} from './skillRegistry.ts';
 
@@ -49,7 +50,7 @@ const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.dem
 await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
 await tenantDlp.init();
-delivery.checkGovernance=createDeliveryGovernance(tenantDlp,createDeclaredSchemaObserver());
+delivery.checkGovernance=createDeliveryGovernance(tenantDlp,createDeclaredSchemaObserver(),createAdvancedPolicyObserver());
 setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, input, checkpoint));
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();

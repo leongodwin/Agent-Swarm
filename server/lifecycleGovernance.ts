@@ -14,6 +14,7 @@ const resultSchema=z.object({status:z.enum(['clear','blocked','unavailable']),ph
   artifactSha256:digest.optional(),policySha256:digest.optional(),schemaSha256:digest.optional(),
   packageInventoryFile:z.string().regex(/^package-inventory-[a-f0-9]{64}\.json$/).optional(),
   declaredSchemaFile:z.string().regex(/^declared-schema-[a-f0-9]{64}\.json$/).optional(),
+  advancedPolicyFile:z.string().regex(/^advanced-policy-[a-f0-9]{64}\.json$/).optional(),
   reasons:z.array(z.string().min(1).max(1000)).min(1).max(30),
 }).strict().superRefine((result,ctx)=>{if(result.status==='clear'&&(!result.artifactSha256||!result.policySha256||!result.schemaSha256))ctx.addIssue({code:'custom',message:'Clear governance requires complete artifact, policy and schema evidence'});});
 export type LifecycleResult=z.infer<typeof resultSchema>;

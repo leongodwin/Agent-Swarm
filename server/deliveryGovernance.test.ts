@@ -4,10 +4,12 @@ import {createDeliveryGovernance} from './deliveryGovernance.ts';
 import type {LifecycleRequest} from './lifecycleGovernance.ts';
 import {manifestDigest} from './lifecycleGovernance.ts';
 import type {DeclaredSchemaObservation} from './declaredSchema.ts';
+import type {AdvancedPolicyObservation,AdvancedPolicyRequest} from './advancedPolicy.ts';
 const guid='11111111-1111-4111-8111-111111111111';
 const manifest={schemaVersion:1,solutionUniqueName:'Expenses',solutionVersion:'1.0.0.0',solutionZip:'release.zip',hasUi:false,recovery:{runbook:'recovery.md',rehearsalReport:'drill.json'},documentation:['one.md','two.md','three.md'],build:[{executable:'node',args:['build.js']}],test:[{executable:'node',args:['test.js']}],verify:[{executable:'node',args:['verify.js']}],targetBinding:{organizationId:guid,userId:guid},platformIdentity:{tenantId:guid,username:'tester@company.test',environmentId:guid},targetComponents:[{key:'dataverse',kind:'connection-reference',logicalName:'exp_dataverse'}],postDeployActions:[{id:'binding',type:'connection-reference-check',component:'dataverse',connectionId:'approved',connectorId:'shared_commondataserviceforapps'}]};
 const request:LifecycleRequest={phase:'build',sourceCommit:'a'.repeat(40),environmentUrl:'https://test.crm4.dynamics.com',releaseId:'release-1',checkout:'unused',manifest};
 const observation=(policies:unknown[]=[])=>({schemaVersion:1,tenantId:guid,caller:'tester@company.test',observedAt:new Date().toISOString(),source:'Get-DlpPolicy module route',moduleVersion:'2.0.219',scope:'standard-policy-inventory',complete:true,pages:1,policies});
+const advanced=():AdvancedPolicyObservation=>({scope:'environment-rule-assignment-inventory',complete:false,complianceVerified:false,accountScope:'azure-cli-profile',status:'observed',tenantId:guid,caller:'tester@company.test',environmentId:guid,checkedAt:new Date().toISOString(),reason:'Repeated assignment inventory observed; enforcement mode is unverified',assignments:[],policies:[],observationSha256:'a'.repeat(64)});
 const directories:string[]=[];afterEach(async()=>{await Promise.all(directories.splice(0).map(directory=>fs.rm(directory,{recursive:true,force:true})));});
 async function packaged(customizationExtra='',rootExtra='') {
   const checkout=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-governed-package-'));directories.push(checkout);const evidenceDirectory=path.join(checkout,'evidence');
@@ -30,6 +32,25 @@ async function packaged(customizationExtra='',rootExtra='') {
   const archive=new ZipFile();const chunks:Buffer[]=[];const bytes=new Promise<Buffer>((resolve,reject)=>{archive.outputStream.on('data',chunk=>chunks.push(chunk));archive.outputStream.on('end',()=>resolve(Buffer.concat(chunks)));archive.outputStream.on('error',reject);});for(const [name,body] of Object.entries(entries))archive.addBuffer(Buffer.from(body),name,{compress:false});archive.end();const buffer=await bytes;await fs.writeFile(path.join(checkout,'release.zip'),buffer);
   return {...request,phase:'import' as const,checkout,evidenceDirectory,packageSha256:crypto.createHash('sha256').update(buffer).digest('hex'),manifest:{...manifest,targetComponents:[...manifest.targetComponents,{key:'outlook',kind:'connection-reference',logicalName:'exp_outlook'},{key:'flow',kind:'cloud-flow',logicalName:guid}],postDeployActions:[...manifest.postDeployActions,{id:'outlook-binding',type:'connection-reference-check',component:'outlook',connectionId:'approved-mail',connectorId:'shared_office365'}]}};
 }
+it('refreshes advanced assignments at all six stages and persists partial evidence without authorizing execution',async()=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-advanced-policy-stage-'));directories.push(directory);const read=vi.fn(async(_input:AdvancedPolicyRequest)=>advanced());
+  const check=createDeliveryGovernance({observation:()=>observation()},undefined,read);
+  for(const phase of ['build','test','import','post-deploy','verify','health'] as const){
+    const result=await check({...request,phase,evidenceDirectory:directory});expect(result.status).toBe('unavailable');expect(result.advancedPolicyFile).toMatch(/^advanced-policy-[a-f0-9]{64}\.json$/);
+    expect(JSON.parse(await fs.readFile(path.join(directory,result.advancedPolicyFile!),'utf8'))).toMatchObject({complete:false,status:'observed'});
+  }
+  expect(read).toHaveBeenCalledTimes(6);expect(read.mock.calls[0][0]).toMatchObject({tenantId:guid,caller:'tester@company.test',environmentId:guid,checkout:request.checkout});
+});
+it.each(['tenant','caller','environment','stale','future'])('rejects unbound advanced %s observations before persistence',async mismatch=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-advanced-policy-context-'));directories.push(directory);const value=advanced();
+  if(mismatch==='tenant')value.tenantId='22222222-2222-4222-8222-222222222222';if(mismatch==='caller')value.caller='other@company.test';if(mismatch==='environment')value.environmentId='22222222-2222-4222-8222-222222222222';if(mismatch==='stale')value.checkedAt=new Date(Date.now()-61000).toISOString();if(mismatch==='future')value.checkedAt=new Date(Date.now()+31000).toISOString();
+  const result=await createDeliveryGovernance({observation:()=>observation()},undefined,async()=>value)({...request,evidenceDirectory:directory});expect(result.status).toBe('unavailable');expect(result.advancedPolicyFile).toBeUndefined();expect(await fs.readdir(directory)).toEqual([]);
+});
+it('keeps an issued advanced read owned when classic policy discovery fails',async()=>{
+  let release!:(value:AdvancedPolicyObservation)=>void;const read=vi.fn(()=>new Promise<AdvancedPolicyObservation>(resolve=>{release=resolve;}));let settled=false;
+  const pending=createDeliveryGovernance({observation:()=>{throw new Error('private classic detail');}},undefined,read)(request).then(value=>{settled=true;return value;});
+  for(let i=0;i<5&&!read.mock.calls.length;i++)await Promise.resolve();expect(read).toHaveBeenCalledOnce();expect(settled).toBe(false);release(advanced());const result=await pending;expect(result.status).toBe('unavailable');expect(JSON.stringify(result)).not.toContain('private');
+});
 it('uses exact approved tenant/account and never promotes an empty standard inventory to full compliance',async()=>{
   const read=vi.fn(()=>observation());const check=createDeliveryGovernance({observation:read});const result=await check(request);
   expect(read).toHaveBeenCalledWith({tenantId:guid,caller:'tester@company.test'});expect(result.status).toBe('unavailable');expect(result.policySha256).toMatch(/^[a-f0-9]{64}$/);expect(result.reasons[0]).toContain('remain unverified');

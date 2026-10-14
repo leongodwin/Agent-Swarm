@@ -440,7 +440,9 @@ export class DeliveryService {
     });}
     finally {
       const decision=await fs.readFile(path.join(directory,file),'utf8').then(value=>JSON.parse(value)).catch(()=>null);
-      if(phase!=='health'&&decision?.packageInventoryFile&&!run.evidence.includes(decision.packageInventoryFile))run.evidence.push(decision.packageInventoryFile);
+      if(phase!=='health')for(const field of ['packageInventoryFile','declaredSchemaFile','advancedPolicyFile'] as const){
+        const file=decision?.[field];if(typeof file==='string'&&!run.evidence.includes(file))run.evidence.push(file);
+      }
     }
   }
   private async execute(repo: RepoView, run: DeliveryRun, controller: AbortController) {
