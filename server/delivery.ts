@@ -434,7 +434,10 @@ export class DeliveryService {
     if(phase==='health') run.health={...(run.health??{status:'pending',nextCheckAt:new Date().toISOString()}),governanceEvidence:`health/${file}`};
     else run.evidence.push(file);
     await this.save();
-    try {await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,signal:this.active?.signal,evidenceDirectory:directory},directory,index);}
+    try {await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,signal:this.active?.signal,evidenceDirectory:directory},directory,index,undefined,async reason=>{
+      run.log.push(`${new Date().toISOString()} ${phase} governance ${reason==='deadline'?'deadline exceeded':'cancelled'}; waiting for provider cleanup before releasing delivery ownership`);
+      await this.changed();
+    });}
     finally {
       const decision=await fs.readFile(path.join(directory,file),'utf8').then(value=>JSON.parse(value)).catch(()=>null);
       if(phase!=='health'&&decision?.packageInventoryFile&&!run.evidence.includes(decision.packageInventoryFile))run.evidence.push(decision.packageInventoryFile);

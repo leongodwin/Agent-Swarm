@@ -339,6 +339,27 @@ it('drains automatic and manual delivery starts without changing approved policy
   service.setDraining(false);await service.start(repo,false,release.id);await service.waitForIdle();expect(service.view().runs[0].phase).toBe('reviewing');
 });
 describe('Real solution delivery', () => {
+  it('keeps delivery and target leases through cancellation until its governance provider settles',async()=>{
+    const {service,repo,deps,root,calls}=await fixture(),original=deps.governance!;
+    let entered!:()=>void,complete!:()=>void,aborted!:()=>void;
+    const started=new Promise<void>(resolve=>{entered=resolve;}),cancelled=new Promise<void>(resolve=>{aborted=resolve;});
+    deps.governance=async request=>{
+      const result=await original(request);if(request.phase!=='build')return result;
+      return new Promise(resolve=>{complete=()=>resolve(result);request.signal!.addEventListener('abort',()=>aborted(),{once:true});entered();});
+    };
+    let closing:Promise<void>|undefined,closed=false;
+    let notified!:()=>void;const notification=new Promise<void>(resolve=>{notified=resolve;});
+    service.onChange=()=>{if(service.view().runs[0]?.log.some(line=>line.includes('waiting for provider cleanup')))notified();};
+    try{
+      await service.start(repo);await started;
+      const leases=path.join(root,'resource-leases'),names=await fs.readdir(leases);expect(names).toHaveLength(1);const file=path.join(leases,names[0]),before=await fs.readFile(file,'utf8');
+      closing=service.close().then(()=>{closed=true;});await cancelled;await notification;expect(closed).toBe(false);expect(service.view().running).toBe(true);
+      expect(await fs.readFile(file,'utf8')).toBe(before);expect(await fs.stat(path.join(root,'delivery.lock')).then(()=>true)).toBe(true);
+      expect(calls).not.toContain('build');expect(calls.some(call=>call.startsWith('pac solution import'))).toBe(false);
+      complete();await closing;expect(closed).toBe(true);expect(await fs.readdir(leases)).toEqual([]);
+      const saved=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8')),run=saved.runs[0];expect(run.phase).toBe('blocked');expect(run.log.some((line:string)=>line.includes('waiting for provider cleanup'))).toBe(true);expect(run.error).toContain('cancelled');
+    }finally{complete?.();await closing;}
+  });
   it('blocks an unconfigured governance provider before executing project build commands',async()=>{
     const {service,repo,calls,deps,root}=await fixture();delete deps.governance;
     await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];

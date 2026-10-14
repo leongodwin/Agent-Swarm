@@ -24,19 +24,34 @@ export function unavailableGovernance(request:LifecycleRequest,reasons=['Complet
 }
 /** Persist a context-bound decision before the caller may execute its stage.
  * Unconfigured providers, exceptions, mismatched evidence and stale approvals cannot permit execution. */
-export async function requireLifecycleGovernance(check:LifecycleCheck|undefined,request:LifecycleRequest,evidenceDirectory:string,index:number,now?:number) {
+export async function requireLifecycleGovernance(check:LifecycleCheck|undefined,request:LifecycleRequest,evidenceDirectory:string,index:number,now?:number,onCancellationPending?:(reason:'deadline'|'cancelled')=>void|Promise<void>) {
   let result:LifecycleResult;
   try {
     if(request.signal?.aborted) throw new Error('cancelled');
     const controller=new AbortController();
-    const value=await new Promise<LifecycleResult>((resolve,reject)=>{
-      const cancel=()=>{controller.abort();reject(new Error('cancelled'));};
-      const timer=setTimeout(cancel,60_000);
-      request.signal?.addEventListener('abort',cancel,{once:true});
-      Promise.resolve().then(()=>(check??(async request=>unavailableGovernance(request)))({...request,signal:controller.signal})).then(resolve,reject).finally(()=>{clearTimeout(timer);request.signal?.removeEventListener('abort',cancel);});
-      controller.signal.addEventListener('abort',()=>{clearTimeout(timer);request.signal?.removeEventListener('abort',cancel);},{once:true});
-    });
-    if(request.signal?.aborted) throw new Error('cancelled');
+    let cancellationNotice:Promise<void>|undefined;
+    const cancel=(reason:'deadline'|'cancelled')=>{
+      if(controller.signal.aborted)return;
+      controller.abort();
+      // Handle reporting failures immediately, but do not release provider ownership.
+      cancellationNotice=Promise.resolve().then(()=>onCancellationPending?.(reason)).then(()=>undefined,()=>undefined);
+    };
+    const abort=()=>cancel('cancelled'),timer=setTimeout(()=>cancel('deadline'),60_000);
+    request.signal?.addEventListener('abort',abort,{once:true});
+    let value:LifecycleResult;
+    try{
+      // A timeout revokes authority, not the outstanding provider task. Await its
+      // settlement so the caller retains delivery/resource leases through cleanup.
+      value=await Promise.resolve().then(()=>{
+        if(request.signal?.aborted)abort();
+        if(controller.signal.aborted)throw new Error('cancelled');
+        return (check??(async request=>unavailableGovernance(request)))({...request,signal:controller.signal});
+      });
+    }finally{
+      clearTimeout(timer);request.signal?.removeEventListener('abort',abort);
+      if(cancellationNotice)await cancellationNotice;
+    }
+    if(controller.signal.aborted||request.signal?.aborted) throw new Error('cancelled');
     result=resultSchema.parse(value);
     const evaluatedAt=now??Date.now();
     if(result.phase!==request.phase||result.sourceCommit!==request.sourceCommit||result.environmentUrl!==request.environmentUrl||result.releaseId!==request.releaseId||result.manifestSha256!==manifestDigest(request.manifest)||(result.status==='clear'&&request.packageSha256&&result.artifactSha256!==request.packageSha256)||evaluatedAt-Date.parse(result.checkedAt)>60_000||Date.parse(result.checkedAt)>evaluatedAt+30_000) throw new Error('mismatch');
