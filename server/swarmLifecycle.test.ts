@@ -58,6 +58,40 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it.each(['rename','clear-own-model','clear-cli'] as const)('accepts a valid inherited OpenCode pin for %s and dispatches that exact effective model',async mode=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.updateSettings({defaultCli:'opencode',defaultModel:'openai/gpt-synthetic'});
+  const agent=swarm.hireAgent('synthetic/repo',{name:'Inherited model worker',cli:mode==='clear-cli'?'codex':'opencode'});
+  if(mode==='rename')swarm.updateAgent(agent.id,{name:'Renamed pinned worker'});if(mode==='clear-own-model')swarm.updateAgent(agent.id,{model:''});if(mode==='clear-cli')swarm.updateAgent(agent.id,{cli:'',model:''});
+  await swarm.assign(agent.id,1);await vi.advanceTimersByTimeAsync(200);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  expect(fake.startSession.mock.calls[0][0]).toMatchObject({cli:'opencode',model:'openai/gpt-synthetic'});
+});
+it.each(['dev','ceo'] as const)('clears an explicit OpenCode selection to the correct default for %s',async role=>{
+  const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});swarm.ceoPreflight=async()=>null;
+  const agent=role==='ceo'?swarm.snapshot().agents.find(a=>a.id===CEO_ID)!:swarm.hireAgent('synthetic/repo',{cli:'opencode',model:'openai/gpt-synthetic'});
+  if(role==='ceo')swarm.updateAgent(agent.id,{cli:'opencode',model:'openai/gpt-synthetic'});
+  swarm.updateAgent(agent.id,{cli:'',model:''});expect(swarm.snapshot().agents.find(a=>a.id===agent.id)).toMatchObject({cli:'',model:''});
+  if(role==='ceo')await swarm.messageCeo('Synthetic cleared CLI request');else await swarm.assign(agent.id,1);
+  await vi.advanceTimersByTimeAsync(200);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());expect(fake.startSession.mock.calls[0][0]).toMatchObject({cli:'codex',model:''});
+});
+it.each(['unconfigured-default','unconfigured-worker','unconfigured-ceo','prohibited-model','invalid-model-type'] as const)('rejects %s configuration atomically before dispatch',async mode=>{
+  const {swarm,fake}=await office(true),settings=structuredClone(swarm.snapshot().settings),agents=structuredClone(swarm.snapshot().agents);
+  if(mode==='unconfigured-default')expect(()=>swarm.updateSettings({defaultCli:'opencode',sessionLimit:7})).toThrow('explicit');
+  if(mode==='unconfigured-worker')expect(()=>swarm.hireAgent('synthetic/repo',{cli:'opencode'})).toThrow('explicit');
+  if(mode==='unconfigured-ceo')expect(()=>swarm.updateAgent(CEO_ID,{cli:'opencode',name:'Rejected rename'})).toThrow('explicit');
+  if(mode==='prohibited-model')expect(()=>swarm.updateSettings({defaultModel:'anthropic/claude-sonnet',managerName:'Rejected manager'})).toThrow('not permitted');
+  if(mode==='invalid-model-type')expect(()=>swarm.updateSettings({defaultModel:1 as any,sessionLimit:7})).toThrow('string');
+  expect(swarm.snapshot().settings).toEqual(settings);expect(swarm.snapshot().agents).toEqual(agents);expect(fake.startSession).not.toHaveBeenCalled();expect(fake.prepareDesk).not.toHaveBeenCalled();
+});
+it('boots an unpinned legacy office without executing or silently selecting another runtime, then restores QA after repair',async()=>{
+  await fs.writeFile(STATE_FILE,JSON.stringify({version:2,settings:{defaultCli:'opencode',defaultModel:'',runtime:'terminal',ceoHeartbeatMin:0},repos:[{id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,autoAssign:false,autoMerge:false}],agents:[]}));
+  const fake=backend(),swarm=new Swarm(fake as unknown as Backend);offices.push(swarm);await swarm.init();expect(swarm.snapshot().settings.defaultCli).toBe('opencode');expect(swarm.snapshot().agents.some(a=>a.role==='qa')).toBe(false);expect(swarm.snapshot().messages.some(message=>message.text.includes('QA setup'))).toBe(true);expect(fake.startSession).not.toHaveBeenCalled();
+  swarm.updateSettings({defaultModel:'google/gemini-synthetic'});expect(swarm.snapshot().agents.filter(a=>a.role==='qa')).toHaveLength(1);expect(fake.startSession).not.toHaveBeenCalled();
+});
+it.each([null,1,{},[]])('rejects malformed model value %j without partial settings, hiring or agent edits',async value=>{
+  const {swarm,fake}=await office(true),settings=structuredClone(swarm.snapshot().settings),agents=structuredClone(swarm.snapshot().agents);
+  expect(()=>swarm.updateSettings({defaultModel:value as any,sessionLimit:7})).toThrow('string');expect(()=>swarm.hireAgent('synthetic/repo',{model:value as any})).toThrow('string');expect(()=>swarm.updateAgent(CEO_ID,{model:value as any,name:'Rejected name'})).toThrow('string');
+  expect(swarm.snapshot().settings).toEqual(settings);expect(swarm.snapshot().agents).toEqual(agents);expect(fake.startSession).not.toHaveBeenCalled();expect(fake.prepareDesk).not.toHaveBeenCalled();
+});
 it.each(['throw','callback','event'] as const)('isolates a browser telemetry failure by %s without failing state transitions',async mode=>{
   const {swarm}=await office();let fail=false;const events=new Map<string,()=>void>();
   const broken={OPEN:1,readyState:1,on:(type:string,fn:()=>void)=>events.set(type,fn),terminate:vi.fn(()=>{throw new Error('private terminate failure');}),send:vi.fn((_message:string,callback?:(error?:Error)=>void)=>{if(!fail)return;if(mode==='throw')throw new Error('private send error');if(mode==='callback')callback?.(new Error('private send error'));})};

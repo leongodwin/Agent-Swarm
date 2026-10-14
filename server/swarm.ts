@@ -1432,7 +1432,7 @@ export class Swarm {
   ) {
     this.requireOpen();
     if(opts.cli!==undefined&&opts.cli!==''&&!isCli(opts.cli))throw new HttpError(400,'Only Codex, Gemini and OpenCode are permitted');
-    const modelError=runtimeModelError((opts.cli||this.state.settings.defaultCli) as AgentCli,opts.model??'');if(modelError&&opts.model!==undefined)throw new HttpError(400,modelError);
+    const modelError=this.configuredModelError((opts.cli||this.state.settings.defaultCli) as AgentCli,opts.model===undefined?'':opts.model);if(modelError)throw new HttpError(400,modelError);
     const repo = this.repo(repoId);
     const role: AgentRole = opts.role === 'qa' ? 'qa' : 'dev';
     const used = new Set(this.state.agents.filter((a) => a.repoId === repo.id && a.role === role).map((a) => a.desk));
@@ -1490,6 +1490,8 @@ export class Swarm {
   /** Every floor has at least one QA tester. */
   private ensureQaTester(repo: PersistedRepo) {
     if (this.state.agents.some((a) => a.repoId === repo.id && a.role === 'qa')) return;
+    const configurationError=this.configuredModelError(this.state.settings.defaultCli,'');
+    if(configurationError){this.postMessage('office',`QA setup for ${repo.fullName} is waiting for coding-agent configuration: ${configurationError}`);return;}
     this.hireAgent(repo.id, { role: 'qa' });
   }
 
@@ -1507,7 +1509,9 @@ export class Swarm {
     this.requireOpen();
     const a = this.agent(id);
     if(patch.cli!==undefined&&patch.cli!==''&&!isCli(patch.cli))throw new HttpError(400,'Unsupported coding runtime');
-    const modelError=runtimeModelError((patch.cli||a.cli||this.state.settings.defaultCli),patch.model??a.model);if(modelError)throw new HttpError(400,modelError);
+    const selectedCli=patch.cli===undefined?a.cli:patch.cli;
+    const cli=a.role==='ceo'?(isCli(selectedCli)?selectedCli:'codex'):((selectedCli||this.state.settings.defaultCli) as AgentCli);
+    const modelError=this.configuredModelError(cli,patch.model===undefined?a.model:patch.model,a.role==='ceo');if(modelError)throw new HttpError(400,modelError);
     if (patch.cli !== undefined) a.cli = isCli(patch.cli) ? patch.cli : '';
     if (patch.name?.trim() && patch.name.trim() !== a.name) {
       a.name = patch.name.trim().slice(0, 24);
@@ -1707,7 +1711,7 @@ export class Swarm {
   }
 
   /**
-   * The CEO uses their selected terminal CLI (Copilot by default); workers use the terminal runtime or Claude Code through the SDK. A session can
+   * The CEO uses their selected terminal CLI (Codex by default); workers use their selected approved runtime. A session can
    * only be resumed by the CLI that made it, so a follow-up stays with that CLI.
    */
   private sessionRuntime(a: PersistedAgent, resume?: string, retainedCli?: AgentCli): { terminal?: AgentTerminal; cli?: AgentCli; label?: string; resumeSessionId?: string } {
@@ -1725,9 +1729,16 @@ export class Swarm {
     return { terminal: this.terminalFor(a), cli, label: `${a.name}${what ? ` · ${what}` : ''}`.slice(0, 80).trim(), resumeSessionId: resume };
   }
 
-  /** The model to ask for (the Agent SDK runs Claude Code). '' lets another coding agent use its own default. */
+  /** Effective worker model, including a compatible office default. */
   private modelFor(a: PersistedAgent, cli: AgentCli | undefined) {
     return effectiveModel(a.model, cli ?? 'codex', this.state.settings, DEFAULT_MODEL);
+  }
+  /** Admit the model that dispatch will use; explicit prohibited values cannot hide behind fallback. */
+  private configuredModelError(cli:AgentCli,model:string,ceo=false):string|null{
+    if(typeof model!=='string')return 'Model must be a string';
+    if(!ceo&&typeof this.state.settings.defaultModel!=='string')return 'Default model must be a string';
+    const explicit=runtimeModelError(cli,model);if(model.trim()&&explicit)return explicit;
+    return runtimeModelError(cli,ceo?model:effectiveModel(model,cli,this.state.settings,DEFAULT_MODEL));
   }
 
   // ---------- terminals ----------
@@ -2655,15 +2666,16 @@ export class Swarm {
     const s = this.state.settings;
     if(patch.defaultCli!==undefined&&!isCli(patch.defaultCli))throw new HttpError(400,'Only Codex, Gemini and OpenCode are permitted');
     if(patch.runtime==='sdk')throw new HttpError(400,'Claude SDK runtime is disabled');
-    const modelError=runtimeModelError(patch.defaultCli??s.defaultCli,patch.defaultModel??s.defaultModel);
-    if(modelError&&patch.defaultModel!==undefined)throw new HttpError(400,modelError);
+    const nextCli=patch.defaultCli??s.defaultCli,nextModel=patch.defaultModel===undefined?(nextCli!==s.defaultCli?'':s.defaultModel):patch.defaultModel;
+    if(typeof nextModel!=='string')throw new HttpError(400,'Model must be a string');
+    const modelError=runtimeModelError(nextCli,nextModel);if(modelError)throw new HttpError(400,modelError);
     if (patch.sessionLimit !== undefined) s.sessionLimit = Math.max(0, Math.round(Number(patch.sessionLimit)) || 0);
     // The default model belongs to the default coding agent: a new agent starts on its own default.
     if (isCli(patch.defaultCli) && patch.defaultCli !== s.defaultCli) {
       s.defaultCli = patch.defaultCli;
-      if (patch.defaultModel === undefined) s.defaultModel = s.defaultCli === 'claude' ? DEFAULT_MODEL : '';
+      if (patch.defaultModel === undefined) s.defaultModel = '';
     }
-    if (patch.defaultModel !== undefined) s.defaultModel = String(patch.defaultModel).trim() || (s.defaultCli === 'claude' ? DEFAULT_MODEL : '');
+    if (patch.defaultModel !== undefined) s.defaultModel = patch.defaultModel.trim();
     if (patch.defaultEffort !== undefined && EFFORTS.includes(patch.defaultEffort)) s.defaultEffort = patch.defaultEffort;
     if (patch.runtime === 'terminal' || patch.runtime === 'sdk') s.runtime = patch.runtime;
     if (patch.hiring === 'approve' || patch.hiring === 'auto') s.hiring = patch.hiring;
@@ -2676,6 +2688,7 @@ export class Swarm {
     if (patch.tutorialStep !== undefined) s.tutorialStep = Math.max(-1, Math.round(Number(patch.tutorialStep)) || 0);
     if (typeof patch.autoUpdate === 'boolean') s.autoUpdate = patch.autoUpdate;
     if (patch.pacingSessions !== undefined) s.pacingSessions = clampPacingSessions(patch.pacingSessions);
+    for(const repo of this.state.repos)this.ensureQaTester(repo);
     this.save();
     this.broadcast({ type: 'settings', settings: s });
     this.emitSessionUsage();
