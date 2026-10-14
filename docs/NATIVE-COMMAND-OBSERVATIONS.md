@@ -23,6 +23,12 @@ Full backend verification passed 2,280 tests with one TODO. The command module
 reached 96.42% branch coverage; overall backend branches were 71.87%
 (7,645/10,636), below the unchanged 90.01% gate. The production build passed.
 
+After the guarded reload, live CI-history discovery through the real office
+succeeded using the updated runner without a new sign-in. The selected GitHub
+Actions creation window contained zero completed attempts; success percentage
+and target status remained null. This confirms live read compatibility, not a
+99.5% pass rate or coverage of external CI/tenant integration runs.
+
 These observations do not certify process-family termination, broker recovery,
 cross-process ownership or tenant deployment. The production-readiness objective
 and its coverage gate remain unchanged. Copilot Studio stays paused; Codex is
