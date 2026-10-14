@@ -26,16 +26,17 @@ percentiles. A viewer transport failure does not restart a coding agent.
 
 ## Integration status, 14 October 2026
 
-This batch remains in the managed worktree. The full regression suite recorded
-1,382 passing tests, one failing native cleanup-coordination test and one TODO.
+The initial full regression suite recorded 1,382 passing tests, one failing
+native cleanup-coordination test and one TODO.
 The cleanup test uses three native writer processes and a 10ms flush delay.
 Four additional diagnostic runs of the two native writer scenarios recorded two
 failed runs. Failure evidence includes `CLEANUP_BUSY`, rather than proving this
 is a harmless timing flake. A separate full-suite failure had an I/O category
 without its system code; the reader now retains a safe system-code diagnostic.
 
-The initial full-suite run before the final transport-limit changes measured
-65.50% global backend branches. The final suite failure prevented a fresh accepted
-coverage result. No 90.01% coverage or 99.5% reliability claim is supported.
-Resolve native cleanup contention before integrating/reloading this batch. The
-live drained server remains on `6072fab`, with Copilot Studio paused.
+After the [cleanup coordination fixes](CLEANUP-COORDINATION.md), the full suite
+passed 1,389 tests with one TODO. Four consecutive native writer-test runs passed
+all eight scenarios. The build passed. Global backend branch coverage measured
+65.74%, so the 90.01% coverage gate still fails. No 99.5% CI reliability claim is
+supported. Live operation retains maintenance drain and the Copilot Studio pause;
+local tests do not certify tenant deployment or production readiness.

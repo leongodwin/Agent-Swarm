@@ -136,6 +136,43 @@ it('reports queue backpressure without publishing a sixty-fifth ticket',()=>{
   for(let i=0;i<64;i++){const token=`11111111-1111-4111-8111-${i.toString(16).padStart(12,'0')}`;fs.writeFileSync(path.join(queue,token+'.json'),JSON.stringify({pid:process.pid,token,sequence:i}));}
   store.begin(record);expect(store.view().failureCode).toBe('contention');expect(fs.readdirSync(queue)).toHaveLength(64);
 });
+it.each([false,true])('retries transient ticket-read sharing errors and preserves permanently denied evidence: %s',permanent=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
+  const ticket={pid:99999999,token:'11111111-1111-4111-8111-111111111111',sequence:0},name=path.join(queue,ticket.token+'.json'),content=JSON.stringify(ticket);fs.writeFileSync(name,content);
+  const open=fs.openSync;let failures=0;
+  const spy=vi.spyOn(fs,'openSync').mockImplementation((...args)=>{if(String(args[0])===name&&args[1]==='r'&&(permanent||failures<2)){failures++;throw Object.assign(new Error('private transient file details'),{code:'EPERM'});}return open(...args);});
+  let view;
+  try{view=store.view();}finally{spy.mockRestore();}
+  expect(JSON.stringify(view)).not.toContain('private');
+  if(permanent){expect(view).toMatchObject({failureCode:'io',failureSystemCode:'EPERM'});expect(fs.readFileSync(name,'utf8')).toBe(content);}
+  else{expect(failures).toBe(2);expect(view).toEqual({records:[]});expect(fs.existsSync(name)).toBe(false);}
+});
+it('rechecks ownership after a transient release read instead of removing a replacement owner',()=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file),allocator=file+'.lock.queue-lock',content=JSON.stringify({pid:process.pid,token:'11111111-1111-4111-8111-111111111111'}),open=fs.openSync;let injected=false;
+  const spy=vi.spyOn(fs,'openSync').mockImplementation((...args)=>{
+    if(String(args[0])===allocator&&args[1]==='r'&&!injected){injected=true;fs.writeFileSync(allocator,content);throw Object.assign(new Error('Transient sharing error'),{code:'EPERM'});}
+    return open(...args);
+  });
+  let view;
+  try{view=store.view();}finally{spy.mockRestore();}
+  expect(injected).toBe(true);expect(view.unavailableReason).toContain('quarantined');expect(fs.readFileSync(allocator,'utf8')).toBe(content);
+});
+it.each(['unknown-ticket','changed-own-ticket'])('validates queue evidence after a readiness hint changes: %s',fault=>{
+  const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
+  const predecessor={pid:process.pid,token:'11111111-1111-4111-8111-111111111111',sequence:0},head=path.join(queue,predecessor.token+'.json');fs.writeFileSync(head,JSON.stringify(predecessor));
+  const exists=fs.existsSync;let changed=false;
+  const spy=vi.spyOn(fs,'existsSync').mockImplementation(target=>{
+    if(String(target)===head&&!changed){
+      changed=true;fs.unlinkSync(head);
+      if(fault==='unknown-ticket')fs.writeFileSync(path.join(queue,'unverified'),'private evidence');
+      else{const own=fs.readdirSync(queue).find(name=>name.endsWith('.json'))!;const file=path.join(queue,own),ticket=JSON.parse(fs.readFileSync(file,'utf8'));fs.writeFileSync(file,JSON.stringify({...ticket,sequence:ticket.sequence+1}));}
+      return false;
+    }
+    return exists(target);
+  });
+  try{store.begin(record);}finally{spy.mockRestore();}
+  const view=store.view();expect(changed).toBe(true);expect(view.unavailableReason).toContain('quarantined');expect(view.records).toEqual([record]);expect(fs.existsSync(file)).toBe(false);expect(fs.readdirSync(queue).length).toBeGreaterThan(0);
+});
 it.each(['malformed','wrong-name','duplicate-sequence','unknown-file','oversized'])('preserves %s queued evidence and emits a safe diagnostic code',fault=>{
   const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
   const ticket={pid:process.pid,token:'11111111-1111-4111-8111-111111111111',sequence:0},name=path.join(queue,ticket.token+'.json');

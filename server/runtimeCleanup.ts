@@ -32,6 +32,15 @@ function readJson(file:string,maximum:number):unknown|undefined {
     return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(buffer.subarray(0,length)));
   }finally{fs.closeSync(fd);}
 }
+/** Windows delete-pending sharing errors are retryable, never evidence of ownership or exit. */
+function readCoordination(file:string,deadline:number):unknown|undefined{
+  for(;;){
+    try{return readJson(file,4096);}catch(error){
+      if(!['EPERM','EACCES','EBUSY'].includes((error as NodeJS.ErrnoException).code??'')||performance.now()>=deadline)throw error;
+      Atomics.wait(pause,0,0,5);
+    }
+  }
+}
 /** Durable quarantine: elapsed time and transport loss cannot acknowledge native exit. */
 export class RuntimeCleanupStore {
   private records=new Map<string,CleanupRecord>();
@@ -106,7 +115,7 @@ export class RuntimeCleanupStore {
       if(performance.now()>=deadline)throw Object.assign(new Error('Cleanup writer unavailable'),{code:previous.success?'CLEANUP_BUSY':'CLEANUP_EVIDENCE'});
       Atomics.wait(pause,0,0,5);
     }
-    return ()=>{const current=lockRecord.parse(readJson(file,4096));if(current.token!==owner.token||current.pid!==owner.pid)throw new Error('Cleanup writer ownership lost');fs.unlinkSync(file);};
+    return ()=>{const current=lockRecord.parse(readCoordination(file,performance.now()+250));if(current.token!==owner.token||current.pid!==owner.pid)throw new Error('Cleanup writer ownership lost');fs.unlinkSync(file);};
   }
   private acquire():()=>void{
     const file=this.file+'.lock',queue=file+'.queue',allocator=file+'.queue-lock';
@@ -120,7 +129,7 @@ export class RuntimeCleanupStore {
       const rows:Ticket[]=[];
       for(const name of files){
         if(!/^[a-f0-9-]{36}\.json$/i.test(name))throw invalid();
-        let value:unknown;try{value=readJson(path.join(queue,name),4096);}catch(error){if(error instanceof SyntaxError)throw invalid();throw error;}
+        let value:unknown;try{value=readCoordination(path.join(queue,name),deadline);}catch(error){if(error instanceof SyntaxError)throw invalid();throw error;}
         if(value===undefined)continue; // a released ticket disappeared during an unlocked observation
         const parsed=queueRecord.safeParse(value);if(!parsed.success)throw invalid();const ticket=parsed.data;if(name!==ticket.token+'.json')throw invalid();
         rows.push(ticket);
@@ -135,7 +144,7 @@ export class RuntimeCleanupStore {
       while(rows[0]&&rows[0].pid!==process.pid&&absent(rows[0].pid))fs.unlinkSync(path.join(queue,rows.shift()!.token+'.json'));
       return rows;
     };
-    let ticket:Ticket|undefined;
+    let ticket:Ticket|undefined,predecessor:Ticket|undefined;
     const allocate=this.exclusive(allocator,deadline);
     try{
       fs.mkdirSync(queue,{recursive:true});const rows=liveQueue();
@@ -147,6 +156,7 @@ export class RuntimeCleanupStore {
         return release;
       }
       if(rows.length>=64)throw Object.assign(new Error('Cleanup writer queue is full'),{code:'CLEANUP_BUSY'});
+      predecessor=rows[0];
       ticket=queueRecord.parse({pid:process.pid,token:crypto.randomUUID(),sequence:Math.max(-1,...rows.map(row=>row.sequence))+1});
       const temporary=this.file+'.'+ticket.token+'.ticket.tmp';
       try{fs.writeFileSync(temporary,JSON.stringify(ticket),{flag:'wx',mode:0o600});fs.renameSync(temporary,path.join(queue,ticket.token+'.json'));}
@@ -154,23 +164,26 @@ export class RuntimeCleanupStore {
     }finally{allocate();}
     const mine=ticket;
     const ticketFile=path.join(queue,mine.token+'.json');
-    const assertTicket=()=>{const current=queueRecord.parse(readJson(ticketFile,4096));if(current.token!==mine.token||current.pid!==mine.pid||current.sequence!==mine.sequence)throw invalid();};
+    const assertTicket=(limit=deadline)=>{const current=queueRecord.parse(readCoordination(ticketFile,limit));if(current.token!==mine.token||current.pid!==mine.pid||current.sequence!==mine.sequence)throw invalid();};
     // Keep the empty directory: deleting/recreating it causes Windows delete-pending
     // races with directory observers. Empty coordination storage is not quarantine.
-    const remove=()=>{assertTicket();fs.unlinkSync(ticketFile);};
+    const remove=(limit=deadline)=>{assertTicket(limit);fs.unlinkSync(ticketFile);};
     try{
       for(;;){
-        assertTicket();const head=entries()[0];let release:(()=>void)|undefined;
-        // Poll immutable tickets outside the allocation gate. Waiting readers must
-        // not delay the active writer's release, especially with slow disk flushes.
-        if(head?.token===mine.token||(head&&head.pid!==process.pid&&absent(head.pid))){
+        let release:(()=>void)|undefined;
+        // The known head is only a readiness hint. Avoid reopening every immutable
+        // ticket on each poll; validate the entire queue under the allocator before admission.
+        if(!predecessor||!fs.existsSync(path.join(queue,predecessor.token+'.json'))||(predecessor.pid!==process.pid&&absent(predecessor.pid))){
           const gate=this.exclusive(allocator,deadline);
-          try{assertTicket();if(liveQueue()[0]?.token===mine.token)release=this.exclusive(file,deadline);}
+          try{
+            assertTicket();const rows=liveQueue();if(!rows.some(row=>row.token===mine.token))throw invalid();
+            if(rows[0]?.token===mine.token)release=this.exclusive(file,deadline);else predecessor=rows[0];
+          }
           finally{gate();}
         }
         if(release)return ()=>{
-          const gate=this.exclusive(allocator,performance.now()+250);
-          try{assertTicket();release!();remove();}finally{gate();}
+          const limit=performance.now()+250,gate=this.exclusive(allocator,limit);
+          try{assertTicket(limit);release!();remove(limit);}finally{gate();}
         };
         if(performance.now()>=deadline)throw Object.assign(new Error('Cleanup writer unavailable'),{code:'CLEANUP_BUSY'});
         Atomics.wait(pause,0,0,5);
