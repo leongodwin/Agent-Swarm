@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {currentEnvironment} from '../shared/tenancy.ts';
 import fs from 'node:fs';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -90,7 +91,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   const featureScope = async (req: Request, repo?: string) => {
     const id = repo ?? str(req.query.repo);
     if (id) connectedRepo(id);
-    const active = (await backend.tenancy.info()).environments.find((env) => env.active);
+    const active = currentEnvironment(await backend.tenancy.info());
     return JSON.stringify([id || 'office', active?.url || 'disconnected']);
   };
   app.get('/api/repos/:repo/reliability',route(async req=>{
@@ -144,14 +145,14 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     if (backend.demo) throw new HttpError(409, 'Demo cannot authenticate or read tenant policy');
     const input = parseBody(z.object({ tenantId: z.uuid() }).strict(), req.body);
     const tenancy = await backend.tenancy.info();
-    if (tenancy.status !== 'connected' || !tenancy.user) throw new HttpError(409, 'Connect the intended account before policy discovery');
+    if (!currentEnvironment(tenancy) || !tenancy.user) throw new HttpError(409, 'Connect the intended account before policy discovery');
     return tenantDlp.refresh({ tenantId: input.tenantId, caller: tenancy.user });
   }));
   app.post('/api/authoring/canvas/:app/lease', route(async (req) => {
     if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
     const { app: appId } = parseBody(z.object({ app: z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i) }), req.params);
     const { owner } = parseBody(z.object({ owner: z.string().trim().min(1).max(80) }).strict(), req.body);
-    const tenancy = await backend.tenancy.info(); const target = tenancy.environments.find((environment) => environment.active);
+    const tenancy = await backend.tenancy.info(); const target = currentEnvironment(tenancy);
     if (!target || tenancy.status !== 'connected') throw new HttpError(409, 'Connect the authoring environment first');
     return canvasOwnership.acquire(target.url, appId, owner);
   }));
@@ -174,7 +175,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     const {enabled} = parseBody(z.object({enabled:z.boolean()}).strict(),req.body);
     if (!enabled && delivery.view().policy) return delivery.configure(delivery.view().policy!.environmentUrl, false);
     const tenancy = await backend.tenancy.info();
-    const target = tenancy.environments.find((env) => env.active);
+    const target = currentEnvironment(tenancy);
     if (!target || tenancy.status !== 'connected') throw new HttpError(409, 'Connect a current PAC development environment first');
     return delivery.configure(target.url, enabled);
   }));

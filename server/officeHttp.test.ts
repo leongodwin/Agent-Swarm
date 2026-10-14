@@ -77,6 +77,17 @@ it('reads reliability only for authenticated connected repositories and rejects 
   expect((await request('/api/repos/synthetic%2Frepo/reliability?branch=other')).status).toBe(400);expect(observe).not.toHaveBeenCalled();
   expect((await request('/api/repos/synthetic%2Frepo/reliability')).status).toBe(200);expect(observe).toHaveBeenCalledExactlyOnceWith('synthetic/repo');
 });
+it.each(['stale','not-real','ambiguous','no-active','unsafe-root'])('blocks tenant writes from %s profile discovery before provider calls',async mode=>{
+  const f=await office();if(mode==='stale')f.tenancy.status='stale';if(mode==='not-real')f.tenancy.isReal=false;
+  if(mode==='ambiguous')f.tenancy.environments.push({...f.tenancy.environments[0],name:'Other'});
+  if(mode==='no-active')f.tenancy.environments[0].active=false;
+  if(mode==='unsafe-root')f.tenancy.environments[0].url=environment+'/path';
+  const configure=vi.spyOn(f.delivery,'configure');
+  expect((await f.request('/api/delivery/configure','POST',{enabled:true})).status).toBe(409);
+  expect((await f.request(`/api/authoring/canvas/${tenantId}/lease`,'POST',{owner:'Synthetic maker'})).status).toBe(409);
+  expect((await f.request('/api/governance/tenant/refresh','POST',{tenantId})).status).toBe(409);
+  expect(configure).not.toHaveBeenCalled();expect(f.reader).not.toHaveBeenCalled();
+});
 it('authenticates reload, pins PID and requires both services drained before preparing',async()=>{
   const commit=vi.fn(async()=>'accepted' as const),cancel=vi.fn(),prepare=vi.fn(async()=>({operationId:'11111111-1111-4111-8111-111111111111',commit,cancel}));
   const {url,request,delivery}=await office(false,undefined,undefined,{prepare,view:()=>({supported:true,phase:'idle'})});

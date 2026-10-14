@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Panel } from './Overlays';
 import { copilotChime } from './sfx';
 import { api } from '../api';
+import {currentEnvironment} from '../../../shared/tenancy';
 
 interface ChatMessage {
   id: string;
@@ -47,12 +48,12 @@ export function CopilotChatOverlay({ onClose }: { onClose?: () => void }) {
     let cancelled = false;
     api.tenancy().then((tenancy) => {
       if (cancelled) return;
-      const environment = tenancy.environments.find((env) => env.active);
+      const environment = currentEnvironment(tenancy,true);
       setEnvironmentName(environment?.name || 'No connected environment');
       setActiveVariables((prev) => ({
         ...prev,
         'Dataverse.OrgUrl': environment?.url || 'No connected environment',
-        'User.Email': tenancy.user || 'Not configured',
+        'User.Email': environment&&tenancy.user || 'Not configured',
       }));
     }).catch(() => {
       if (cancelled) return;

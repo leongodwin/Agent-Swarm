@@ -1,4 +1,5 @@
 import { createOfficeHttpApp } from './officeHttp.ts';
+import {currentEnvironment} from '../shared/tenancy.ts';
 import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -59,7 +60,7 @@ swarm.capabilityStatus = () => JSON.stringify(capabilities.view());
 swarm.engineeringTools = authorize => createEngineeringTools(swarm.capabilityStatus, {
   async acquire(app, owner) {
     if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
-    const tenancy = await backend.tenancy.info(); const target = tenancy.environments.find((environment) => environment.active);
+    const tenancy = await backend.tenancy.info(); const target = currentEnvironment(tenancy);
     if (!target || tenancy.status !== 'connected') throw new HttpError(409, 'Connect the authoring environment first');
     return canvasOwnership.acquire(target.url, app, owner);
   }, release: (token) => canvasOwnership.release(token),

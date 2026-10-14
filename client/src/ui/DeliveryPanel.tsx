@@ -1,4 +1,5 @@
 import { useEffect, useState,useRef } from 'react';
+import {currentEnvironment} from '../../../shared/tenancy';
 import type {DeliveryView} from '../../../shared/delivery';
 import { Panel } from './Overlays';
 import { useStore, repoOnFloor } from '../store';
@@ -19,13 +20,13 @@ export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
   const [busy, setBusy] = useState(false);
   const resource = useResource(selected, () => api.delivery(selected || undefined));
   const tenancy = useResource('tenancy', api.tenancy);
-  useEffect(() => { const timer = setInterval(() => { resource.refresh(); capabilities.refresh(); }, 5000); return () => clearInterval(timer); }, [selected]);
+  useEffect(() => { const timer = setInterval(() => { resource.refresh(); capabilities.refresh(); tenancy.refresh(); }, 5000); return () => clearInterval(timer); }, [selected]);
   const observed=useRef<{key:string;value:DeliveryView}|undefined>(undefined);
   if(resource.error||observed.current?.key!==selected)observed.current=undefined;
   if(resource.value)observed.current={key:selected,value:resource.value};
   const data=resource.value??(resource.loading?observed.current?.value:undefined);
   const locked=busy||resource.loading||!data;
-  const target = tenancy.value?.environments.find((env) => env.active);
+  const target = currentEnvironment(tenancy.value);
   const action = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); resource.refresh(); capabilities.refresh(); } catch { /* API displays the failure */ } finally { setBusy(false); } };
   return <Panel title="Solution delivery" wide onClose={onClose}>
     <p>Build, test, deploy and verify your solution in its approved development environment.</p>
@@ -35,6 +36,7 @@ export function DeliveryPanel({ onClose }: { onClose?: () => void }) {
       <button className="btn btn-ghost" disabled={locked || data?.running || !data?.policy?.enabled || !selected} onClick={() => void action(() => api.runDelivery(selected))}>Run / resume latest release</button>
     </div>
     <p><strong>Deployment target:</strong> {data?.policy?.environmentUrl ?? target?.url ?? 'Connect a development environment first'}</p>
+    {tenancy.error&&<p role="alert">Connected environment discovery is unavailable. Refresh authentication before enabling delivery.</p>}
     {data?.policy?.copilotPaused && <p>Copilot Studio delivery is paused. Other solution components can continue through their own approved release.</p>}
     <p className="muted">{resource.error ?? data?.message ?? 'Loading delivery status…'}</p>
     {resource.loading&&data&&<p role="status">Refreshing delivery status. Showing the last observed snapshot; release actions are disabled.</p>}

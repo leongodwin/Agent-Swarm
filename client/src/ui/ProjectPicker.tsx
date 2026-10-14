@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, type FloorOptions } from '../api';
+import {currentEnvironment,type TenancyInfo} from '../../../shared/tenancy';
 import { useStore } from '../store';
 import type { GhRepoSummary, ProjectFolderView, RepoView } from '../../../shared/types';
 import { confirmDialog } from './Confirm';
@@ -229,17 +230,13 @@ export function ProjectPicker({ onConnected, initial = 'folder' }: { onConnected
   const [mode, setMode] = useState<Mode>(initial);
   const [mission, setMission] = useState('');
   const [autoAssign, setAutoAssign] = useState(true);
-  const [tenancy, setTenancy] = useState<{
-    tenantName: string;
-    tenantDomain: string;
-    environments: Array<{ name: string; url: string; active: boolean }>;
-  } | null>(null);
+  const [tenancy, setTenancy] = useState<TenancyInfo|null>(null);
 
   useEffect(() => {
     api.tenancy().then((t) => setTenancy(t)).catch(() => {});
   }, []);
 
-  const activeEnv = tenancy?.environments.find((e) => e.active) ?? tenancy?.environments[0];
+  const activeEnv = currentEnvironment(tenancy,true);
 
   const floor: FloorOptions = { mission, autoAssign };
   const done = (repo: RepoView) => {

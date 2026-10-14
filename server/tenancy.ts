@@ -6,6 +6,7 @@ import { resolveCommand, unwrapCmdShim } from './clis.ts';
 import { HttpError } from './httpError.ts';
 import type { TenancyInfo, TenancyLogin, TenancyLoginInput } from '../shared/tenancy.ts';
 import {identityRoot} from './identityContracts.ts';
+import {currentEnvironment} from '../shared/tenancy.ts';
 export type { TenancyInfo, TenancyEnvironment } from '../shared/tenancy.ts';
 
 /** Resolve CLI shims to programs so values never pass through a shell. */
@@ -202,7 +203,7 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
   };
 }
 export function activeEnvironment(info: TenancyInfo) {
-  const env = info.environments.find((candidate) => candidate.active);
+  const env = currentEnvironment(info,true);
   if (!env) return undefined;
   return { tenantName: info.tenantName, tenantDomain: info.tenantDomain, tenantId: info.tenantId, user: env.user, environmentName: env.name, environmentUrl: env.url };
 }
