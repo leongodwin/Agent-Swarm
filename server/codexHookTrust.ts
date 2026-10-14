@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import readline from 'node:readline';
 import path from 'node:path';
 import {z} from 'zod';
+import {requireCodexModelMetadata} from './codexModelMetadata.ts';
 
 export interface HookSpec {event:string;command:string;timeout:number}
 export interface HookRpc {request(method:string,params:unknown):Promise<any>;close():Promise<void>}
@@ -60,11 +61,11 @@ export function openCodexHookRpc(command:{file:string;args:string[]},cwd:string,
   return {async request(method,params){initialized??=request('initialize',{clientInfo:{name:'agent-swarm-hook-governance',version:'1'},capabilities:{experimentalApi:true}}).then(()=>{child.stdin.write('{"method":"initialized"}\n');});await initialized;return request(method,params);},async close(){clearTimeout(timer);if(!closed){child.stdin.end();child.kill();}await ended;}};
 }
 
-export function prepareCodexHooks(command:{file:string;args:string[]},cwd:string,script:string,source:string,specs:HookSpec[]){
+export function prepareCodexHooks(command:{file:string;args:string[]},cwd:string,script:string,source:string,specs:HookSpec[],model=''){
   const step=async()=>{
     const expected=crypto.createHash('sha256').update(source).digest('hex');
     const verify=async()=>{if(crypto.createHash('sha256').update(await fs.readFile(script)).digest('hex')!==expected)throw new Error('Generated Codex hook source changed; execution denied');};
-    await verify();const rpc=openCodexHookRpc(command,cwd,specs);try{return await establishCodexHookTrust(rpc,cwd,specs,verify);}finally{await rpc.close();}
+    await verify();const rpc=openCodexHookRpc(command,cwd,specs);try{if(model)await requireCodexModelMetadata(rpc,model);return await establishCodexHookTrust(rpc,cwd,specs,verify);}finally{await rpc.close();}
   };
   const work=tail.then(step,step);tail=work.then(()=>undefined,()=>undefined);return work;
 }

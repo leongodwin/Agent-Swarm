@@ -763,7 +763,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const verifyCodex = async()=>{
     const command=commandFor('codex');if(!command)throw new Error('Codex CLI is unavailable');
     writeHelpers();const hookPath=path.join(BIN_DIR,'codex-hook.cjs');
-    return prepareCodexHooks(command,opts.cwd,hookPath,CODEX_HOOK_SOURCE,CODEX_HOOK_EVENTS.map(event=>({event,command:codexHookInvocation(hookPath,event),timeout:event==='Interrupt'?3:10})));
+    return prepareCodexHooks(command,opts.cwd,hookPath,CODEX_HOOK_SOURCE,CODEX_HOOK_EVENTS.map(event=>({event,command:codexHookInvocation(hookPath,event),timeout:event==='Interrupt'?3:10})),opts.model);
   };
   if (adopt && live) {
     // Back in the CLI that was waiting at its prompt: same conversation, same terminal.
