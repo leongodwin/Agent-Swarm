@@ -58,6 +58,25 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it('holds a pending assignment when drain begins during capability readiness and rechecks on explicit retry',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Drain race worker'});let ready!:(value:string|null)=>void;
+  const checks=vi.fn(()=>new Promise<string|null>(resolve=>{ready=resolve;}));swarm.capabilityPreflight=checks;
+  await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(checks).toHaveBeenCalledOnce());swarm.setDraining(true);ready(null);
+  await vi.waitFor(()=>expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.status).toBe('stopped'));
+  expect(fake.prepareDesk).not.toHaveBeenCalled();expect(fake.startSession).not.toHaveBeenCalled();expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.lastError).toContain('draining');
+  swarm.setDraining(false);swarm.capabilityPreflight=vi.fn(async()=>null);await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());expect(swarm.capabilityPreflight).toHaveBeenCalled();
+});
+it('does not launch after drain begins during an already admitted worktree preparation',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Preparing drain worker'});let prepared!:(value:string)=>void;
+  fake.prepareDesk.mockImplementationOnce(()=>new Promise<string>(resolve=>{prepared=resolve;}));await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.prepareDesk).toHaveBeenCalledOnce());
+  swarm.setDraining(true);prepared(HOME_DIR);await vi.waitFor(()=>expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.status).toBe('stopped'));expect(fake.startSession).not.toHaveBeenCalled();
+});
+it('does not resume an idle checkpoint if drain starts while its follow-up readiness is pending',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Checkpoint drain worker'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  const cb=fake.startSession.mock.calls[0][1];cb.sessionId('synthetic-checkpoint');await cb.finished({ok:false,text:'',errors:['Synthetic stop'],costUsd:0,turns:0});
+  let ready!:(value:string|null)=>void;swarm.capabilityPreflight=()=>new Promise(resolve=>{ready=resolve;});const pending=swarm.message(agent.id,'Synthetic follow-up');const denied=expect(pending).rejects.toThrow('readiness');await vi.waitFor(()=>expect(ready).toBeTypeOf('function'));swarm.setDraining(true);ready(null);await denied;
+  expect(fake.startSession).toHaveBeenCalledOnce();expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.status).toBe('stopped');
+});
 it.each(['codex','gemini','opencode'] as const)('does not let scheduler polling replace an owning %s session based on terminal prose',async cli=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const model=cli==='opencode'?'openai/gpt-synthetic':'synthetic-model',agent=swarm.hireAgent('synthetic/repo',{cli,model});
   await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());const options=fake.startSession.mock.calls[0][0] as SessionOptions;
@@ -316,6 +335,11 @@ async function finishQa(swarm: Swarm, callbacks: SessionCallbacks, report: unkno
   for (let i = 0; i < 50 && swarm.snapshot().qa[0].status === 'testing'; i++) await Promise.resolve();
   for (let i = 0; i < 10; i++) await Promise.resolve(); // settle the completion-triggered repo refresh
 }
+it('returns an unlaunched QA round to its queue when drain begins during readiness',async()=>{
+  const {swarm,fake}=await office(true,fake=>{fake.listPulls.mockResolvedValue([pull]);const details={...pull,body:'Synthetic acceptance',isCrossRepository:false};fake.prDetails.mockResolvedValue(details);});
+  let ready!:(value:string|null)=>void;swarm.capabilityPreflight=()=>new Promise(resolve=>{ready=resolve;});await swarm.sendToQa('synthetic/repo',7);await vi.advanceTimersByTimeAsync(200);await vi.waitFor(()=>expect(ready).toBeTypeOf('function'));
+  swarm.setDraining(true);ready(null);await vi.waitFor(()=>expect(swarm.snapshot().qa[0]).toMatchObject({status:'queued',qaAgentId:null,testedSha:null,passedSha:null}));expect(fake.startSession).not.toHaveBeenCalled();expect(fake.prepareDesk).not.toHaveBeenCalled();
+});
 
 it.each([
   {...qaReport, checks: [{name: 'API', result: 'unknown', details: 'Never verified'}]},

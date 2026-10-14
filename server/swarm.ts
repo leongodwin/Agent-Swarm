@@ -1900,9 +1900,11 @@ export class Swarm {
     const admission = this.workerAdmissions.get(a.id);
     // Workspace checks use the exact continuation selected at admission.
     const {resume, retainedCli} = continuation ?? admission ?? {};
-    if (admission?.generation === this.taskGeneration(a) && admission.context === this.workerContext(a, repo, resume, retainedCli)) return true;
-    a.status = this.taskPaused(a.issueTitle ?? '') ? 'stopped' : 'error'; a.endedAt = Date.now();
-    a.lastError = 'Execution context changed or readiness is missing; retry with fresh capability checks';
+    const drainBlocked=this.draining&&a.status==='preparing'&&!retainedCli;
+    if (!drainBlocked&&admission?.generation === this.taskGeneration(a) && admission.context === this.workerContext(a, repo, resume, retainedCli)) return true;
+    a.status = drainBlocked||this.taskPaused(a.issueTitle ?? '') ? 'stopped' : 'error'; a.endedAt = Date.now();
+    if(drainBlocked)this.workerAdmissions.delete(a.id);
+    a.lastError = drainBlocked?'Office is draining; new agent work is paused. Retry after maintenance ends with fresh readiness.':'Execution context changed or readiness is missing; retry with fresh capability checks';
     const record = this.state.qa.find(q => q.repoId === a.repoId && q.prNumber === a.prNumber);
     if (a.task === 'qa' && record?.status === 'testing') this.setQa(record, {status: 'queued', qaAgentId: null, testedSha: null, passedSha: null});
     if (a.task === 'fix' && record?.status === 'fixing') this.setQa(record, {status: 'failed'});
