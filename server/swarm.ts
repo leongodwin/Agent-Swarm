@@ -1,4 +1,6 @@
 import {runtimeModelError} from '../shared/runtimePolicy.ts';
+import {nextPreflightRetry,preflightDeferred,preflightRetrySchema} from './deliveryRetry.ts';
+import type {DeliveryPreflightRetry} from '../shared/delivery.ts';
 import {z} from 'zod';
 import { deliveryCapabilitiesPrompt } from './deliveryCapabilities.ts';
 import type { SessionAuthorization } from './toolGovernance.ts';
@@ -119,6 +121,7 @@ interface PersistedAgent {
   sessionCli: AgentCli | null; // the CLI whose session sessionId is: only it can resume it
   lastError: string | null;
   modelBlock?:{fingerprint:string;reason:string};
+  preflightRetry?:DeliveryPreflightRetry;
   logTail: LogLine[];
 }
 
@@ -491,6 +494,7 @@ export class Swarm {
           cli: isCli(a.cli) ? a.cli : '',
           sessionCli: isCli(a.sessionCli) ? a.sessionCli : null,
           modelBlock:a.modelBlock===undefined?undefined:z.object({fingerprint:z.string().regex(/^[a-f0-9]{64}$/),reason:z.string().min(1).max(1000)}).strict().parse(a.modelBlock),
+          preflightRetry:a.preflightRetry===undefined?undefined:preflightRetrySchema.parse(a.preflightRetry),
         })),
         qa: (loaded.qa ?? []).map((q) => ({
           ...q,
@@ -1746,6 +1750,15 @@ export class Swarm {
   private workerModelBlockedForScheduling(a:PersistedAgent){
     return !!a.modelBlock&&[(a.cli||this.state.settings.defaultCli) as AgentCli,a.sessionCli].some(cli=>!!cli&&a.modelBlock!.fingerprint===this.workerModelFingerprint(cli,this.modelFor(a,cli)));
   }
+  private workerPreflightContext(a:PersistedAgent,repo:PersistedRepo,cli:AgentCli){
+    try{
+    const project=(value:PersistedRepo)=>[value.id,value.fullName,value.localPath,value.defaultBranch,value.targetTenancy];
+    return crypto.createHash('sha256').update(JSON.stringify([cli,this.modelFor(a,cli),a.role,project(repo),repo.links.map(id=>{const linked=this.state.repos.find(value=>value.id===id);return linked?project(linked):[id,null];}),this.backend.terminals,this.state.settings.runtime,this.workerAdmissionContext([repo.id,...repo.links])])).digest('hex');
+    }catch{return crypto.createHash('sha256').update(JSON.stringify(['unavailable-worker-context',a.id,cli])).digest('hex');}
+  }
+  private workerPreflightDeferred(a:PersistedAgent,repo:PersistedRepo){
+    return [(a.cli||this.state.settings.defaultCli) as AgentCli,a.sessionCli].some(cli=>!!cli&&preflightDeferred(a.preflightRetry,this.workerPreflightContext(a,repo,cli)));
+  }
   /** Admit the model that dispatch will use; explicit prohibited values cannot hide behind fallback. */
   private configuredModelError(cli:AgentCli,model:string,ceo=false):string|null{
     if(typeof model!=='string')return 'Model must be a string';
@@ -1955,10 +1968,13 @@ export class Swarm {
       a.status = 'stopped'; a.lastError = 'This platform is paused by the manager';
       this.emitAgent(a); this.save(); return false;
     }
+    const cli=(resume&&a.sessionCli?a.sessionCli:a.cli||this.state.settings.defaultCli) as AgentCli;
+    const context=this.workerPreflightContext(a,repo,cli);
     const blocker = await this.sessionReadiness(a, repo, resume);
     if (!this.ownsTask(a, generation) || a.status !== 'preparing') return false;
-    if (blocker === null) return true;
-    a.lastError = blocker;
+    if (blocker === null){delete a.preflightRetry;return true;}
+    if(!a.modelBlock){a.preflightRetry=nextPreflightRetry(a.preflightRetry,context);}
+    a.lastError = blocker+(a.preflightRetry?.context===context?` Automatic checks ${a.preflightRetry.nextAttemptAt?`resume after ${a.preflightRetry.nextAttemptAt}`:'are held until configuration changes or a manual retry succeeds'}.`:'');
     a.status = 'error'; a.endedAt = Date.now();
     this.appendLog(a, [{ kind: 'error', text: a.lastError! }]); this.emitAgent(a); this.save(); return false;
   }
@@ -2730,7 +2746,7 @@ export class Swarm {
   private available(repo: PersistedRepo, role: AgentRole) {
     const now = Date.now();
     return this.state.agents
-      .filter((a) => a.repoId === repo.id && a.role === role && !this.workerModelBlockedForScheduling(a) && (FREE.includes(a.status) || (a.status === 'error' && now - (a.endedAt ?? 0) >= ERROR_COOLDOWN_MS)))
+      .filter((a) => a.repoId === repo.id && a.role === role && !this.workerModelBlockedForScheduling(a) && !this.workerPreflightDeferred(a,repo) && (FREE.includes(a.status) || (a.status === 'error' && (!!a.preflightRetry || now - (a.endedAt ?? 0) >= ERROR_COOLDOWN_MS))))
       .sort((x, y) => x.desk - y.desk);
   }
 

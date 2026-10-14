@@ -58,6 +58,27 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it('backs off automatic worker preflight while permitting a fresh explicit retry after repair',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Backoff worker'}),checks=vi.fn(async()=> 'Synthetic authentication unavailable');swarm.capabilityPreflight=checks;
+  await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.status).toBe('error'));expect(checks).toHaveBeenCalledOnce();expect(fake.prepareDesk).not.toHaveBeenCalled();
+  swarm.updateRepo('synthetic/repo',{autoAssign:true});swarm.updateAgent(agent.id,{name:'Cosmetic rename',effort:'high'});await vi.advanceTimersByTimeAsync(60000);expect(checks).toHaveBeenCalledOnce();expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.lastError).toContain('resume after');
+  swarm.updateRepo('synthetic/repo',{autoAssign:false});checks.mockResolvedValue(null as any);await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());expect(checks).toHaveBeenCalledTimes(2);
+});
+it('extends automatic worker preflight delay after another failure instead of repeating the normal cooldown',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{}),checks=vi.fn(async()=> 'Synthetic persistent outage');swarm.capabilityPreflight=checks;
+  await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.status).toBe('error'));swarm.updateRepo('synthetic/repo',{autoAssign:true});
+  await vi.advanceTimersByTimeAsync(130000);expect(checks).toHaveBeenCalledTimes(2);await vi.advanceTimersByTimeAsync(130000);expect(checks).toHaveBeenCalledTimes(2);expect(fake.prepareDesk).not.toHaveBeenCalled();expect(fake.startSession).not.toHaveBeenCalled();
+});
+it('retains worker preflight backoff across restart and releases it for a changed runtime context',async()=>{
+  const {swarm}=await office(true,fake=>{fake.terminals=true;});const agent=swarm.hireAgent('synthetic/repo',{cli:'codex'});swarm.capabilityPreflight=async()=> 'Synthetic endpoint unavailable';await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.status).toBe('error'));
+  swarm.updateRepo('synthetic/repo',{autoAssign:true});vi.useRealTimers();await swarm.shutdown(true);vi.useFakeTimers();const fresh=backend();fresh.terminals=true;const restored=new Swarm(fresh as unknown as Backend);offices.push(restored);const checks=vi.fn(async()=>null);restored.capabilityPreflight=checks;await restored.init();await vi.advanceTimersByTimeAsync(60000);expect(checks).not.toHaveBeenCalled();expect(fresh.startSession).not.toHaveBeenCalled();
+  restored.updateAgent(agent.id,{cli:'gemini'});await vi.advanceTimersByTimeAsync(31000);await vi.waitFor(()=>expect(fresh.startSession).toHaveBeenCalledOnce());expect(checks).toHaveBeenCalledWith('synthetic/repo','gemini');
+});
+it('opens the worker preflight circuit after repeated explicit failures without discarding changed error text',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{}),checks=vi.fn(async()=>`Synthetic outage ${checks.mock.calls.length}`);swarm.capabilityPreflight=checks;
+  for(let i=0;i<6;i++){await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.status).toBe('error'));}
+  expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.lastError).toContain('held until configuration changes');swarm.updateRepo('synthetic/repo',{autoAssign:true});await vi.advanceTimersByTimeAsync(3600000);expect(checks).toHaveBeenCalledTimes(6);expect(fake.startSession).not.toHaveBeenCalled();
+});
 it('holds an unadvertised worker pin across retry, cosmetic edits and restart until its effective model changes',async()=>{
   const {swarm,fake}=await office(true,fake=>{fake.terminals=true;});const agent=swarm.hireAgent('synthetic/repo',{cli:'codex',model:'gpt-not-listed'});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
   await fake.startSession.mock.calls[0][1].finished({ok:false,text:'',costUsd:0,turns:0,errors:['Model is not advertised'],configurationError:{kind:'unverified-model',cli:'codex',model:'gpt-not-listed'}});
