@@ -66,16 +66,18 @@ swarm.engineeringTools = authorize => createEngineeringTools(swarm.capabilitySta
   }, release: (token) => canvasOwnership.release(token),
 }, authorize);
 swarm.capabilityFingerprint = () => JSON.stringify(capabilities.view().results.map((r) => [r.repoId, r.status, r.configHash, r.checks]));
-swarm.workerAdmissionContext = repoIds => JSON.stringify([capabilities.configurationFingerprint(repoIds), delivery.view().policy,delivery.available]);
+swarm.workerAdmissionContext = repoIds => JSON.stringify([capabilities.configurationFingerprint(repoIds), delivery.view().policy,delivery.available,backend.tenancy.activity().profileMutation]);
 swarm.capabilityPreflight = async (repoId, cli) => {
+  if(backend.tenancy.activity().profileMutation?.status!=='clear')return 'Authentication profile ownership is unresolved; reconcile it before starting agent work';
   if(!delivery.available)return 'Delivery initialization is unavailable; inspect recovery before starting agent work';
   const repo = swarm.snapshot().repos.find((r) => r.id === repoId);
   if (!repo) return 'Project not connected';
   const result = await capabilities.check(repoId, repo.checkoutPath, repo.targetTenancy?.environmentUrl ?? (fs.existsSync(path.join(repo.checkoutPath, 'cubefarm.delivery.json')) ? delivery.view().policy?.environmentUrl : undefined), cli);
   return capabilityBlocker(result);
 };
-delivery.checkCapabilities = (repoId, cwd, environment, force) => capabilities.check(repoId, cwd, environment, 'git', force);
+delivery.checkCapabilities = async (repoId, cwd, environment, force) => {if(backend.tenancy.activity().profileMutation?.status!=='clear')return {status:'blocked',checks:[{id:'authentication-ownership',category:'authentication',passed:false,remedy:'Inspect and reconcile durable authentication ownership before deployment'}]};return capabilities.check(repoId,cwd,environment,'git',force);};
 swarm.ceoPreflight = async (repoIds,cli) => {
+  if(backend.tenancy.activity().profileMutation?.status!=='clear')return 'Authentication profile ownership is unresolved; reconcile it before starting agent work';
   if(!delivery.available)return 'Delivery initialization is unavailable; inspect recovery before starting agent work';
   const host = capabilityBlocker(await capabilities.check('__office__', HOME_DIR, undefined, cli));
   if (host) return `Office runtime: ${host}`;

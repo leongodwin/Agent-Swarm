@@ -334,3 +334,8 @@ it.each(['authentication','native-exit','profile-command','profile-selection'] a
 it('cancels a prepared reload when authentication starts during launcher preparation',async()=>{
   const cancel=vi.fn(),commit=vi.fn(async()=>'accepted' as const);let markBusy!:()=>void;const prepare=vi.fn(async()=>{markBusy();return {operationId:'11111111-1111-4111-8111-111111111111',commit,cancel};});const f=await office(false,undefined,undefined,{prepare,view:()=>({supported:true,phase:'idle'})});await f.request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});markBusy=()=>f.external.tenancy.activity.mockReturnValue({scope:'process-local-tenancy-work',closed:false,profileSelection:false,authenticationRequests:1,awaitingNativeExit:1,nativeCommands:0,busy:true});expect((await f.request('/api/office/reload','POST',{expectedPid:process.pid})).status).toBe(409);expect(cancel).toHaveBeenCalledOnce();expect(commit).not.toHaveBeenCalled();
 });
+
+it.each(['agent','delivery','cleanup'] as const)('holds authentication profile changes while %s work is active',async mode=>{
+  const f=await office();if(mode==='delivery')vi.spyOn(f.delivery,'view').mockReturnValue({...f.delivery.view(),running:true});else vi.spyOn(f.swarm,'sessionUsage').mockReturnValue({limit:0,used:mode==='agent'?1:0,agentSessions:mode==='agent'?1:0,freeSlots:null,auxiliary:[],...(mode==='cleanup'?{blockedReason:'Synthetic unresolved cleanup'}:{})});
+  expect((await f.request('/api/tenancy/login','POST',{interactive:true})).status).toBe(409);expect((await f.request('/api/tenancy/select','POST',{index:1})).status).toBe(409);expect(f.external.tenancy.login).not.toHaveBeenCalled();expect(f.external.tenancy.select).not.toHaveBeenCalled();
+});

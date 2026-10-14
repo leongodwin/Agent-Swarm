@@ -1,3 +1,5 @@
+import fsSync from 'node:fs';import os from 'node:os';import path from 'node:path';
+const stateRoots:string[]=[];const stateRoot=()=>{const root=fsSync.mkdtempSync(path.join(os.tmpdir(),'tenancy-state-'));stateRoots.push(root);return root;};
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { activeEnvironment, createTenancyService, parsePacProfiles, resolveTenancyCommand, type TenancyRunner } from './tenancy.ts';
 import { loginSchema, parseBody, selectSchema } from './requestSchemas.ts';
@@ -22,8 +24,8 @@ it('accepts an existing absolute executable without searching PATH', () => {
   expect(resolveTenancyCommand(process.execPath)).toEqual({ file: process.execPath, args: [] });
 });
 const services: ReturnType<typeof createTenancyService>[] = [];
-afterEach(() => { for (const service of services.splice(0)) service.close(); vi.useRealTimers(); });
-function make(runner: TenancyRunner, demo = false) { const service = createTenancyService(demo, runner); services.push(service); return service; }
+afterEach(() => { for (const service of services.splice(0)) service.close(); vi.useRealTimers();for(const root of stateRoots.splice(0))fsSync.rmSync(root,{recursive:true,force:true}); });
+function make(runner: TenancyRunner, demo = false) { const service = createTenancyService(demo, runner,stateRoot()); services.push(service); return service; }
 function runner() {
   let output: (text: string) => void = () => {};
   let ended: (error?: string) => void = () => {};

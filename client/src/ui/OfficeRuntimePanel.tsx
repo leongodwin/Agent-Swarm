@@ -14,6 +14,7 @@ export function OfficeRuntimePanel(){
       {view.authenticationWork?<section aria-label="Authentication work">
         <p>Authentication: {view.authenticationWork.busy?'Work or cleanup pending; reload held':'No tracked work pending'}</p>
         <p className="small">{view.authenticationWork.authenticationRequests} sign-in requests · {view.authenticationWork.awaitingNativeExit} native exits awaiting confirmation · {view.authenticationWork.nativeCommands} profile commands · profile selection {view.authenticationWork.profileSelection?'pending':'idle'}</p>
+        {view.authenticationWork.profileMutation&&<p role={view.authenticationWork.profileMutation.quarantined?'alert':undefined}>Persistent profile operation: {view.authenticationWork.profileMutation.status}{view.authenticationWork.profileMutation.action&&` · ${view.authenticationWork.profileMutation.action}`}{view.authenticationWork.profileMutation.reason&&` · ${view.authenticationWork.profileMutation.reason}`}</p>}
         <p className="muted small">Current server tracking only. Counts can overlap; they do not verify tenant access or cleanup after a previous server stopped.</p>
       </section>:<p>Authentication activity is unverified. Refresh runtime before reloading.</p>}
       <p>Launcher reload: {reload?.supported?'Supported':'Unverified'} · {reload?.phase??'unavailable'}</p>

@@ -1,10 +1,12 @@
+import fsSync from 'node:fs';import os from 'node:os';import path from 'node:path';
+const stateRoots:string[]=[];const stateRoot=()=>{const root=fsSync.mkdtempSync(path.join(os.tmpdir(),'tenancy-state-'));stateRoots.push(root);return root;};
 import {EventEmitter} from 'node:events';import {afterEach,expect,it,vi} from 'vitest';
 vi.mock('node:child_process',()=>({spawn:vi.fn(),execFile:vi.fn()}));
 vi.mock('./clis.ts',async importOriginal=>({...await importOriginal<typeof import('./clis.ts')>(),resolveCommand:()=>process.execPath}));
 import {spawn} from 'node:child_process';import {createTenancyService} from './tenancy.ts';
 const services:ReturnType<typeof createTenancyService>[]=[];
-afterEach(()=>{for(const service of services.splice(0))service.close();vi.clearAllMocks();});
-function fixture(pid:number|undefined){const child=Object.assign(new EventEmitter(),{pid,stdout:new EventEmitter(),stderr:new EventEmitter(),kill:vi.fn()});vi.mocked(spawn).mockReturnValue(child as any);const service=createTenancyService(false);services.push(service);return {child,service};}
+afterEach(()=>{for(const service of services.splice(0))service.close();vi.clearAllMocks();for(const root of stateRoots.splice(0))fsSync.rmSync(root,{recursive:true,force:true});});
+function fixture(pid:number|undefined){const child=Object.assign(new EventEmitter(),{pid,stdout:new EventEmitter(),stderr:new EventEmitter(),kill:vi.fn()});vi.mocked(spawn).mockReturnValue(child as any);const service=createTenancyService(false,undefined,stateRoot());services.push(service);return {child,service};}
 it('does not equate a native process error with exit while the spawned root still has an identity',()=>{
   const {child,service}=fixture(123),job=service.login({interactive:true});child.emit('error',new Error('private process failure'));service.cancelLogin(job.id);
   expect(service.loginStatus(job.id)).toMatchObject({status:'cancelled',ok:false,nativeCleanup:'awaiting-exit'});expect(()=>service.login({interactive:true})).toThrow('already pending');

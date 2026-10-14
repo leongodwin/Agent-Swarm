@@ -1,3 +1,5 @@
+import {HOME_DIR} from './config.ts';
+import {TenancyMutationStore} from './tenancyMutation.ts';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -94,7 +96,9 @@ export interface TenancyService {
   shutdown():Promise<void>;
 }
 
-export function createTenancyService(demo = false, runner: TenancyRunner = realRunner): TenancyService {
+export function createTenancyService(demo = false, runner: TenancyRunner = realRunner, stateRoot:string=HOME_DIR): TenancyService {
+  const mutations=demo?null:new TenancyMutationStore(path.join(stateRoot,'tenancy-mutation.json'));
+  const mutationView=()=>mutations?.view()??{status:'clear' as const,quarantined:false,fingerprint:null};
   let cache: TenancyInfo | null = null;
   let checkedAt = 0;
   let generation = 0;
@@ -103,14 +107,16 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
   const jobs = new Map<string, { value: TenancyLogin; stop: () => void; timer?: NodeJS.Timeout }>();
   const nativeCommands=new Set<object>(),idleWaiters=new Set<()=>void>();
   let shutdownWork:Promise<void>|undefined,cleanupFailure:Error|undefined;
-  const activity=():TenancyActivity=>{const authenticationRequests=[...jobs.values()].filter(job=>job.value.status==='pending').length,awaitingNativeExit=[...jobs.values()].filter(job=>job.value.nativeCleanup==='awaiting-exit').length;return {scope:'process-local-tenancy-work',closed,profileSelection:selecting,authenticationRequests,awaitingNativeExit,nativeCommands:nativeCommands.size,busy:selecting||authenticationRequests>0||awaitingNativeExit>0||nativeCommands.size>0};};
+  const localActivity=()=>({profileSelection:selecting,authenticationRequests:[...jobs.values()].filter(job=>job.value.status==='pending').length,awaitingNativeExit:[...jobs.values()].filter(job=>job.value.nativeCleanup==='awaiting-exit').length,nativeCommands:nativeCommands.size});
+  const activity=():TenancyActivity=>{const local=localActivity(),profileMutation=mutationView();if(profileMutation.status==='pending'&&!local.profileSelection&&!local.authenticationRequests&&!local.awaitingNativeExit){profileMutation.quarantined=true;profileMutation.reason='An owned profile intent has no tracked terminal outcome. Preserve and reconcile it before starting work.';}return {scope:'process-local-tenancy-work',closed,...local,profileMutation,busy:local.profileSelection||local.authenticationRequests>0||local.awaitingNativeExit>0||local.nativeCommands>0||profileMutation.status!=='clear'};};
+  const acknowledge=(id:string|undefined,scope:'native-authentication-terminal'|'profile-command-settled')=>{if(!id)return true;try{mutations!.acknowledge(id,scope);return true;}catch{cleanupFailure=new Error('Authentication ownership acknowledgement failed; preserve and reconcile its evidence');return false;}};
   const notify=()=>{for(const waiter of [...idleWaiters])waiter();};
   const run=async(name:string,args:string[])=>{const ticket={};nativeCommands.add(ticket);try{if(closed)throw new HttpError(503,'Tenancy service is closed');return await runner.run(name,args);}finally{nativeCommands.delete(ticket);notify();}};
   const demoInfo: TenancyInfo = { tenantName: 'Demo tenant', tenantDomain: 'example.com', tenantId: '', user: 'manager@example.com',
     environments: [{ index: 1, name: 'Demo sandbox', url: 'https://demo.example.com', user: 'manager@example.com', active: true }], isReal: false, status: 'demo' };
   const invalidate = () => { cache = null; checkedAt = 0; generation++; refreshing = null; };
   const assertOpen=()=>{if(closed)throw new HttpError(503,'Tenancy service is closed');};
-  const profileBusy=()=>selecting||[...jobs.values()].some(job=>job.value.status==='pending'||job.value.nativeCleanup==='awaiting-exit');
+  const profileBusy=()=>mutationView().status!=='clear'||selecting||[...jobs.values()].some(job=>job.value.status==='pending'||job.value.nativeCleanup==='awaiting-exit');
   const assertProfileIdle=()=>{if(profileBusy())throw new HttpError(409,'An authentication profile change or native process cleanup is already pending');};
   const info = async (): Promise<TenancyInfo> => {
     if(closed)return disconnected();
@@ -155,7 +161,7 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       let resolve!:()=>void,reject!:(error:Error)=>void;
       shutdownWork=new Promise<void>((yes,no)=>{resolve=yes;reject=no;});
       try{close();}catch{/* The stop failure remains visible after native work settles. */}
-      const settled=()=>{if(activity().busy)return;idleWaiters.delete(settled);if(cleanupFailure)reject(cleanupFailure);else resolve();};
+      const settled=()=>{const local=localActivity();if(local.profileSelection||local.authenticationRequests||local.awaitingNativeExit||local.nativeCommands)return;idleWaiters.delete(settled);if(cleanupFailure)reject(cleanupFailure);else if(mutationView().status!=='clear')reject(new Error('Durable authentication ownership requires reconciliation'));else resolve();};
       idleWaiters.add(settled);settled();return shutdownWork;
     },
     async select(index) {
@@ -165,9 +171,10 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       if(generation!==current||observed.status==='stale')throw new HttpError(409,'Authentication discovery changed or is stale; refresh before selecting');
       const expected=observed.environments.find((env)=>env.index===index);
       if (!expected) throw new HttpError(404, 'Authentication profile not found');
+      const mutation=mutations?.begin('profile-selection');let selectionSettled=false;
       selecting=true;invalidate();
       try {
-        if (!demo) await run('pac', ['auth', 'select', '--index', String(index)]);
+        if (!demo){try{await run('pac', ['auth', 'select', '--index', String(index)]);}finally{selectionSettled=true;}}
         assertOpen();
         if(!demo){
           const confirmed=parsePacProfiles(await run('pac',['auth','list']));assertOpen();
@@ -176,7 +183,7 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
         }
         invalidate();
         return { ok: true, message: `${demo ? 'Demo: ' : ''}Selected profile [${index}]` };
-      } finally {selecting=false;notify();}
+      } finally {const accepted=!selectionSettled||acknowledge(mutation,'profile-command-settled');selecting=false;notify();if(!accepted)throw new HttpError(409,'Authentication ownership acknowledgement failed; profile selection remains unverified');}
     },
     login(input) {
       assertOpen();assertProfileIdle();
@@ -184,6 +191,7 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       if(input.environmentUrl){try{identityRoot(input.environmentUrl);}catch{throw new HttpError(400,'Sign-in environment must be an HTTPS organization root');}}
       if ([...jobs.values()].some((job) => job.value.status === 'pending')) throw new HttpError(409, 'An authentication request is already pending');
       if (jobs.size >= 20) jobs.delete(jobs.keys().next().value!);
+      const mutation=mutations?.begin('sign-in');
       const value: TenancyLogin = { id: crypto.randomUUID(), status: demo ? 'completed' : 'pending', ...(demo?{}:{phase:'authenticating' as const,nativeCleanup:'awaiting-exit' as const}),message: demo ? 'Demo authentication completed; no credentials changed' : 'Waiting for PAC authentication instructions', ok: demo };
       const job: { value: TenancyLogin; stop: () => void; timer?: NodeJS.Timeout } = { value, stop: () => {} };
       jobs.set(value.id, job);
@@ -227,7 +235,9 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
           // Credential-based login does not need a transcript; no secret fragment reaches the browser.
           if (input.interactive !== false) value.message = redact(transcript).slice(-8000);
         }, (error) => {
+          if(value.nativeCleanup==='exited')return;
           value.nativeCleanup='exited';
+          if(!acknowledge(mutation,'native-authentication-terminal')){if(value.status==='pending'){value.status='failed';value.ok=false;value.message='Authentication ownership needs reconciliation; sign-in was not accepted';clearTimeout(job.timer);}notify();return;}
           notify();
           if (value.status !== 'pending'||value.phase==='verifying') return;
           if(!error&&!reportedFailure){void verifyCompletion();return;}
