@@ -27,3 +27,6 @@ ownership. It does not establish transactional replacement for every asynchronou
 model/trust/startup failure or verify full process-family recovery. Those remain
 separate reliability requirements. Copilot Studio remains paused; supported
 coding providers are Codex (default), Gemini and OpenCode.
+
+The subsequent [readiness replacement change](RUNTIME-READINESS-REPLACEMENT.md)
+extends preservation to asynchronous Codex/Gemini checks and pending admission.

@@ -198,6 +198,43 @@ it('rejects reattachment over a task that already owns the retained terminal',as
  expect(()=>startRealCliSession({...opts,reattach:true},callbacks)).toThrow('active task owner');expect(native.kill).not.toHaveBeenCalled();expect(native.write).not.toHaveBeenCalled();expect(callbacks.finished).not.toHaveBeenCalled();
  setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic admitted decision'}));const decision:any=await handleHook(token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});expect(decision.hookSpecificOutput.permissionDecision).toBe('allow');handle.stop();
 });
+async function replacementFixture(){
+ vi.useFakeTimers();const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+ const opts:SessionOptions={cwd:HOME_DIR,prompt:'Original task',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,keepAlive:true,authorizeTool:()=>null};
+ const callbacks=()=>({log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
+ const original=callbacks(),handle=await startCliSession(opts,original),token=native.token,watch=term.onInput;
+ native.kill.mockClear();native.write.mockClear();vi.mocked(term.bind).mockClear();
+ return {opts,term,original,handle,token,watch,replacement:callbacks()};
+}
+it.each(['trust','model','gemini-block','gemini-error'] as const)('preserves original work when asynchronous replacement readiness fails: %s',async mode=>{
+ const fixture=await replacementFixture();
+ if(mode==='trust')vi.mocked(prepareCodexHooks).mockRejectedValueOnce(new Error('private trust detail'));
+ if(mode==='model')vi.mocked(prepareCodexHooks).mockRejectedValueOnce(new CodexModelNotAdvertisedError('gpt-not-listed'));
+ if(mode==='gemini-block')vi.mocked(verifyGeminiProfile).mockResolvedValueOnce('Protected profile unavailable');
+ if(mode==='gemini-error')vi.mocked(verifyGeminiProfile).mockRejectedValueOnce(new Error('private profile detail'));
+ await startCliSession({...fixture.opts,prompt:'Replacement task',...(mode.startsWith('gemini')?{cli:'gemini' as const}:{})},fixture.replacement);
+ for(let i=0;i<100&&!fixture.replacement.finished.mock.calls.length;i++)await Promise.resolve();
+ expect(fixture.replacement.finished).toHaveBeenCalledOnce();expect(fixture.replacement.finished.mock.calls[0][0].ok).toBe(false);expect(JSON.stringify(fixture.replacement.finished.mock.calls)).not.toContain('private');
+ expect(native.kill).not.toHaveBeenCalled();expect(native.write).not.toHaveBeenCalled();expect(fixture.term.bind).not.toHaveBeenCalled();expect(fixture.term.onInput).toBe(fixture.watch);expect(fixture.original.finished).not.toHaveBeenCalled();expect(native.token).toBe(fixture.token);
+ setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic admitted decision'}));const decision:any=await handleHook(fixture.token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});expect(decision.hookSpecificOutput.permissionDecision).toBe('allow');fixture.handle.stop();
+});
+it.each(['cancel','revoked','owner-exit','success'] as const)('keeps replacement admission exclusive and rechecks its owner: %s',async mode=>{
+ const fixture=await replacementFixture();let ready!:(value:{verified:number;hashes:never[]})=>void;
+ vi.mocked(prepareCodexHooks).mockImplementationOnce(()=>new Promise(resolve=>{ready=resolve as typeof ready;}));let authorized=true;
+ const pending=startRealCliSession({...fixture.opts,prompt:'Replacement task',authorizeTool:()=>authorized?null:'Task was cancelled'},fixture.replacement);
+ expect(()=>startRealCliSession(fixture.opts,fixture.replacement)).toThrow('admission is already being checked');expect(native.kill).not.toHaveBeenCalled();expect(fixture.term.onInput).toBe(fixture.watch);
+ if(mode==='cancel')pending.stop();if(mode==='revoked')authorized=false;if(mode==='owner-exit')native.exit?.(0);
+ ready({verified:5,hashes:[]});for(let i=0;i<100;i++)await Promise.resolve();
+ if(mode==='success'){expect(native.kill).toHaveBeenCalledOnce();expect(native.token).not.toBe(fixture.token);expect(fixture.term.onInput).not.toBe(fixture.watch);expect(fixture.replacement.finished).not.toHaveBeenCalled();pending.stop();}
+ else{expect(fixture.replacement.finished).toHaveBeenCalledOnce();expect(fixture.replacement.finished.mock.calls[0][0].ok).toBe(false);expect(native.token).toBe(fixture.token);if(mode!=='owner-exit'){expect(native.kill).not.toHaveBeenCalled();expect(fixture.term.onInput).toBe(fixture.watch);fixture.handle.stop();}}
+});
+it('preserves idle retained ownership when follow-up trust validation fails',async()=>{
+ const fixture=await replacementFixture();await handleHook(fixture.token,{hook_event_name:'Stop',last_assistant_message:'Synthetic completion'});await vi.advanceTimersByTimeAsync(4000);native.kill.mockClear();vi.mocked(fixture.term.bind).mockClear();const release=fixture.term.releaseIdle;
+ vi.mocked(prepareCodexHooks).mockRejectedValueOnce(new Error('private trust detail'));
+ await startCliSession({...fixture.opts,reattach:true},fixture.replacement);for(let i=0;i<100;i++)await Promise.resolve();
+ expect(fixture.replacement.finished).toHaveBeenCalledOnce();expect(native.kill).not.toHaveBeenCalled();expect(fixture.term.bind).not.toHaveBeenCalled();expect(fixture.term.releaseIdle).toBe(release);expect(native.token).toBe(fixture.token);
+ const decision:any=await handleHook(fixture.token,{hook_event_name:'PreToolUse',tool_name:'Read',tool_input:{}});expect(decision.hookSpecificOutput.permissionDecision).toBe('deny');
+});
 
 it.each(['idle','changing','active','follow-up','completion'] as const)('reconciles retained idle Codex conservatively: %s',async mode=>{
   vi.useFakeTimers();native.kill.mockClear();

@@ -33,7 +33,7 @@ import {
 import type { OfficeTools } from './ceo.ts';
 import type { AgentTerminal } from './terminal.ts';
 import type { AgentCli } from '../shared/types.ts';
-import { governSessionTool, hookDecision, hookFailure } from './toolGovernance.ts';
+import { governSessionTool, sessionAuthority,hookDecision, hookFailure } from './toolGovernance.ts';
 import {copilotUnavailableModel,openCodeRateLimited} from './runtimeFailure.ts';
 
 // One agent session as the real CLI in a pseudo-terminal: the same contract as the Agent SDK runner (log lines, the
@@ -194,6 +194,7 @@ interface LiveCli {
   idleTimer?: NodeJS.Timeout;
 }
 const lives = new Map<AgentTerminal, LiveCli>();
+const preparing=new Map<AgentTerminal,symbol>();
 let cleanupChanged=()=>{};
 const cleanup=new RuntimeCleanupStore(path.join(HOME_DIR,'runtime-cleanup.json'),()=>cleanupChanged());
 const closing=new Map<string,Pty>();
@@ -424,6 +425,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const requestedCli=opts.cli??'codex';
   const requestedPolicyError=runtimeModelError(requestedCli,opts.model);if(requestedPolicyError)throw new Error(requestedPolicyError);
   const term = opts.terminal!;
+  if(preparing.has(term))throw new Error('Terminal runtime admission is already being checked; current work was preserved');
   // A follow-up to the session a CLI is still waiting in picks that CLI up again, and so does an office that restarted
   // while it worked (reattach); anything else replaces it.
   const prev = lives.get(term);
@@ -431,10 +433,16 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const waiting = !!prev?.proc && !prev.session;
   if(opts.reattach&&prev&&!waiting)throw new Error('Retained terminal already has an active task owner; current work was preserved');
   const adopt = waiting && (!!opts.reattach || (prev!.cli === (opts.cli ?? 'codex') && !!opts.resumeSessionId && prev!.resumeId === opts.resumeSessionId));
-  let live: LiveCli | null = adopt ? prev! : null;
-  const cli = live?.cli ?? opts.cli ?? 'codex';
+  let live: LiveCli | null = null;
+  const cli = adopt?prev!.cli:requestedCli;
   const policyError=runtimeModelError(cli,opts.model);if(policyError)throw new Error(policyError);
-  const replaced=prev&&!adopt?endLive(prev):Promise.resolve();
+  const admission=Symbol('terminal-admission');
+  const releaseAdmission=()=>{if(preparing.get(term)===admission)preparing.delete(term);};
+  const validateAdmission=async()=>{
+    const denied=await sessionAuthority(opts.authorizeTool);
+    if(denied)throw new Error(denied.reason);
+    if(done||preparing.get(term)!==admission||lives.get(term)!==prev||(adopt&&prev?.session))throw new Error('Terminal ownership changed during runtime admission; replacement denied');
+  };
   const label = cliLabel(cli);
 
   const token = crypto.randomUUID();
@@ -490,6 +498,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const finish = (r: Omit<SessionResult, 'costUsd' | 'turns'>, keep = false, preserveRecovery = false) => {
     if (done) return;
     done = true;
+    releaseAdmission();
     for (const t of [finishTimer, bootTimer,geminiStartupTimer]) clearTimeout(t);
     clearInterval(screenTimer);
     clearInterval(shotTimer);
@@ -559,7 +568,6 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     };
     setTimeout(look, 800);
   };
-  term.onInput = watchKeys;
 
   const assistantLines = (text: string): LogEntry[] => {
     const lines = text.split('\n');
@@ -779,7 +787,11 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     writeHelpers();const hookPath=path.join(BIN_DIR,'codex-hook.cjs');
     return prepareCodexHooks(command,opts.cwd,hookPath,CODEX_HOOK_SOURCE,CODEX_HOOK_EVENTS.map(event=>({event,command:codexHookInvocation(hookPath,event),timeout:event==='Interrupt'?3:10})),opts.model);
   };
-  if (adopt && live) {
+  if (adopt && prev) {
+    preparing.set(term,admission);
+    const commitAdoption=async()=>{
+    await validateAdmission();if(done)return;
+    live=prev;
     // Back in the CLI that was waiting at its prompt: same conversation, same terminal.
     clearTimeout(live.idleTimer);
     term.releaseIdle = null;
@@ -788,12 +800,15 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     wire(live, opts.office);
     Object.assign(live, { statusLine });
     remember(live);
+    term.onInput=watchKeys;releaseAdmission();
     if (live.resumeId) cb.sessionId(live.resumeId);
     const resumeTurn=()=>{if(done)return;if(live){live.governanceReady=true;remember(live);}if(opts.typed||opts.reattach)busy();else handle.send(opts.prompt);recoveryPending=!!opts.reattach;};
-    if(cli==='codex'){live.governanceReady=false;remember(live);void verifyCodex().then(resumeTurn,error=>finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Retained Codex hook trust could not be verified; follow-up denied'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})}));}else resumeTurn();
+    resumeTurn();
     recoveryPending = !!opts.reattach;
     shotTimer = setInterval(collectShots, 2000);
     monitorCapacity();
+    };
+    void (cli==='codex'?verifyCodex().then(()=>commitAdoption()):commitAdoption()).catch(error=>finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Retained runtime readiness or ownership could not be verified; follow-up denied'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})}));
     return handle;
   }
   if (opts.reattach) {
@@ -889,7 +904,6 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   Object.assign(env, { TERM: 'xterm-256color', COLORTERM: 'truecolor' }, launch.env);
 
   if (cli === 'claude' || cli === 'copilot') cb.sessionId(sessionId);
-  term.note(`── ${label}${opts.label ? ` · ${opts.label}` : ''} ──`);
   const resumeId = cli === 'claude' || cli === 'copilot' ? sessionId : (opts.resumeSessionId ?? null);
   const l: LiveCli = { governanceReady:cli==='codex'?codexTrustReady:undefined,agentId: opts.agentId ?? '', cli, term, proc: null, token, dir, resumeId, statusLine, output: '', shots: new Set(), session: { hook, exited } };
   const beginAfterCleanup = () => {
@@ -905,6 +919,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     l.proc = p;
     live = l;
     wire(l, opts.office);
+    term.onInput=watchKeys;releaseAdmission();
+    term.note(`── ${label}${opts.label ? ` · ${opts.label}` : ''} ──`);
     shotTimer = setInterval(collectShots, 2000);
     monitorCapacity();
     if(cli==='gemini'){log([{kind:'system',text:'Gemini task withheld while verifying the governance bridge and terminal readiness.'}]);cb.tool('Runtime readiness');}
@@ -945,10 +961,18 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       if (!done && !begun && cli === 'claude') log([{ kind: 'error', text: `⚠ ${label} hasn't started on the task yet. Open the terminal to see what it's waiting for.` }]);
     }, BOOT_MS);
   };
-  const begin=()=>{void replaced.then(()=>{if(done)return;const blocker=cleanupBlocker();if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}beginAfterCleanup();});};
+  const begin=()=>{void (async()=>{
+    await validateAdmission();if(done)return;
+    if(prev)await endLive(prev);
+    if(done)return;
+    if(preparing.get(term)!==admission||lives.has(term))throw new Error('Terminal ownership changed during replacement cleanup; execution denied');
+    const blocker=cleanupBlocker();if(blocker)throw new Error(blocker);
+    beginAfterCleanup();
+  })().catch(error=>{if(!done)finish({ok:false,text:'',errors:[error instanceof Error?error.message:'Runtime replacement admission failed']});});};
+  preparing.set(term,admission);
   // Codex won't resume a thread the office archived (see codexThread): it's unarchived first.
   if(cli==='codex'){
-    void verifyCodex().then(async verified=>{if(done)return;codexTrustReady=true;log([{kind:'system',text:`Verified native trust for ${verified.verified} generated office hooks.`}]);if(opts.resumeSessionId)await codexThread('unarchive',opts.resumeSessionId);if(!done)begin();},error=>{if(!done)finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Codex office hook trust could not be verified; no task was sent. Inspect native hook policy and source integrity.'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})});});
+    void verifyCodex().then(async verified=>{if(done)return;codexTrustReady=true;log([{kind:'system',text:`Verified native trust for ${verified.verified} generated office hooks.`}]);if(opts.resumeSessionId)await codexThread('unarchive',opts.resumeSessionId);if(!done)begin();}).catch(error=>{if(!done)finish({ok:false,text:'',errors:[error instanceof CodexModelNotAdvertisedError?error.message:'Codex office hook trust or resume readiness could not be verified; no task was sent. Inspect native hook policy and source integrity.'],...(error instanceof CodexModelNotAdvertisedError?{configurationError:{kind:'unverified-model' as const,cli:'codex' as const,model:error.model}}:{})});});
   }
   else if(cli==='gemini')void verifyGeminiProfile(cmd,opts.browserTesting).then(blocker=>{if(done)return;if(blocker){finish({ok:false,text:'',errors:[blocker]});return;}begin();},()=>finish({ok:false,text:'',errors:['Gemini protected-profile validation failed; execution denied']}));
   else begin();
