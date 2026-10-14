@@ -7,6 +7,6 @@ export interface HealthEvidenceView {
   status:'clear'|'blocked'|'unavailable';
   checkedAt:string;
   reasons:string[];
-  files:{file:string;kind:'decision'|'package'|'schema'|'advanced-policy'}[];
+  files:{file:string;kind:'decision'|'package'|'schema'|'advanced-policy'|'connector-catalogue'}[];
   schema?:{status:'observed'|'unavailable';checkedAt:string;reason:string;diagnostic?:SchemaDiagnostic}|{status:'evidence-unavailable'};
 }

@@ -74,8 +74,11 @@ describe('AgentTerminal', () => {
       t.write(`${'漢'.repeat(1500000)}\r\nlast output\r\n`);
       const state=(t as any).viewers.get(ws);
       expect(state.stale).toBe(true);expect(state.queued===null).toBe(true);expect(state.queuedBytes).toBe(0);
-      await t.flush();barrier();expect(messages).toEqual([]);
-      await new Promise(resolve=>setTimeout(resolve,1150));await t.flush();
+      await t.flush();
+      // Recovery must not race the held initial snapshot, even after its timer fires.
+      await new Promise(resolve=>setTimeout(resolve,1150));expect(messages).toEqual([]);
+      barrier();expect(messages).toEqual([]);
+      await vi.waitFor(()=>expect(messages).toHaveLength(1),{timeout:5000,interval:50});await t.flush();
       expect(messages).toHaveLength(1);expect(messages[0].t).toBe('snapshot');expect(messages[0].data).toContain('last output');
       expect(messages.some(message=>message.t==='data')).toBe(false);
     }finally{t.dispose();}

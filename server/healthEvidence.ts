@@ -18,7 +18,7 @@ export async function healthEvidenceView(home:string,run:DeliveryRun):Promise<{r
     const decision=lifecycleResultSchema.parse(await readBoundedJson(await containedFile(root,name),64*1024));
     if(decision.phase!=='health'||decision.sourceCommit!==run.head||decision.releaseId!==run.releaseId||decision.environmentUrl!==run.environmentUrl)throw new Error('Health decision context differs');
     const files:HealthEvidenceView['files']=[{file:name,kind:'decision'}];
-    for(const [field,kind] of [['packageInventoryFile','package'],['declaredSchemaFile','schema'],['advancedPolicyFile','advanced-policy']] as const){const file=decision[field];if(file&&!files.some(item=>item.file===file))files.push({file,kind});}
+    for(const [field,kind] of [['packageInventoryFile','package'],['declaredSchemaFile','schema'],['advancedPolicyFile','advanced-policy'],['connectorCatalogueFile','connector-catalogue']] as const){const file=decision[field];if(file&&!files.some(item=>item.file===file))files.push({file,kind});}
     let schema:HealthEvidenceView['schema'];
     if(decision.declaredSchemaFile){
       try{

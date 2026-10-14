@@ -144,10 +144,11 @@ export class AgentTerminal {
     // xterm parses writes asynchronously: snapshot once everything written so far is parsed, and hold back what
     // arrives meanwhile so it follows the snapshot instead of going missing.
     if(this.viewers.has(ws)||ws.readyState!==ws.OPEN)return;
-    const viewer:Viewer = { stale: false, queued: [],queuedBytes:0,synchronizing:false };
+    const viewer:Viewer = { stale: false, queued: [],queuedBytes:0,synchronizing:true };
     this.viewers.set(ws, viewer);
     this.term.write('', () => {
       if(this.viewers.get(ws)!==viewer)return;
+      viewer.synchronizing=false;
       const queued = viewer.queued ?? [];
       viewer.queued = null;
       viewer.queuedBytes=0;

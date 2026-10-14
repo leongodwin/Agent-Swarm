@@ -5,6 +5,7 @@ import type {LifecycleRequest} from './lifecycleGovernance.ts';
 import {manifestDigest} from './lifecycleGovernance.ts';
 import type {DeclaredSchemaObservation} from './declaredSchema.ts';
 import type {AdvancedPolicyObservation,AdvancedPolicyRequest} from './advancedPolicy.ts';
+import type {ConnectorCatalogueObservation,ConnectorCatalogueRequest} from './connectorCatalogue.ts';
 const guid='11111111-1111-4111-8111-111111111111';
 const manifest={schemaVersion:1,solutionUniqueName:'Expenses',solutionVersion:'1.0.0.0',solutionZip:'release.zip',hasUi:false,recovery:{runbook:'recovery.md',rehearsalReport:'drill.json'},documentation:['one.md','two.md','three.md'],build:[{executable:'node',args:['build.js']}],test:[{executable:'node',args:['test.js']}],verify:[{executable:'node',args:['verify.js']}],targetBinding:{organizationId:guid,userId:guid},platformIdentity:{tenantId:guid,username:'tester@company.test',environmentId:guid},targetComponents:[{key:'dataverse',kind:'connection-reference',logicalName:'exp_dataverse'}],postDeployActions:[{id:'binding',type:'connection-reference-check',component:'dataverse',connectionId:'approved',connectorId:'shared_commondataserviceforapps'}]};
 const request:LifecycleRequest={phase:'build',sourceCommit:'a'.repeat(40),environmentUrl:'https://test.crm4.dynamics.com',releaseId:'release-1',checkout:'unused',manifest};
@@ -20,6 +21,24 @@ function connectorConstraints(allowMail:boolean){
   ]}}]}];
   value.observationSha256=crypto.createHash('sha256').update(JSON.stringify({assignments:value.assignments,policies:value.policies})).digest('hex');return value;
 }
+function catalogueUnavailable(input:ConnectorCatalogueRequest):ConnectorCatalogueObservation{return {tenantId:input.tenantId,caller:input.caller,environmentId:input.environmentId,scope:'requested-connector-catalogue',accountScope:'azure-cli-profile',complete:false,complianceVerified:false,operationIdsVerified:false,status:'unavailable',checkedAt:new Date().toISOString(),requested:input.connectors,entries:[],failure:'delegated-permissions',elapsedMs:100,nativeCommands:2,reason:'Catalogue client requires approved delegated permissions; no access was granted'};}
+it('does not advertise a catalogue file when its atomic publication fails',async()=>{
+  const input=await packaged(),observe=async(value:ConnectorCatalogueRequest)=>{
+    const observation=catalogueUnavailable(value),content=JSON.stringify({schemaVersion:1,scope:'package-connector-catalogue-observation',phase:input.phase,sourceCommit:input.sourceCommit,releaseId:input.releaseId,environmentUrl:input.environmentUrl,manifestSha256:manifestDigest(input.manifest),packageSha256:input.packageSha256,observation},null,2);
+    await fs.mkdir(path.join(input.evidenceDirectory!,`connector-catalogue-${crypto.createHash('sha256').update(content).digest('hex')}.json`));return observation;
+  };
+  const result=await createDeliveryGovernance({observation:()=>observation()},undefined,undefined,observe)(input);expect(result.status).toBe('unavailable');expect(result.connectorCatalogueFile).toBeUndefined();expect(result.reasons.join(' ')).toContain('catalogue metadata could not be bound');
+});
+it.each(['build','test','import','post-deploy','verify','health'] as const)('persists checksum-bound package catalogue requests and safe permission diagnostics at %s',async phase=>{
+  const input=await packaged(),observe=vi.fn(async(value:ConnectorCatalogueRequest)=>catalogueUnavailable(value));
+  const result=await createDeliveryGovernance({observation:()=>observation()},undefined,undefined,observe)({...input,phase});expect(result.status).toBe('unavailable');expect(result.reasons.join(' ')).toContain('approved delegated permissions');expect(result.connectorCatalogueFile).toMatch(/^connector-catalogue-[a-f0-9]{64}\.json$/);
+  expect(observe.mock.calls[0][0].connectors).toEqual(['shared_commondataserviceforapps','shared_office365']);
+  const content=await fs.readFile(path.join(input.evidenceDirectory!,result.connectorCatalogueFile!),'utf8');expect(result.connectorCatalogueFile).toBe(`connector-catalogue-${crypto.createHash('sha256').update(content).digest('hex')}.json`);expect(JSON.parse(content)).toMatchObject({phase,sourceCommit:input.sourceCommit,releaseId:input.releaseId,environmentUrl:input.environmentUrl,manifestSha256:manifestDigest(input.manifest),packageSha256:input.packageSha256,observation:{failure:'delegated-permissions',operationIdsVerified:false}});
+});
+it.each(['tenant','caller','environment','requested','stale','future'])('rejects %s catalogue context before evidence persistence',async fault=>{
+  const input=await packaged(),observe=async(value:ConnectorCatalogueRequest)=>{const result=catalogueUnavailable(value);if(fault==='tenant')result.tenantId='22222222-2222-4222-8222-222222222222';if(fault==='caller')result.caller='other@company.test';if(fault==='environment')result.environmentId='22222222-2222-4222-8222-222222222222';if(fault==='requested')result.requested=['shared_other'];if(fault==='stale')result.checkedAt=new Date(Date.now()-61000).toISOString();if(fault==='future')result.checkedAt=new Date(Date.now()+31000).toISOString();return result;};
+  const result=await createDeliveryGovernance({observation:()=>observation()},undefined,undefined,observe)(input);expect(result.status).toBe('unavailable');expect(result.connectorCatalogueFile).toBeUndefined();expect(result.reasons.join(' ')).toContain('catalogue metadata could not be bound');
+});
 it.each(['build','test','import','post-deploy','verify','health'] as const)('blocks a package-derived action conflict before %s without converting matched constraints into permission',async phase=>{
   const input=await packaged(),value=connectorConstraints(false),check=createDeliveryGovernance({observation:()=>observation()},undefined,async()=>value);
   const result=await check({...input,phase});expect(result.status).toBe('blocked');expect(result.reasons.join(' ')).toContain('SendEmailV2');expect(result.reasons.join(' ')).toContain('outside observed policy');expect(result.advancedPolicyFile).toBeDefined();expect(result.artifactSha256).toBe(input.packageSha256);

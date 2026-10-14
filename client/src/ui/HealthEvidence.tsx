@@ -3,7 +3,7 @@ import {useResource} from '../useResource';
 import {useState} from 'react';
 import type {SchemaDiagnostic} from '../../../shared/healthEvidence';
 
-const labels={decision:'Lifecycle decision',package:'Package inventory',schema:'Declared schema observation','advanced-policy':'Environment policy assignments'};
+const labels={decision:'Lifecycle decision',package:'Package inventory',schema:'Declared schema observation','advanced-policy':'Environment policy assignments','connector-catalogue':'Requested connector catalogue'};
 const stages:Record<SchemaDiagnostic['stage'],string>={contract:'Contract validation','initial-identity':'Initial target identity','resource-contracts':'Package resource contracts',migration:'Migration compatibility',columns:'Column validation',structure:'Relationships and keys','final-identity':'Final target identity',evidence:'Evidence validation',complete:'Completed declared checks'};
 export function HealthEvidence({run,decision}:{run:string;decision:string}){
   const [open,setOpen]=useState(false);

@@ -374,14 +374,15 @@ describe('Real solution delivery', () => {
       const decision=await original(request);if(request.phase!=='import')return decision;
       const file=`package-inventory-${request.packageSha256}.json`;
       await fs.writeFile(path.join(request.evidenceDirectory!,file),JSON.stringify({scope:'injected-test-inventory',resourceInventoryComplete:false}));
-      const declaredSchemaFile=`declared-schema-${'a'.repeat(64)}.json`,advancedPolicyFile=`advanced-policy-${'b'.repeat(64)}.json`;
-      for(const name of [declaredSchemaFile,advancedPolicyFile])await fs.writeFile(path.join(request.evidenceDirectory!,name),JSON.stringify({scope:'injected-partial-observation',complete:false}));
-      return {...decision,status:'unavailable',packageInventoryFile:file,declaredSchemaFile,advancedPolicyFile,reasons:['Opaque package components need validation']};
+      const declaredSchemaFile=`declared-schema-${'a'.repeat(64)}.json`,advancedPolicyFile=`advanced-policy-${'b'.repeat(64)}.json`,connectorCatalogueFile=`connector-catalogue-${'c'.repeat(64)}.json`;
+      for(const name of [declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile])await fs.writeFile(path.join(request.evidenceDirectory!,name),JSON.stringify({scope:'injected-partial-observation',complete:false}));
+      return {...decision,status:'unavailable',packageInventoryFile:file,declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile,reasons:['Opaque package components need validation']};
     };
     await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
     expect(run.phase).toBe('blocked');const inventory=run.evidence.find(file=>file.startsWith('package-inventory-'));expect(inventory).toBeDefined();
     expect(JSON.parse(await fs.readFile(path.join(root,'delivery-runs',run.id,'evidence',inventory!),'utf8')).resourceInventoryComplete).toBe(false);
     expect(run.evidence).toContain(`declared-schema-${'a'.repeat(64)}.json`);expect(run.evidence).toContain(`advanced-policy-${'b'.repeat(64)}.json`);
+    expect(run.evidence).toContain(`connector-catalogue-${'c'.repeat(64)}.json`);
     expect(run.operations?.length??0).toBe(0);
   });
   for(const stage of ['test','import','post-deploy','verify'] as const) it(`rechecks governance at ${stage} and blocks drift without inventing an import outcome`,async()=>{

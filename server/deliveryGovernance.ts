@@ -11,11 +11,12 @@ import {comparePackageSchema} from './packageSchema.ts';
 import {advancedPolicyObservation,type AdvancedPolicyObserver} from './advancedPolicy.ts';
 import {compareAdvancedConnectorConstraints} from './advancedConstraints.ts';
 import type {PackageResource} from './packageInventory.ts';
+import {connectorCatalogueObservation,type ConnectorCatalogueObserver} from './connectorCatalogue.ts';
 
 /** Declaration-level standard checks may deny, but cannot authorize a release.
  * A full provider must also independently extract package resources and evaluate
  * advanced/action/endpoint policies and comprehensive source/target schemas. */
-export function createDeliveryGovernance(source:{observation(identity:{tenantId:string;caller:string}):unknown;ensureObservation?(identity:{tenantId:string;caller:string},options:{signal?:AbortSignal;force:boolean;timeoutMs:number}):Promise<unknown>},observeSchema?:DeclaredSchemaObserver,observeAdvanced?:AdvancedPolicyObserver):LifecycleCheck {
+export function createDeliveryGovernance(source:{observation(identity:{tenantId:string;caller:string}):unknown;ensureObservation?(identity:{tenantId:string;caller:string},options:{signal?:AbortSignal;force:boolean;timeoutMs:number}):Promise<unknown>},observeSchema?:DeclaredSchemaObserver,observeAdvanced?:AdvancedPolicyObserver,observeCatalogue?:ConnectorCatalogueObserver):LifecycleCheck {
   return async request=>{
     const manifest=deliveryManifest.parse(request.manifest);
     let packageInventoryFile:string|undefined;
@@ -49,6 +50,14 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
     const identity={tenantId:platformIdentity.tenantId,caller:platformIdentity.username};
     let declaredSchemaFile:string|undefined;
     let advancedPolicyFile:string|undefined;
+    let connectorCatalogueFile:string|undefined,catalogueReason='Fresh scope-bound connector catalogue metadata is unavailable';
+    const catalogueWork=async()=>{if(observeCatalogue&&advancedResources)try{
+      const connectors=[...new Set(advancedResources.flatMap(resource=>resource.connectors))].sort();if(!connectors.length)return;
+      const value=connectorCatalogueObservation.parse(await observeCatalogue({...identity,environmentId:platformIdentity.environmentId,connectors,checkout:request.checkout,signal:request.signal})),age=Date.now()-Date.parse(value.checkedAt);
+      if(request.signal?.aborted||value.tenantId.toLowerCase()!==identity.tenantId.toLowerCase()||value.caller.toLowerCase()!==identity.caller.toLowerCase()||value.environmentId.toLowerCase()!==platformIdentity.environmentId.toLowerCase()||JSON.stringify(value.requested.slice().sort())!==JSON.stringify(connectors)||age>60_000||age < -30_000)throw new Error('Catalogue context differs');
+      catalogueReason=value.reason;
+      if(request.evidenceDirectory){const content=JSON.stringify({schemaVersion:1,scope:'package-connector-catalogue-observation',phase:request.phase,sourceCommit:request.sourceCommit,releaseId:request.releaseId,environmentUrl:request.environmentUrl,manifestSha256:manifestDigest(request.manifest),packageSha256:request.packageSha256,observation:value},null,2),file=`connector-catalogue-${crypto.createHash('sha256').update(content).digest('hex')}.json`;await atomicWrite(path.join(request.evidenceDirectory,file),content);connectorCatalogueFile=file;}
+    }catch{catalogueReason='Connector catalogue metadata could not be bound to this stage or persisted';}};
     let advancedReason='Fresh environment rule assignment inventory and effective advanced enforcement mode are unavailable';
     let advancedConflict=false;let advancedReasons:string[]=[];
     const advancedWork=async()=>{if(observeAdvanced)try{
@@ -68,13 +77,13 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
       if(request.evidenceDirectory){const content=JSON.stringify(schema,null,2);declaredSchemaFile=`declared-schema-${crypto.createHash('sha256').update(content).digest('hex')}.json`;await atomicWrite(path.join(request.evidenceDirectory,declaredSchemaFile),content);}
     }catch{schemaReason='Declared schema evidence could not be bound to this stage or persisted';}};
     let snapshot:unknown;
-    const [,policy]=await Promise.allSettled([schemaWork(),Promise.resolve().then(()=>source.ensureObservation?source.ensureObservation(identity,{signal:request.signal,force:true,timeoutMs:45_000}):source.observation(identity)),advancedWork()]);
-    if(policy.status==='rejected')return {...unavailable([...advancedReasons,'Refresh the authenticated policy inventory for the exact approved tenant and account before governed delivery',schemaReason,advancedReason].slice(0,30)),status:advancedConflict?'blocked':'unavailable',declaredSchemaFile,advancedPolicyFile};
+    const [,policy]=await Promise.allSettled([schemaWork(),Promise.resolve().then(()=>source.ensureObservation?source.ensureObservation(identity,{signal:request.signal,force:true,timeoutMs:45_000}):source.observation(identity)),advancedWork(),catalogueWork()]);
+    if(policy.status==='rejected')return {...unavailable([...advancedReasons.slice(0,26),'Refresh the authenticated policy inventory for the exact approved tenant and account before governed delivery',schemaReason,advancedReason,catalogueReason]),status:advancedConflict?'blocked':'unavailable',declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
     snapshot=policy.value;
     const declared=manifest.postDeployActions.filter(action=>action.type==='connection-reference-check').map(action=>({id:`reference:${action.component}`,complete:true,connectors:[action.connectorId]}));
-    if(!(resources??declared).length)return {...unavailable(['No independently complete app/flow connector inventory is available; advanced policy and comprehensive schema evidence are also required',schemaReason,advancedReason]),declaredSchemaFile,advancedPolicyFile};
+    if(!(resources??declared).length)return {...unavailable(['No independently complete app/flow connector inventory is available; advanced policy and comprehensive schema evidence are also required',schemaReason,advancedReason,catalogueReason]),declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
     const standard=evaluateStandardPolicies(snapshot,identity,manifest.platformIdentity.environmentId,resources??declared);
     const reasons=standard.status==='clear'?[resources?'Inspectable package resources passed standard classification; advanced policies, remaining opaque resources and comprehensive schemas are unverified':'Declared reference IDs passed standard classification; full package resource inventory, advanced policies and comprehensive schemas remain unverified']:standard.reasons.slice(0,20).map(reason=>reason.slice(0,1000));
-    return {...unavailableGovernance(request,[...advancedReasons,...reasons,...packageIssues,schemaReason,advancedReason].slice(0,30)),status:advancedConflict||standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,declaredSchemaFile,advancedPolicyFile};
+    return {...unavailableGovernance(request,[...[...advancedReasons,...reasons,...packageIssues].slice(0,27),schemaReason,advancedReason,catalogueReason]),status:advancedConflict||standard.status==='blocked'?'blocked':'unavailable',policySha256:standard.policySha256,artifactSha256:request.packageSha256,packageInventoryFile,declaredSchemaFile,advancedPolicyFile,connectorCatalogueFile};
   };
 }
