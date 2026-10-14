@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { atomicWrite } from './atomicFile.ts';
 import path from 'node:path';
+import {performance} from 'node:perf_hooks';
 import type {ResourceSchemaReference} from './flowSchemaReferences.ts';
 
 const digest=z.string().regex(/^[a-f0-9]{64}$/);
@@ -34,6 +35,10 @@ export function unavailableGovernance(request:LifecycleRequest,reasons=['Complet
 /** Persist a context-bound decision before the caller may execute its stage.
  * Unconfigured providers, exceptions, mismatched evidence and stale approvals cannot permit execution. */
 export async function requireLifecycleGovernance(check:LifecycleCheck|undefined,request:LifecycleRequest,evidenceDirectory:string,index:number,now?:number,onCancellationPending?:(reason:'deadline'|'cancelled')=>void|Promise<void>) {
+  const started=performance.now(),startedWall=now??Date.now();
+  const current=(at:number)=>{const elapsed=performance.now()-started;return elapsed>=0&&elapsed<60000&&at>=startedWall;};
+  const fresh=(value:LifecycleResult,at:number)=>at-Date.parse(value.checkedAt)<=60000&&Date.parse(value.checkedAt)<=at+30000;
+  const authorized=(value:LifecycleResult)=>{const at=now??Date.now();return !request.signal?.aborted&&current(at)&&fresh(value,at);};
   let result:LifecycleResult;
   try {
     if(request.signal?.aborted) throw new Error('cancelled');
@@ -63,10 +68,15 @@ export async function requireLifecycleGovernance(check:LifecycleCheck|undefined,
     if(controller.signal.aborted||request.signal?.aborted) throw new Error('cancelled');
     result=resultSchema.parse(value);
     const evaluatedAt=now??Date.now();
-    if(result.phase!==request.phase||result.sourceCommit!==request.sourceCommit||result.environmentUrl!==request.environmentUrl||result.releaseId!==request.releaseId||result.manifestSha256!==manifestDigest(request.manifest)||(result.status==='clear'&&request.packageSha256&&result.artifactSha256!==request.packageSha256)||evaluatedAt-Date.parse(result.checkedAt)>60_000||Date.parse(result.checkedAt)>evaluatedAt+30_000) throw new Error('mismatch');
+    if(!current(evaluatedAt)||!fresh(result,evaluatedAt)||result.phase!==request.phase||result.sourceCommit!==request.sourceCommit||result.environmentUrl!==request.environmentUrl||result.releaseId!==request.releaseId||result.manifestSha256!==manifestDigest(request.manifest)||(result.status==='clear'&&request.packageSha256&&result.artifactSha256!==request.packageSha256)) throw new Error('mismatch');
   } catch {result=unavailableGovernance(request,['Governance provider failed or returned stale, incomplete or mismatched evidence']);}
   const file=`governance-${index}-${request.phase}.json`;
-  await atomicWrite(path.join(evidenceDirectory,file),JSON.stringify(result,null,2));
+  try{await atomicWrite(path.join(evidenceDirectory,file),JSON.stringify(result,null,2),()=>result.status!=='clear'||authorized(result));}
+  catch(error){if(result.status!=='clear'||authorized(result))throw error;}
+  if(result.status==='clear'&&!authorized(result)){
+    result=unavailableGovernance(request,['Governance authority expired or execution was cancelled while persisting its audit; repeat the stage with current evidence']);
+    await atomicWrite(path.join(evidenceDirectory,file),JSON.stringify(result,null,2));
+  }
   if(request.signal?.aborted) throw new Error(`Lifecycle governance unavailable at ${request.phase}: execution was cancelled`);
   if(result.status!=='clear') throw new Error(`Lifecycle governance ${result.status} at ${request.phase}: ${result.reasons.join('; ')}`);
   return file;

@@ -3,6 +3,7 @@ import { afterEach,expect,it,vi } from 'vitest';
 import { manifestDigest,requireLifecycleGovernance,unavailableGovernance,type LifecycleRequest,type LifecycleResult } from './lifecycleGovernance.ts';
 import {fork,type ChildProcess} from 'node:child_process';
 import {once} from 'node:events';
+import {performance} from 'node:perf_hooks';
 const roots:string[]=[];afterEach(async()=>{vi.restoreAllMocks();vi.useRealTimers();await Promise.all(roots.splice(0).map(root=>fs.rm(root,{recursive:true,force:true})));});
 async function fixture(){const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-lifecycle-gate-'));roots.push(root);return root;}
 const request:LifecycleRequest={phase:'import',sourceCommit:'a'.repeat(40),environmentUrl:'https://test.crm4.dynamics.com',releaseId:'release-1',checkout:'unused',manifest:{solution:'Expenses'}};
@@ -14,6 +15,25 @@ it.each(['missing-pointer','wrong-archive','missing-content-digest'])('denies cl
   await expect(requireLifecycleGovernance(async()=>value,request,root,0)).rejects.toThrow('unavailable');expect(JSON.parse(await fs.readFile(path.join(root,'governance-0-import.json'),'utf8')).status).toBe('unavailable');
 });
 it('persists a bound complete decision before permitting a stage',async()=>{const root=await fixture();const file=await requireLifecycleGovernance(async()=>proof(),request,root,0);expect(file).toBe('governance-0-import.json');expect(JSON.parse(await fs.readFile(path.join(root,file),'utf8'))).toMatchObject({status:'clear',manifestSha256:manifestDigest(request.manifest)});});
+it.each(['elapsed','rollback'])('rejects a settled provider when its %s budget is invalid even before the timer fires',async mode=>{
+  const root=await fixture();vi.useFakeTimers();let elapsed=0;vi.spyOn(performance,'now').mockImplementation(()=>elapsed);const start=Date.now();
+  await expect(requireLifecycleGovernance(async()=>{if(mode==='elapsed')elapsed=60000;else vi.setSystemTime(start-1);return proof();},request,root,0)).rejects.toThrow('unavailable');
+  expect(JSON.parse(await fs.readFile(path.join(root,'governance-0-import.json'),'utf8')).status).toBe('unavailable');
+});
+it.each(['expiry','elapsed','cancelled'])('does not permit execution when %s occurs during the audit commit',async mode=>{
+  const root=await fixture(),controller=new AbortController();vi.useFakeTimers();let elapsed=0;vi.spyOn(performance,'now').mockImplementation(()=>elapsed);
+  const rename=fs.rename.bind(fs);let first=true;
+  vi.spyOn(fs,'rename').mockImplementation(async(...args:Parameters<typeof fs.rename>)=>{await rename(...args);if(first){first=false;if(mode==='expiry')vi.setSystemTime(Date.now()+61000);else if(mode==='elapsed')elapsed=60000;else controller.abort();}});
+  await expect(requireLifecycleGovernance(async()=>proof(),{...request,signal:controller.signal},root,0)).rejects.toThrow('unavailable');
+  const receipt=JSON.parse(await fs.readFile(path.join(root,'governance-0-import.json'),'utf8'));expect(receipt.status).toBe('unavailable');expect(receipt.reasons[0]).toContain('persisting its audit');
+});
+it('prevents a clear audit rename when authority expires during its temporary file write',async()=>{
+  const root=await fixture();let elapsed=0;vi.spyOn(performance,'now').mockImplementation(()=>elapsed);
+  const write=fs.writeFile.bind(fs),rename=vi.spyOn(fs,'rename');let first=true;
+  vi.spyOn(fs,'writeFile').mockImplementation(async(...args:Parameters<typeof fs.writeFile>)=>{await write(...args);if(first){first=false;elapsed=60000;}});
+  await expect(requireLifecycleGovernance(async()=>proof(),request,root,0)).rejects.toThrow('unavailable');
+  expect(rename).toHaveBeenCalledTimes(1);expect(JSON.parse(await fs.readFile(path.join(root,'governance-0-import.json'),'utf8')).status).toBe('unavailable');
+});
 it('blocks absent providers, thrown exceptions and explicit violations while saving the decision',async()=>{const root=await fixture();for(const [index,check] of [undefined,async()=>{throw new Error('secret provider detail');},async()=>({...proof(),status:'blocked' as const,reasons:['Prohibited connector']})].entries()){await expect(requireLifecycleGovernance(check,request,root,index)).rejects.toThrow('Lifecycle governance');const value=JSON.parse(await fs.readFile(path.join(root,`governance-${index}-import.json`),'utf8'));expect(value.status).not.toBe('clear');expect(JSON.stringify(value)).not.toContain('secret provider detail');}});
 it('invalidates missing hashes, stale decisions and changes to every execution binding',async()=>{const root=await fixture();const candidates=[{...proof(),artifactSha256:undefined},{...proof(),policySha256:undefined},{...proof(),schemaSha256:undefined},{...proof(),manifestSha256:'d'.repeat(64)},{...proof(),sourceCommit:'b'.repeat(40)},{...proof(),phase:'test' as const},{...proof(),environmentUrl:'https://other.crm4.dynamics.com'},{...proof(),releaseId:'other'},{...proof(),checkedAt:new Date(Date.now()-61000).toISOString()},{...proof(),checkedAt:new Date(Date.now()+31000).toISOString()}];for(const [index,candidate] of candidates.entries())await expect(requireLifecycleGovernance(async()=>candidate,request,root,index)).rejects.toThrow('unavailable');});
 it('refuses execution if its audit cannot be written',async()=>{const root=await fixture();await fs.mkdir(path.join(root,'governance-0-import.json'));await expect(requireLifecycleGovernance(async()=>proof(),request,root,0)).rejects.toThrow();});
