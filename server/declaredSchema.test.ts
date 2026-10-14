@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest';
-import {createDeclaredSchemaObserver} from './declaredSchema.ts';
+import {createDeclaredSchemaObserver,declaredSchemaObservation} from './declaredSchema.ts';
 import type {LifecycleRequest} from './lifecycleGovernance.ts';
 const guid='11111111-1111-4111-8111-111111111111',metadata='22222222-2222-4222-8222-222222222222',environment='https://synthetic.crm4.dynamics.com';
 const manifest={schemaVersion:1,solutionUniqueName:'Expenses',solutionVersion:'1.0.0.0',solutionZip:'release.zip',hasUi:false,recovery:{runbook:'recovery.md',rehearsalReport:'drill.json'},documentation:['one.md','two.md','three.md'],build:[{executable:'node',args:['build.js']}],test:[{executable:'node',args:['test.js']}],verify:[{executable:'node',args:['verify.js']}],targetBinding:{organizationId:guid,userId:guid},platformIdentity:{tenantId:guid,username:'tester@company.test',environmentId:guid},targetComponents:[{key:'table',kind:'dataverse-table',logicalName:'exp_report'}],postDeployActions:[{id:'schema',type:'schema-check',component:'table',columns:[{name:'exp_title',type:'String',required:'None',constraints:{maxLength:100}}]}]};
@@ -24,6 +24,7 @@ it('reads freshly at all six stages, pins identity before/after and never claims
   const {run,observe}=fixture();
   for(const phase of ['build','test','import','post-deploy','verify','health'] as const){
     const result=await observe({...input,phase});expect(result).toMatchObject({status:'observed',complete:false,scope:'declared-target-schema',phase,tables:['exp_report']});expect(result.observations).toHaveLength(2);expect(result.reason).toContain('remain unverified');
+    expect(result.diagnostic).toMatchObject({stage:'complete',failure:'none',nativeCommands:8,metadataReads:2});expect(result.diagnostic!.elapsedMs).toBeGreaterThanOrEqual(0);
   }
   expect(run.mock.calls.every(([command])=>command.executable==='dataverse')).toBe(true);
   expect(run.mock.calls.filter(([command])=>command.args[0]==='auth')).toHaveLength(12);
@@ -31,6 +32,26 @@ it('reads freshly at all six stages, pins identity before/after and never claims
   for(const [command] of run.mock.calls.filter(([command])=>command.args[0]==='api')){
     expect(command.args[command.args.indexOf('--environment')+1]).toBe(environment);expect(command.args[command.args.indexOf('--method')+1]).toBe('GET');
   }
+});
+
+it.each(['contract','initial-identity','resource-contracts','migration','columns','final-identity','provider','cancelled','limit'])('reports a safe actionable diagnostic for %s and discards partial metadata',async mode=>{
+  const {run,observe}=fixture(mode==='columns'?{length:80}:mode==='migration'?{length:120}:mode==='final-identity'?{drift:true}:{}),normal=run.getMockImplementation()!;
+  let request:LifecycleRequest={...input};
+  if(mode==='contract')request={...input,manifest:{...manifest,postDeployActions:[]}};
+  if(mode==='initial-identity')run.mockImplementation(async command=>command.args[0]==='auth'?`Tenant: ${guid}\nUser: other@company.test\nEnvironment: ${environment}`:normal(command));
+  if(mode==='resource-contracts')request={...input,resourceSchemaReferences:[{resource:'flow',logicalName:'exp_report',columns:['exp_unapproved']}]};
+  if(mode==='migration')request={...input,phase:'import'};
+  if(mode==='provider')run.mockImplementation(async command=>command.args.some(arg=>arg.includes('EntityDefinitions'))?Promise.reject(new Error('Bearer private-token user@secret.test')):normal(command));
+  if(mode==='cancelled'){const controller=new AbortController();controller.abort();request={...input,signal:controller.signal};}
+  if(mode==='limit')run.mockImplementation(async command=>command.args[0]==='api'?JSON.stringify({OrganizationId:guid,UserId:guid,padding:'x'.repeat(8*1024*1024)}):normal(command));
+  const result=await observe(request);expect(result.status).toBe('unavailable');expect(result.observations).toEqual([]);expect(result.tables).toEqual([]);expect(result.identity).toBeUndefined();
+  const stage=mode==='provider'?'columns':mode==='cancelled'||mode==='limit'?'initial-identity':mode;
+  const failure=['provider','cancelled','limit'].includes(mode)?mode:'validation';
+  expect(result.diagnostic).toMatchObject({stage,failure});expect(result.reason).toContain(`at ${stage} (${failure})`);expect(JSON.stringify(result)).not.toContain('private-token');expect(JSON.stringify(result)).not.toContain('user@secret.test');expect(declaredSchemaObservation.safeParse(result).success).toBe(true);
+});
+it('refuses contradictory success diagnostics and unavailable observations retaining verified facts',async()=>{
+  const {observe}=fixture(),success=await observe(input),failure=await observe({...input,resourceSchemaReferences:[{resource:'flow',logicalName:'exp_report',columns:['exp_unapproved']}]});
+  for(const value of [{...success,diagnostic:{...success.diagnostic,failure:'provider'}},{...success,diagnostic:{...success.diagnostic,stage:'columns'}},{...failure,diagnostic:{...failure.diagnostic,stage:'complete'}},{...failure,diagnostic:{...failure.diagnostic,failure:'none'}},{...failure,identity:success.identity},{...failure,binding:success.binding},{...failure,tables:success.tables},{...failure,observations:success.observations}])expect(declaredSchemaObservation.safeParse(value).success).toBe(false);
 });
 it.each(['https://unapproved.test','https://synthetic.crm4.dynamics.com/path','https://synthetic.crm4.dynamics.com/?token=private'])('refuses unapproved metadata destinations before any command: %s',async environmentUrl=>{
   const {run,observe}=fixture();expect((await observe({...input,environmentUrl})).status).toBe('unavailable');expect(run).not.toHaveBeenCalled();
