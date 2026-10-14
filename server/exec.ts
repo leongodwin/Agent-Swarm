@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 
 export class CommandError extends Error {
   constructor(
@@ -43,5 +44,5 @@ export const git = (args: string[], opts?: { cwd?: string; timeoutMs?: number })
 
 export async function ghJson<T>(args: string[], opts?: { cwd?: string; timeoutMs?: number }): Promise<T> {
   const out = await gh(args, opts);
-  return (out ? JSON.parse(out) : null) as T;
+  return (out ? parseUnambiguousJson(out) : null) as T;
 }

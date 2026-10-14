@@ -3870,7 +3870,9 @@ export class Swarm {
     const repo = this.floorRepo(x.floor);
     const issues = this.repoRt.get(repo.id)?.issues ?? [];
     const asked = [Number(x.number), ...(x.depends_on ?? []).map(Number)].filter((n) => !issues.some((i) => i.number === n));
-    const states = new Map(await Promise.all([...new Set(asked)].map(async (n) => [n, await this.backend.issueState(repo.fullName, n).catch(() => null)] as const)));
+    const observations=await Promise.allSettled([...new Set(asked)].map(async(n)=>[n,await this.backend.issueState(repo.fullName,n)] as const));
+    if(observations.some(result=>result.status==='rejected'))throw new HttpError(503,'Issue prerequisite status could not be verified; restore GitHub access and retry routing');
+    const states=new Map(observations.flatMap(result=>result.status==='fulfilled'?[result.value]:[]));
     const specialties = [
       ...this.state.agents.filter((a) => a.repoId === repo.id && a.specialty).map((a) => a.specialty.toLowerCase()),
       ...this.state.requests.filter((r) => r.status === 'pending' && r.kind === 'hire' && r.repoId === repo.id && r.specialty).map((r) => r.specialty),

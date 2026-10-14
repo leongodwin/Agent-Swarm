@@ -3,6 +3,12 @@ import type { GhRepoSummary, IssueInfo, PullInfo } from '../shared/types.ts';
 import { dlpResource } from '../shared/dlp.ts';
 import {z} from 'zod';
 import crypto from 'node:crypto';
+import {parseUnambiguousJson} from './unambiguousJson.ts';
+import {SerialWriter} from './atomicFile.ts';
+function repositoryVariables(fullName:string){
+  if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)||fullName.split('/').some(part=>part==='.'||part==='..'))throw new Error('An exact GitHub repository is required');
+  const [owner,name]=fullName.split('/');return ['-f',`owner=${owner}`,'-f',`name=${name}`];
+}
 
 // All GitHub access goes through the gh CLI so it reuses the user's existing `gh auth login`.
 
@@ -171,10 +177,14 @@ export async function createIssue(fullName: string, title: string, body: string,
 /** OPEN or CLOSED; null when the repo has no such issue. */
 export async function issueState(fullName: string, number: number): Promise<'OPEN' | 'CLOSED' | null> {
   try {
-    const raw = await ghJson<{ state: string }>(['issue', 'view', String(number), '-R', fullName, '--json', 'state']);
-    return z.enum(['OPEN','CLOSED']).parse(raw.state);
+    if(!Number.isSafeInteger(number)||number<1)throw new Error('Invalid issue identity');
+    const query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){nameWithOwner issue(number:$number){number state}}}';
+    const raw=await ghJson<unknown>(['api','graphql',...repositoryVariables(fullName),'-F',`number=${number}`,'-f',`query=${query}`]);
+    const repository=z.object({data:z.object({repository:z.object({nameWithOwner:z.string(),issue:z.object({number:z.number().int().positive(),state:z.enum(['OPEN','CLOSED'])}).nullable()})}),errors:z.never().optional()}).parse(raw).data.repository;
+    if(repository.nameWithOwner.toLowerCase()!==fullName.toLowerCase()||repository.issue&&repository.issue.number!==number)throw new Error('Issue scope differs');
+    return repository.issue?.state??null;
   } catch {
-    return null;
+    throw new Error('GitHub issue status could not be verified; restore repository access before retrying');
   }
 }
 
@@ -261,7 +271,8 @@ export async function prDetails(fullName: string, number: number): Promise<PrDet
 }
 
 export async function prDiff(fullName: string, number: number): Promise<string> {
-  return gh(['pr', 'diff', String(number), '-R', fullName]).catch(() => '');
+  try{return await gh(['pr', 'diff', String(number), '-R', fullName]);}
+  catch{throw new Error('GitHub PR diff is unavailable; restore repository access before QA');}
 }
 
 export async function issueDetails(fullName: string, number: number): Promise<{ title: string; body: string }> {
@@ -277,35 +288,59 @@ export async function commentPull(fullName: string, number: number, body: string
 // QA screenshots live on an orphan branch so evidence never lands in the default branch when a PR is merged.
 export const EVIDENCE_BRANCH = 'swarm-qa-evidence';
 const evidenceReady = new Set<string>();
+const evidencePending=new Map<string,Promise<void>>();
+const evidenceUploads=new Map<string,{writer:SerialWriter;pending:number}>();
 
 const ghApiJson = <T>(method: string, endpoint: string, body: unknown) =>
   gh(['api', '-X', method, endpoint, '-H', 'Content-Type: application/json', '--input', '-'], { input: JSON.stringify(body), timeoutMs: 120_000 }).then(
-    (out) => (out ? JSON.parse(out) : null) as T,
-  );
+    (out) => (out ? parseUnambiguousJson(out) : null) as T,
+  ).catch(()=>{throw new Error('GitHub evidence API did not acknowledge this operation; inspect the remote outcome before retrying');});
 
-async function ensureEvidenceBranch(fullName: string) {
-  if (evidenceReady.has(fullName)) return;
-  try {
-    await gh(['api', `repos/${fullName}/git/ref/heads/${EVIDENCE_BRANCH}`]);
-  } catch {
+function ensureEvidenceBranch(fullName:string):Promise<void>{
+  const key=fullName.toLowerCase();if(evidenceReady.has(key))return Promise.resolve();
+  const prior=evidencePending.get(key);if(prior)return prior;
+  const pending=Promise.resolve().then(()=>provisionEvidenceBranch(fullName)).then(()=>{evidenceReady.add(key);}).finally(()=>{if(evidencePending.get(key)===pending)evidencePending.delete(key);});evidencePending.set(key,pending);return pending;
+}
+async function provisionEvidenceBranch(fullName: string) {
+  const query=`query($owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner defaultBranchRef{target{oid}} ref(qualifiedName:"refs/heads/${EVIDENCE_BRANCH}"){name target{oid}}}}`;
+  const sha=z.string().regex(/^[a-f0-9]{40}$/i),reference=z.object({target:z.object({oid:sha})});
+  let exists:boolean;
+  try{
+    const raw=await ghJson<unknown>(['api','graphql',...repositoryVariables(fullName),'-f',`query=${query}`]);
+    const repository=z.object({data:z.object({repository:z.object({nameWithOwner:z.string(),defaultBranchRef:reference.nullable(),ref:reference.extend({name:z.literal(EVIDENCE_BRANCH)}).nullable()})}),errors:z.never().optional()}).parse(raw).data.repository;
+    if(repository.nameWithOwner.toLowerCase()!==fullName.toLowerCase()||!repository.ref&&!repository.defaultBranchRef)throw new Error('Reference scope is unavailable');
+    exists=repository.ref!==null;
+  }catch{throw new Error('GitHub evidence branch could not be inspected; no branch creation was attempted');}
+  if(!exists){
     const readme =
       '# QA evidence\n\nScreenshots attached to pull request QA reports by cubefarm QA agents.\nThis branch has no shared history with the code and is never merged.\n';
-    const newTree = await ghApiJson<{ sha: string }>('POST', `repos/${fullName}/git/trees`, {
+    const newTree = z.object({sha}).parse(await ghApiJson<unknown>('POST', `repos/${fullName}/git/trees`, {
       tree: [{ path: 'README.md', mode: '100644', type: 'blob', content: readme }],
-    });
-    const commit = await ghApiJson<{ sha: string }>('POST', `repos/${fullName}/git/commits`, { message: 'QA evidence branch (cubefarm)', tree: newTree.sha, parents: [] });
-    await ghApiJson('POST', `repos/${fullName}/git/refs`, { ref: `refs/heads/${EVIDENCE_BRANCH}`, sha: commit.sha });
+    }));
+    const commit = z.object({sha}).parse(await ghApiJson<unknown>('POST', `repos/${fullName}/git/commits`, { message: 'QA evidence branch (cubefarm)', tree: newTree.sha, parents: [] }));
+    const created=z.object({ref:z.literal(`refs/heads/${EVIDENCE_BRANCH}`),object:z.object({type:z.literal('commit'),sha})}).parse(await ghApiJson<unknown>('POST', `repos/${fullName}/git/refs`, { ref: `refs/heads/${EVIDENCE_BRANCH}`, sha: commit.sha }));
+    if(created.object.sha.toLowerCase()!==commit.sha.toLowerCase())throw new Error('Evidence branch creation receipt differs from the requested commit');
   }
-  evidenceReady.add(fullName);
 }
 
 /** Upload one evidence file and return a URL that renders inside PR comments (also for private repos). */
 export async function uploadEvidence(fullName: string, filePath: string, data: Buffer): Promise<string> {
+  if(!/^[A-Za-z0-9._/-]{1,1000}$/.test(filePath)||filePath.split('/').some(part=>!part||part==='.'||part==='..')||!Buffer.isBuffer(data)||!data.length||data.length>10*1024*1024)throw new Error('Evidence upload requires a bounded ordinary relative path and nonempty bytes');
+  const bytes=Buffer.from(data),key=fullName.toLowerCase(),queue=evidenceUploads.get(key)??{writer:new SerialWriter(),pending:0};
+  queue.pending++;evidenceUploads.set(key,queue);
+  try{return await queue.writer.write(()=>uploadEvidenceOwned(fullName,filePath,bytes));}
+  catch(error){evidenceReady.delete(key);throw error;}
+  finally{if(--queue.pending===0&&evidenceUploads.get(key)===queue)evidenceUploads.delete(key);}
+}
+async function uploadEvidenceOwned(fullName:string,filePath:string,data:Buffer):Promise<string>{
   await ensureEvidenceBranch(fullName);
-  await ghApiJson('PUT', `repos/${fullName}/contents/${filePath}`, {
+  const result=await ghApiJson<unknown>('PUT', `repos/${fullName}/contents/${filePath}`, {
     message: `QA evidence: ${filePath}`,
     content: data.toString('base64'),
     branch: EVIDENCE_BRANCH,
   });
+  const content=z.object({content:z.object({path:z.string(),sha:z.string().regex(/^[a-f0-9]{40}$/i)})}).parse(result).content;
+  const expected=crypto.createHash('sha1').update(`blob ${data.length}\0`).update(data).digest('hex');
+  if(content.path!==filePath||content.sha.toLowerCase()!==expected)throw new Error('GitHub evidence receipt differs from the uploaded path or bytes; inspect the remote outcome before retrying');
   return `https://github.com/${fullName}/raw/${EVIDENCE_BRANCH}/${filePath}`;
 }

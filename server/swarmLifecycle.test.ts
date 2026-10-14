@@ -41,6 +41,7 @@ function backend() {
     commentPull: vi.fn(async () => 'https://example.test/comment'), mergePull: vi.fn(async () => {}),
     prFiles: vi.fn<Backend['prFiles']>(async () => []),
     prForBranch: vi.fn<Backend['prForBranch']>(async () => null),
+    issueState:vi.fn<Backend['issueState']>(async()=> 'CLOSED'),editIssue:vi.fn<Backend['editIssue']>(async()=>{}),
     uploadEvidence: vi.fn<Backend['uploadEvidence']>(async () => 'https://example.test/evidence'),
     mainDir: () => HOME_DIR, deskDir: () => HOME_DIR, prepareDesk: vi.fn<Backend['prepareDesk']>(async () => HOME_DIR),
     startSession: vi.fn((_opts: unknown, _cb: SessionCallbacks) => ({stop: vi.fn(), send: vi.fn()})),
@@ -58,6 +59,13 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it('keeps routing held through unavailable prerequisite reads and returns a fresh verified refusal after repair',async()=>{
+ const {swarm,fake}=await office(true);let release!:(state:'CLOSED')=>void;
+ fake.issueState.mockImplementation(async(_repo,number)=>{if(number===2)throw new Error('private-auth-token');return new Promise(resolve=>{release=resolve;});});
+ const route=(swarm as unknown as {routeIssue(x:{floor:number;number:number;depends_on:number[]}):Promise<string>}).routeIssue.bind(swarm);
+ let settled=false;const pending=route({floor:1,number:1,depends_on:[2,3]}).then(()=>null,error=>{settled=true;return error;});for(let i=0;i<20;i++)await Promise.resolve();expect(fake.issueState).toHaveBeenCalledTimes(2);expect(settled).toBe(false);expect(fake.editIssue).not.toHaveBeenCalled();release('CLOSED');const error=await pending;expect(error.status).toBe(503);expect(error.message).not.toContain('private-auth-token');expect(fake.editIssue).not.toHaveBeenCalled();
+ fake.issueState.mockResolvedValue('CLOSED');await expect(route({floor:1,number:1,depends_on:[2,3]})).rejects.toThrow('#2 is closed');expect(fake.issueState).toHaveBeenCalledTimes(4);expect(fake.editIssue).not.toHaveBeenCalled();
+});
 it('backs off automatic worker preflight while permitting a fresh explicit retry after repair',async()=>{
   const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{name:'Backoff worker'}),checks=vi.fn(async()=> 'Synthetic authentication unavailable');swarm.capabilityPreflight=checks;
   await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(swarm.snapshot().agents.find(row=>row.id===agent.id)?.status).toBe('error'));expect(checks).toHaveBeenCalledOnce();expect(fake.prepareDesk).not.toHaveBeenCalled();
