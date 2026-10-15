@@ -6,6 +6,14 @@ import type {Request} from './targetOperations.ts';
 const roots:string[]=[];afterEach(async()=>{for(const root of roots.splice(0))await fs.rm(root,{recursive:true,force:true});});
 const id='11111111-1111-4111-8111-111111111111',binding={organizationId:id,userId:id},context={runId:id,sourceCommit:'b'.repeat(40)};
 const plan=backendJourneySchema.parse({entitySet:'exp_reports',idField:'exp_reportid',nameField:'exp_title',maxNameLength:100,values:{exp_amount:0,exp_status:1},childEntitySet:'exp_lines',childLookup:'_exp_report_value',childIdField:'exp_lineid',validationErrorCodes:['0x80073001']});
+it.each(['journey','recovery'] as const)('holds %s before journalling a write when phase approval is pending, then permits an approved first attempt',async kind=>{
+ const {root,request,writes}=await fixture();let approved=false;
+ const authorize=async()=>{if(!approved)throw new Error('Independent phase approval pending');};
+ await expect(verifyBackendJourney(plan,binding,request,root,new AbortController().signal,context,kind,authorize)).rejects.toThrow('approval pending');
+ expect(writes).toEqual([]);expect(await fs.readdir(root)).toEqual([]);
+ approved=true;await verifyBackendJourney(plan,binding,request,root,new AbortController().signal,context,kind,authorize);
+ expect(writes).toEqual(['POST','PATCH','PATCH','PATCH']);
+});
 it('refuses a generic invalid-argument error as proof of length validation',()=>{
  expect(()=>backendJourneySchema.parse({...plan,validationErrorCodes:['0x80040203']})).toThrow();
 });

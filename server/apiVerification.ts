@@ -20,11 +20,11 @@ function at(value: unknown, pointer: string[]) {
 
 /** Runner-owned assertions plus an explicitly approved owned-record transaction;
  * never executes project verification code. Legacy plans remain read-only. */
-export async function verifyApiIndependently(plan: ApiVerification, request: Request, evidence: string, signal: AbortSignal,context?:{runId:string;sourceCommit:string}) {
+export async function verifyApiIndependently(plan: ApiVerification, request: Request, evidence: string, signal: AbortSignal,context?:{runId:string;sourceCommit:string},authorizeTransaction?:()=>Promise<void>) {
   const results: { name: string; criterion: number; category: string; passed: boolean }[] = [];
   try {
     await verifyTarget(request, plan.binding);
-    const transaction=plan.transaction?(context?await verifyBackendJourney(plan.transaction,plan.binding,request,evidence,signal,context):(()=>{throw new Error('Runner transaction context is required');})()):undefined;
+    const transaction=plan.transaction?(context?await verifyBackendJourney(plan.transaction,plan.binding,request,evidence,signal,context,'journey',authorizeTransaction):(()=>{throw new Error('Runner transaction context is required');})()):undefined;
     for (const check of plan.checks) {
       if (signal.aborted) throw new Error('API verification cancelled');
       await verifyTarget(request, plan.binding);

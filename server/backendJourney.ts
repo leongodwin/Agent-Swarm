@@ -19,7 +19,10 @@ const digest=(value:unknown)=>crypto.createHash('sha256').update(JSON.stringify(
 /** App-owned transaction evidence. Only a new client-generated GUID may be
  * mutated. Every write rechecks the target; restoration uses ETags and audit retention must
  * refuse foreign ownership, unexpected children or an ambiguous prior intent. */
-export async function verifyBackendJourney(plan:BackendJourney,binding:z.infer<typeof targetBindingSchema>,request:Request,directory:string,signal:AbortSignal,context:{runId:string;sourceCommit:string},kind:'journey'|'recovery'='journey'){
+export async function verifyBackendJourney(plan:BackendJourney,binding:z.infer<typeof targetBindingSchema>,request:Request,directory:string,signal:AbortSignal,context:{runId:string;sourceCommit:string},kind:'journey'|'recovery'='journey',authorize?:()=>Promise<void>){
+  // A pending approval has no uncertain data outcome. Hold before assigning a
+  // GUID or creating the transaction journal; every dispatch is still rechecked.
+  signal.throwIfAborted();await authorize?.();signal.throwIfAborted();
   const file=`independent-${kind}.json`,journalFile=path.join(directory,`independent-${kind}-journal.json`),events:string[]=[];
   const prior=await readBoundedJson(journalFile,128*1024);
   let journal=journalSchema.parse(prior??{...context,contractSha256:digest(plan),id:crypto.randomUUID(),marker:`SYNTHETIC P0 ${context.runId} ${kind==='recovery'?'R':'J'}`,phase:'intent'});
