@@ -1,6 +1,26 @@
 # Agent Swarm implementation plan
 
-Prepared 10 October 2026. Status: proposed implementation, not a claim that these changes have been delivered.
+Prepared 10 October 2026; reconciled 15 October 2026. Current scope and remaining work are recorded below.
+
+## Current roadmap — 15 October 2026
+
+The P0 brief-to-deployed-backend path is implemented and independently demonstrated for one reference-only functional-development slice. See [current status](PRODUCTION-GOAL-STATUS.md) and the [pilot completion report](BACKEND-PILOT-COMPLETION.md). This is branch-level evidence, not a published-package or default-branch release claim.
+
+Completed for this pilot: shared delivery record; evidence-backed discovery; grounded model design and independent review; pinned package/manifest and target; existing-licence manual governance; runner-owned data/recovery transactions; native import; independent backend QA; shared slice receipt; evidence-retention and restart corrections. API-only verification and actual synthesis are no longer wholly outstanding. They have bounded implementation and pilot evidence, not universal platform proof.
+
+| Priority | Next outcome | Completion evidence |
+| --- | --- | --- |
+| P1 | Operational handover and health | Preserve the accepted archive and package; run scheduled registered probes and retain their actual result. Keep current health separate from release acceptance. |
+| P1 | Full Expense application slice | Reconcile the complete scoped package and component ownership; connected Canvas source/compile/App checker, actual receipt UI, approval/notification flow and intended-user positive/negative permission journeys pass independent QA at the current source/package. |
+| P1 | Production acceptance contract | Name the target, audience, required controls and owners; verify actual licence assignments/configuration, least privilege, applicable policy/schema enforcement, broader recovery and operating procedures. Development manual approval cannot authorize production. |
+| P2 | Platform and tenant breadth | Independently author, package, deploy and verify each advertised starter/platform and required tenant configuration. Copilot delivery work stays paused until explicitly resumed. |
+| P2 | Measured reliability and efficiency | Refresh cross-platform CI and whole-backend coverage; meet the unchanged 90.01% gate and assess the 99.5% reliability and under-five-minute synthesis goals over declared representative windows. Preserve failures in the denominator. |
+
+Backend acceptance excludes UI, employee isolation, least privilege, tenant-wide automated governance and solution-wide rollback. No remaining milestone should be closed using the backend receipt alone. Existing tables/service behavior and an administrator maker were prerequisites, not delivered least-privilege infrastructure.
+
+## Historical implementation plan — prepared 10 October 2026
+
+The original batches, proposed module locations and milestones below are retained as design history. Their present-tense “pending”, test counts, environment observations and uncommitted-work notes describe those dated batches, not today's working tree. Use the current roadmap above for prioritization and the delivery contract for executable requirements. In particular, the original full Expense M3 and Copilot M4 milestones are not satisfied by the narrower backend pilot.
 
 Implementation has begun. The first batch adds dynamic installed-skill discovery and worker/CEO tools, relevant prompt selection, skill content locks in new releases, explicit functional-development acceptance, runner-owned scoped evidence, an initial approved-frame/file-input verifier and mutation journaling. Existing baseline tests passed before edits. These additions require local regression validation and subsequent tenant validation; they do not complete all phases below. Authentication consolidation, typed target/platform reconciliation, shared-resource leases, API-only verification, dedicated Copilot lifecycle delivery, individual starter tenant proof and full recovery rehearsal remain outstanding.
 

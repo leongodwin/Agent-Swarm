@@ -32,7 +32,7 @@ Demo mode fakes GitHub and the agents. It never changes real PAC authentication 
 
 1. **Set up your company.** A short wizard asks your name, names your company and introduces your CEO.
 2. **Move in a project.** Pick one of your project folders or a GitHub repo, or start a new one. It gets its own floor. Every project needs to be on GitHub, because issues and pull requests are how the team works.
-3. **Let the CEO plan.** The CEO studies the project, writes its QA checklist, plans the work as GitHub issues and proposes who to hire. Press `P` for your phone to chat with them and approve hires.
+3. **Plan discovery before implementation.** Open **Manager's console → Delivery plan**, then **Ask CEO to plan discovery**. The CEO records the brief, outcomes, scope, owners and acceptance criteria in the shared delivery record, gathers source and target evidence, and maps GitHub issues to the plan. Press `P` to discuss findings and staffing. Missing access or evidence remains a named blocker. Independent design approval precedes the first slice; accepted deployed slice evidence precedes wider implementation.
 4. **Watch the work.** Developers pick up issues and open pull requests. QA testers review and test each one in a real browser, then post a report with screenshots. With auto-merge on, a pull request merges itself once QA passes and GitHub's checks are green.
 
 ## What's in the office
@@ -67,7 +67,7 @@ Demo mode fakes GitHub and the agents. It never changes real PAC authentication 
 | Command | What it does |
 | --- | --- |
 | `npx cubefarm` | start the office and open it in your browser |
-| `npx cubefarm login` | sign in to GitHub Copilot CLI |
+| `npx cubefarm login` | sign in to Codex CLI |
 | `npx cubefarm doctor` | check that your machine is ready |
 | `npx cubefarm --demo` | fake GitHub and fake agents |
 | `npx cubefarm --port 4400` | use another port (the default is 4317) |
@@ -93,6 +93,8 @@ Running it from a clone of this repo (`npm start`)? Then the office updates itse
 
 ## Learn more
 
+- [Documentation index](docs/README.md): current guidance, technical contracts and dated validation reports
+
 - [How it works](docs/how-it-works.md): the life of an issue, QA, auto-merge, models and usage, the safety model and floor previews
 - [Contributing](CONTRIBUTING.md): run it from source, tests, architecture and publishing
 
@@ -116,8 +118,10 @@ Codex and OpenCode CEO sessions receive the session-scoped office MCP server on 
 
 ## Delivering into your tenancy
 
-Enable the connected development environment in **Solution delivery**. Create a release with explicit required issues, components and acceptance tests, then request its assigned independent QA review. Approval pins the source commit, plan hash and development target. Unrelated backlog does not block the release. The office builds and tests an isolated checkout, imports with PAC, reads back the installed version, and runs project checks plus its own browser verification under two authenticated identities. The panel shows owned blockers, stages, app links and retained evidence. Persisted checkpoints prevent a successful import from being repeated when verification is retried; ambiguous interrupted operations require investigation. See the delivery contract for identity setup and supported browser adapters.
+Start with the shared **Delivery plan**, evidence-backed discovery and independently reviewed design. Enable the approved development target in **Solution delivery**, then create a first-slice release with explicit issues, components and acceptance tests bound to the record revision. Approval pins the source commit, plan hash and target. The office builds and tests an isolated checkout, imports with PAC, reads back the installed version and collects independent verification evidence. UI releases retain the browser and identity requirements in the delivery contract. Explicit backend-only functional-development releases use supported API checks and cannot certify UI or employee isolation. Assigned QA accepts the run and saves the shared slice receipt before wider implementation. Ambiguous interrupted operations require investigation; checkpoints do not authorize blind mutation retries.
 
 The CEO now checks delivery status, and every engineering/QA task includes documentation, deployment and UX requirements. Browser tools use a pinned local Playwright MCP installation. See [the delivery contract](docs/DELIVERY.md) for manifests, platform-specific work, verification reports and operational limits. Missing project scripts or tenant access remain visible blockers; the runner does not replace them with simulated success.
 
-Capability checks now gate new work; versioned platform starter bundles are available in Solution delivery. Releases require measurable UX checks, independent review of captured screens and data-preserving recovery evidence. Completed releases have continuing connection/workflow/drift monitoring while the server runs. See [reliability configuration and limits](docs/RELIABILITY.md).
+Capability checks gate new work; versioned platform starter bundles are available in Solution delivery. UI releases require measurable UX checks and independent screen review. All releases need recovery evidence appropriate to their declared scope. Registered monitoring runs while the server is available; release completion does not establish continuing health. See [reliability configuration and limits](docs/RELIABILITY.md).
+
+The [backend pilot completed on 15 October 2026](docs/BACKEND-PILOT-COMPLETION.md) using existing licences and independently reviewed manual controls. This proves the declared reference-only development backend slice. Full-app journeys, least-privilege acceptance and production assurance remain open; see [current status](docs/PRODUCTION-GOAL-STATUS.md) and the [roadmap](docs/AGENT-SWARM-IMPLEMENTATION-PLAN.md).
