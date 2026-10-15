@@ -135,7 +135,7 @@ it('reports queue backpressure without publishing a sixty-fifth ticket',()=>{
   const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
   for(let i=0;i<64;i++){const token=`11111111-1111-4111-8111-${i.toString(16).padStart(12,'0')}`;fs.writeFileSync(path.join(queue,token+'.json'),JSON.stringify({pid:process.pid,token,sequence:i}));}
   store.begin(record);expect(store.view().failureCode).toBe('contention');expect(fs.readdirSync(queue)).toHaveLength(64);
-});
+},15000);
 it.each([false,true])('retries transient ticket-read sharing errors and preserves permanently denied evidence: %s',permanent=>{
   const file=fixture(),store=new RuntimeCleanupStore(file),queue=file+'.lock.queue';fs.mkdirSync(queue,{recursive:true});
   const ticket={pid:99999999,token:'11111111-1111-4111-8111-111111111111',sequence:0},name=path.join(queue,ticket.token+'.json'),content=JSON.stringify(ticket);fs.writeFileSync(name,content);

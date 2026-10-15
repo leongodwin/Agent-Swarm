@@ -39,7 +39,8 @@ jobs:
       - run: npm run typecheck
       # The backend verification tests launch Chromium, not just the E2E job.
       - run: npx playwright install --with-deps chromium
-      - run: npm test
+      # Native fsync/IPC fixtures contend internally; avoid unrelated test-file I/O contention.
+      - run: npm test -- --maxWorkers=1
       - run: npm run build
       # The npm package as users get it: packed, installed into an empty folder and booted in demo mode.
       - run: node scripts/smoke-package.mjs
