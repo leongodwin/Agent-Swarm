@@ -112,6 +112,14 @@ it('binds raw recovery proof after retry, detects journal tampering and refuses 
  const before=await hash(run);await fs.writeFile(path.join(directory,'independent-recovery-journal.json'),'changed snapshots');expect(await hash(run)).not.toBe(before);
  await expect(retainOwnedRecoveryEvidence(undefined,path.join(root,'missing'),[])).resolves.toBeUndefined();
 });
+it('persists a restart-readable evidence set when project and independent reports share a file',async()=>{
+ const {service,repo,deps,root}=await fixture();deps.verify=async()=>['results.json'];
+ await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
+ expect(run.phase,run.error).toBe('reviewing');expect(run.evidence.filter(file=>file==='results.json')).toHaveLength(1);
+ const saved=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));expect(()=>validateDeliveryState(saved)).not.toThrow();
+ await service.close();const restarted=new DeliveryService(root,false,deps);services.push(restarted);await restarted.init();
+ expect(restarted.view().runs[0].evidenceHash).toBe(run.evidenceHash);expect(restarted.view().runs[0].phase).toBe('reviewing');
+});
 it.each(['production','functional-development'] as const)('limits broad publication to the original import path: %s',async profile=>{
  const {service,repo,calls,deps}=await fixture(),base=deps.run,scoped={...manifest,manualDevelopmentGovernance:true};
  deps.run=async(command,cwd,env,signal)=>{

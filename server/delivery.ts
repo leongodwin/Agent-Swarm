@@ -790,7 +790,7 @@ export class DeliveryService {
           independentMethod: release.plan.verification.api ? 'dataverse-api' : release.plan.verification.frame ? 'browser-frame' : 'browser-dom', identities: release.plan.verification.identities.map(({ id, expectedUser }) => ({ id, expectedUser })),
           privilegeVerification: 'not-established-by-browser-identity-check',
         }, null, 2));
-        run.appUrls = release.plan.verification.api ? [] : [release.plan.verification.baseUrl]; run.evidence = [...run.evidence, 'operation-journal.json', 'acceptance-scope.json', 'verification.json', 'solution-inventory.json', ...new Set(files), ...independent];
+        run.appUrls = release.plan.verification.api ? [] : [release.plan.verification.baseUrl]; run.evidence = [...new Set([...run.evidence, 'operation-journal.json', 'acceptance-scope.json', 'verification.json', 'solution-inventory.json', ...files, ...independent])];
       });
       run.phase = 'reviewing'; run.recoveryRequired = false;
       run.evidenceHash = await this.evidenceHash(run);
