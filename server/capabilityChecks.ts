@@ -226,6 +226,7 @@ export class CapabilityService {
   configurationFingerprint(repoIds: string[]) {
     return crypto.createHash('sha256').update(JSON.stringify([...new Set(repoIds)].sort().map(id => [id, this.configs[id] ?? null]))).digest('hex');
   }
+  configuration(repoId:string){return this.configs[repoId]?structuredClone(this.configs[repoId]):null;}
   async configure(repoId: string, input: unknown) {
     if (!this.initialized) throw new Error('Capability state is not initialized; preserve and repair before execution');
     projectKey.parse(repoId);

@@ -117,6 +117,7 @@ it('enforces the shared-record gate before release preparation and before deploy
   await expect(service.createRelease(repo,plan)).rejects.toThrow('Discovery');expect(calls).toHaveLength(before);
   await expect(service.start(repo)).rejects.toThrow('Discovery');expect(calls).toHaveLength(before);
 });
+it('rejects unregistered monitoring contracts before storing a new release for QA',async()=>{const {service,repo}=await fixture();service.validateMonitoring=()=>{throw new Error('Unregistered monitoring probe');};const before=service.view().releases.length;await expect(service.createRelease(repo,{...plan,name:'Bad monitoring'})).rejects.toThrow('Unregistered monitoring');expect(service.view().releases).toHaveLength(before);});
 it.each(['manifest','escaped-manifest','required-issue','architecture'] as const)('rejects ambiguous %s preflight evidence without building or importing',async mode=>{
  const {service,repo,deps,calls}=await fixture(),native=deps.run;
  deps.run=async(...args)=>{

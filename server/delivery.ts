@@ -20,6 +20,7 @@ import {deliveryAttemptSummary} from './deliveryAttempts.ts';
 import {nextPreflightRetry,preflightContext,preflightDeferred} from './deliveryRetry.ts';
 
 import { releasePlanSchema, acceptanceScope, type ReleasePlan } from './releasePlan.ts';
+import {assertMonitoringContract,type MonitoringManifest} from './monitoringContract.ts';
 import {architectureReviewSchema,verifyCommittedArchitecture,requireArchitectureReview} from './architectureGate.ts';
 import { verifyIndependently } from './independentVerification.ts';
 import { verifyApiIndependently } from './apiVerification.ts';
@@ -163,6 +164,7 @@ export class DeliveryService {
   private state: DeliveryStoredState = { schemaVersion: 1, policy: null, runs: [], releases: [], blockers: [], revision: 0 };
   onChange: () => void = () => {};
   checkCapabilities: (repoId: string, cwd: string, environment: string, force: boolean) => Promise<{ status: string; configHash?: string; checks: { id: string; category: string; passed: boolean; remedy: string }[] }> = async () => { throw new Error('Configure capability checks before delivery'); };
+  validateMonitoring?: (repoId:string,plan:ReleasePlan,manifest:MonitoringManifest,environmentUrl:string)=>void;
   checkDeliveryRecord?: (repo:Pick<RepoView,'id'>,plan:ReleasePlan) => void;
   checkGovernance?: LifecycleCheck;
   private lease: DeliveryLease | null = null;
@@ -300,6 +302,7 @@ export class DeliveryService {
     const artifactJson=await this.command({executable:'git',args:['show',`${head}:${architecturePath}.json`]},repo.checkoutPath,{},controller.signal);
     const artifactMarkdown=await this.command({executable:'git',args:['show',`${head}:${architecturePath}.md`]},repo.checkoutPath,{},controller.signal);
     verifyCommittedArchitecture(artifactJson,artifactMarkdown,repo.id,plan.architecture);
+    if(this.validateMonitoring){const monitoringManifest=deliveryManifest.parse(parseUnambiguousJson(await this.command({executable:'git',args:['show',`${head}:cubefarm.delivery.json`]},repo.checkoutPath,{},controller.signal)));this.validateMonitoring(repo.id,plan,monitoringManifest,this.state.policy.environmentUrl);}
     this.checkDeliveryRecord?.(repo,plan);
     if (this.closed || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Delivery state changed during release preparation; retry');
     const environmentUrl = this.state.policy.environmentUrl;
@@ -423,7 +426,8 @@ export class DeliveryService {
     const result = await this.checkCapabilities(repo.id, repo.checkoutPath, release.environmentUrl, true);
     this.checkDeliveryRecord?.(repo,release.plan);
     if (result.status !== 'ready') throw new Error(`Capability preflight blocked: ${result.checks.filter((c) => !c.passed).map((c) => `${c.id}: ${c.remedy}`).join('; ')}`);
-    for (const id of release.plan.monitoring.criticalProbeIds) if (!result.checks.some((c) => c.id === id && c.category === 'workflow' && c.passed)) throw new Error(`Critical workflow probe ${id} is missing`);
+    const manifest=deliveryManifest.parse(parseUnambiguousJson(await this.command({executable:'git',args:['show',`${release.head}:cubefarm.delivery.json`]},repo.checkoutPath,{},this.active?.signal??new AbortController().signal)));
+    assertMonitoringContract(release.plan,manifest,result.checks,true);
     return result.configHash ?? crypto.createHash('sha256').update(JSON.stringify(result.checks.map((c) => ({ id: c.id, category: c.category })))).digest('hex');
   }
   private async verifyArchitecture(repo:RepoView,release:DeliveryRelease,signal:AbortSignal){

@@ -39,6 +39,7 @@ import {deliveryRecordHandler} from './deliveryRecordTools.ts';
 import {inspectRepository} from './repositoryDiscovery.ts';
 import {recordReference,recordPhase} from '../shared/deliveryRecord.ts';
 import {ManualGovernance} from './manualGovernance.ts';
+import {assertMonitoringContract} from './monitoringContract.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
 const runtimeStartedAt = new Date().toISOString();
@@ -54,6 +55,7 @@ const features = new FeatureStore(path.join(HOME_DIR, backend.demo ? 'demo-featu
 await features.init();
 const delivery = new DeliveryService(HOME_DIR, backend.demo, undefined, RESOURCE_LEASE_ROOT);
 await delivery.init({allowUnavailable:true});
+delivery.validateMonitoring=(repoId,plan,manifest,environmentUrl)=>{const config=capabilities.configuration(repoId);if(!config||new URL(config.environmentUrl).origin!==new URL(environmentUrl).origin)throw new HttpError(409,'Configure registered capability probes for the approved target before creating a release');assertMonitoringContract(plan,manifest,config.checks);};
 const deliveryRecords = new DeliveryRecords(path.join(HOME_DIR,backend.demo?'demo-planning':'planning'));
 try{await deliveryRecords.init();}catch{console.warn('Delivery records unavailable; preserve planning/delivery-records.json and inspect it before recovery');}
 const recordContext=(repoId:string)=>{
@@ -86,7 +88,7 @@ const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.dem
 await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
 await tenantDlp.init();
-const manualSourceFiles=['index.ts','manualGovernance.ts','deliveryGovernance.ts','lifecycleGovernance.ts','delivery.ts','backendJourney.ts','apiVerification.ts','packageInventory.ts','platformCommandError.ts','columnContracts.ts','tableStructure.ts','platformAuth.ts','identityContracts.ts','operationReconciliation.ts','deliveryRecords.ts','deliveryRecordTools.ts','releasePlan.ts','targetOperations.ts','ceo.ts','swarm.ts','../shared/governanceProfile.ts','../shared/deliveryRecord.ts','../shared/delivery.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url)));
+const manualSourceFiles=['index.ts','monitoringContract.ts','manualGovernance.ts','deliveryGovernance.ts','lifecycleGovernance.ts','delivery.ts','backendJourney.ts','apiVerification.ts','packageInventory.ts','platformCommandError.ts','columnContracts.ts','tableStructure.ts','platformAuth.ts','identityContracts.ts','operationReconciliation.ts','deliveryRecords.ts','deliveryRecordTools.ts','releasePlan.ts','targetOperations.ts','ceo.ts','swarm.ts','../shared/governanceProfile.ts','../shared/deliveryRecord.ts','../shared/delivery.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url)));
 const manualRuntimeFiles=manualSourceFiles.every(file=>fs.existsSync(file))?manualSourceFiles:[fileURLToPath(import.meta.url)];
 const manualRuntimeEvidence=manualRuntimeFiles.map(file=>({file,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}));
 const manualGovernance=new ManualGovernance(HOME_DIR,id=>delivery.view().releases.find(release=>release.id===id),()=>{if(officeShutdown.closed||swarm.isDraining||backend.demo)throw new HttpError(409,'Manual governance is paused or unavailable');},{sha256:crypto.createHash('sha256').update(JSON.stringify(manualRuntimeEvidence)).digest('hex'),evidence:manualRuntimeEvidence});
