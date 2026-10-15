@@ -100,6 +100,17 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   const release = await service.createRelease(repo, plan); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
   return { service, repo, calls, root, deps, release };
 }
+it.each(['production','functional-development'] as const)('limits broad publication to the original import path: %s',async profile=>{
+ const {service,repo,calls,deps}=await fixture(),base=deps.run,scoped={...manifest,manualDevelopmentGovernance:true};
+ deps.run=async(command,cwd,env,signal)=>{
+  if(command.executable==='git'&&command.args[0]==='show'&&command.args[1].endsWith(':cubefarm.delivery.json'))return JSON.stringify(scoped);
+  const output=await base(command,cwd,env,signal);
+  if(command.executable==='git'&&command.args[0]==='worktree'){await fs.writeFile(path.join(command.args[3],'cubefarm.delivery.json'),JSON.stringify(scoped));await fs.writeFile(path.join(command.args[3],'release.zip'),'PK build artifact');}
+  return output;
+ };
+ const release=await service.createRelease(repo,{...plan,acceptanceProfile:profile});await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);
+ await service.start(repo,true,release.id);await service.waitForIdle();const native=calls.find(call=>call.startsWith('pac solution import'));expect(native).toBeDefined();expect(native!.includes('--publish-changes')).toBe(profile==='production');
+});
 it('enforces the shared-record gate before release preparation and before deployment starts',async()=>{
   const {service,repo,calls}=await fixture();const before=calls.length;
   service.checkDeliveryRecord=()=>{throw new Error('Discovery or independent design review is missing');};

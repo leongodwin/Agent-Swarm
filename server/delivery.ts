@@ -657,7 +657,8 @@ export class DeliveryService {
       if (run.checkpoint === 'post-started' && (manifest.postDeploy.length || !manifest.postDeployActions.length)) throw new Error('Post-deployment outcome is ambiguous; inspect activation/sharing/flow state before creating a replacement release');
       await step('deploying', async () => {
         if (run.checkpoint === 'prepared') {
-          await mutation('solution-import', 'import', 'pac', ['solution', 'import', '--environment', run.environmentUrl, '--path', zip, '--publish-changes', ...(settings ? ['--settings-file', settings] : [])]);
+          const referenceDevelopment=manifest.manualDevelopmentGovernance===true&&release.plan.acceptanceProfile==='functional-development';
+          await mutation('solution-import', 'import', 'pac', ['solution', 'import', '--environment', run.environmentUrl, '--path', zip, ...(!referenceDevelopment?['--publish-changes']:[]), ...(settings ? ['--settings-file', settings] : [])]);
           run.checkpoint = 'imported'; await this.save();
         }
         if (run.checkpoint === 'imported' || run.checkpoint === 'post-started') {
