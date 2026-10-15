@@ -59,6 +59,18 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it('holds CEO profile and job edits while a worker is active without invalidating its context',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{});
+  await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  const manager=swarm as unknown as {setFloorProfile(x:{floor:number;qa_brief:string}):string;updateJob(x:{agent_id:string;job_description:string}):string};
+  expect(()=>manager.setFloorProfile({floor:1,qa_brief:'Changed during review'})).toThrow('active work');
+  expect(()=>manager.updateJob({agent_id:agent.id,job_description:'Changed during task'})).toThrow('active work');
+  const options=fake.startSession.mock.calls[0][0] as SessionOptions;
+  expect(await options.authorizeTool!()).toBeNull();
+  swarm.stopAgent(agent.id);
+  expect(manager.setFloorProfile({floor:1,qa_brief:'Ready for next session'})).toContain('Saved floor');
+  expect(manager.updateJob({agent_id:agent.id,job_description:'Next task'})).toContain('Updated');
+});
 it('blocks manual and automatic implementation assignment at the delivery stage gate before preparation',async()=>{
   const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{});
   swarm.deliveryWorkGate=()=>{throw new Error('Independent design review is required');};

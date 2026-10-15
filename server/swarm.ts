@@ -3774,6 +3774,9 @@ export class Swarm {
 
   private setFloorProfile(x: { floor: number; summary?: string; qa_brief?: string; preview_command?: string; preview_env?: Record<string, string> }) {
     const r = this.floorRepo(x.floor);
+    if (this.state.agents.some(a => a.repoId === r.id && BUSY.includes(a.status))) {
+      throw new Error(`Floor ${r.floor} has active work. Keep its profile and QA brief stable until those sessions finish, then retry.`);
+    }
     const preview = parsePreviewPatch(x.preview_command, x.preview_env);
     if (x.summary !== undefined) r.summary = String(x.summary).trim().slice(0, 140);
     if (x.qa_brief !== undefined) r.qaBrief = String(x.qa_brief).trim().slice(0, 2500);
@@ -3787,6 +3790,7 @@ export class Swarm {
   private updateJob(x: { agent_id: string; title?: string; specialty?: string; job_description?: string }) {
     const a = this.agentByRef(x.agent_id);
     if (a.role === 'ceo') throw new Error("That's you.");
+    if (BUSY.includes(a.status)) throw new Error('This agent has active work. Wait until its session finishes before changing its job.');
     this.updateAgent(a.id, { title: x.title, specialty: x.specialty, brief: x.job_description });
     const title = a.title || (a.role === 'qa' ? 'QA tester' : 'Developer');
     this.appendLog(a, [{ kind: 'system', text: `🪪 ${this.ceo().name} updated ${a.name}'s job: ${title}${a.specialty ? ` · swarm:${a.specialty}` : ''}` }]);
