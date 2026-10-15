@@ -14,7 +14,7 @@ async function fixture(mode='normal'){
  const request:Request=async(method,resource,body,headers)=>{
   if(resource==='WhoAmI')return {...binding,OrganizationId:id,UserId:mode==='wrong-user'?'22222222-2222-4222-8222-222222222222':id};
   if(method==='GET'){
-   if(resource.startsWith('exp_lines?'))return {value:mode==='children'?[{exp_lineid:'unexpected'}]:[]};
+   if(resource.startsWith('exp_lines?'))return {value:(mode==='children'||mode==='children-mid'&&writes.length>=2)?[{exp_lineid:'unexpected'}]:[]};
    if(resource.startsWith('exp_reports?'))return {value:row?[{exp_reportid:row.exp_reportid}]:[]};
    return {...row,'@odata.etag':`W/"${version}"`,versionnumber:version};
   }
@@ -25,6 +25,7 @@ async function fixture(mode='normal'){
    if(mode.startsWith('revision')&&(body as Record<string,unknown>).exp_expectedrevision!==row!.exp_revision)throw new Error('Service revision differs');
    const name=(body as Record<string,unknown>).exp_title as string;
    if(name.length>100){if(mode==='permission')throw new PlatformCommandError('Forbidden','0x80040220');if(mode==='corrupt')row!.exp_amount=123;if(mode==='revision-change')row!.exp_revision=Number(row!.exp_revision)+1;throw new PlatformCommandError('Metadata length validation','0x80073001');}
+   if(mode==='ambiguous-update'&&name.startsWith('RECOVERY')){row={...row,...body};version++;throw new Error('Ambiguous intermediate update');}
    row={...row,...body,...(mode.startsWith('revision')?{exp_revision:Number(row!.exp_revision)+1}:{})};version++;return null;
   }
   if(method==='DELETE'){row=null;return null;}
@@ -54,3 +55,12 @@ it('supports server-derived totals and guarded service revisions without restori
 
 
 it('rejects a service revision change even when an invalid write preserves the ETag',async()=>{const f=await fixture('revision-change');const contract=backendJourneySchema.parse({...plan,createValues:{exp_status:1},concurrency:{revisionField:'exp_revision',expectedRevisionField:'exp_expectedrevision'}});await expect(verifyBackendJourney(contract,binding,f.request,f.root,new AbortController().signal,context)).rejects.toThrow('Rejected write changed');expect(f.writes).not.toContain('DELETE');});
+
+it('journals exact intermediate intent and snapshots and never retries an ambiguous restoration step',async()=>{
+ const f=await fixture('ambiguous-update');await expect(verifyBackendJourney(plan,binding,f.request,f.root,new AbortController().signal,context)).rejects.toThrow('Ambiguous intermediate');
+ const journal=JSON.parse(await fs.readFile(path.join(f.root,'independent-journey-journal.json'),'utf8'));expect(journal.operations).toHaveLength(3);expect(journal.operations.at(-1)).toMatchObject({method:'PATCH',state:'failed-or-unknown',body:{exp_title:expect.stringContaining('RECOVERY')}});expect(journal.snapshots).toHaveLength(3);
+ const count=f.writes.length;await expect(verifyBackendJourney(plan,binding,f.request,f.root,new AbortController().signal,context)).rejects.toThrow('reconcile');expect(f.writes).toHaveLength(count);
+});
+it('checks unexpected children before an intermediate mutation, not just at final retention',async()=>{
+ const f=await fixture('children-mid');await expect(verifyBackendJourney(plan,binding,f.request,f.root,new AbortController().signal,context)).rejects.toThrow('dependent');expect(f.writes).toEqual(['POST','PATCH']);
+});

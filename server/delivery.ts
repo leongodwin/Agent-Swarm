@@ -539,7 +539,7 @@ export class DeliveryService {
       const release = this.state.releases.find((r) => r.id === run.releaseId);
       if (!release?.approvedAt) throw new Error('Release is not independently approved');
       await atomicWrite(path.join(evidence, 'release.json'), JSON.stringify(release, null, 2));
-      run.evidence = ['release.json', ...run.evidence.filter((name) => name.startsWith('recovery-') || name === 'previous-inventory.json' || name === 'target-component-map.json')];
+      run.evidence = ['release.json', ...run.evidence.filter((name) => /^(recovery-|native-operation-|governance-|manual-assessment-|package-inventory-|declared-schema-|advanced-policy-|connector-catalogue-)/.test(name) || name === 'previous-inventory.json' || name === 'target-component-map.json')];
       await command('git', ['diff', '--quiet', run.head, '--']);
       const manifest = deliveryManifest.parse(parseUnambiguousJson(await command('git', ['show', `${run.head}:cubefarm.delivery.json`])));
       if (this.state.policy?.copilotPaused && manifest.targetComponents.some((component) => component.kind === 'copilot')) throw new Error('Copilot Studio delivery is paused by the user');
@@ -553,7 +553,15 @@ export class DeliveryService {
       const request: Request = async (method, resource, body, headers) => {
         await targetLease!.assertOwned();
         if(method!=='GET') await this.governance(run,manifest,'post-deploy');
-        const output = await command('dataverse', ['api', 'request', '--target', 'dataverse', '--environment', run.environmentUrl, '--method', method, '--path', `/api/data/v9.2/${resource}`, ...(body ? ['--body', JSON.stringify(body)] : []), ...Object.entries(headers ?? {}).flatMap(([key, value]) => ['--header', `${key}:${value}`])]);
+        const receiptFile=method!=='GET'&&release.plan.verification.api?.transaction?`native-operation-${crypto.randomUUID()}.json`:undefined;
+        const governanceFile=run.evidence.findLast(file=>/^governance-\d+-post-deploy\.json$/.test(file));
+        const decision=receiptFile&&governanceFile?lifecycleResultSchema.parse(await readBoundedJson(path.join(evidence,governanceFile))):undefined;
+        const receipt={schemaVersion:1,runId:run.id,sourceCommit:run.head,releaseId:run.releaseId,environmentUrl:run.environmentUrl,method,resource,body:body??null,headers:headers??{},requestSha256:crypto.createHash('sha256').update(JSON.stringify({method,resource,body:body??null,headers:headers??{}})).digest('hex'),governanceFile,manualAssessmentId:decision?.manualAssessmentId,authorisation:'Phase approval of the exact reviewed transaction code and contract; dynamic GUID/payload guards are runner-owned, not individually approved by a human',at:new Date().toISOString(),outcome:'intent',responseSha256:undefined as string|undefined,errorCode:undefined as string|undefined};
+        if(receiptFile){if(decision?.status!=='clear')throw new Error('Mutation lacks its retained clear phase assessment');await atomicWrite(path.join(evidence,receiptFile),JSON.stringify(receipt,null,2));run.evidence.push(receiptFile);await this.save();}
+        let output:string;
+        try{output=await command('dataverse', ['api', 'request', '--target', 'dataverse', '--environment', run.environmentUrl, '--method', method, '--path', `/api/data/v9.2/${resource}`, ...(body ? ['--body', JSON.stringify(body)] : []), ...Object.entries(headers ?? {}).flatMap(([key, value]) => ['--header', `${key}:${value}`])]);receipt.outcome='returned';receipt.responseSha256=crypto.createHash('sha256').update(output).digest('hex');}
+        catch(error){receipt.outcome='failed-or-unknown';if(error instanceof PlatformCommandError)receipt.errorCode=error.platformErrorCode;throw error;}
+        finally{if(receiptFile)await atomicWrite(path.join(evidence,receiptFile),JSON.stringify(receipt,null,2));}
         if (method !== 'GET' && !output.trim()) return null;
         // Fail closed on unexpected CLI output rather than guessing a JSON fragment.
         return parseUnambiguousJson(output.trim());

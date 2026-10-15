@@ -13,7 +13,7 @@ export const backendJourneySchema=z.strictObject({entitySet:logical,idField:logi
   validationErrorCodes:z.array(z.literal('0x80073001')).length(1),
 }).superRefine((plan,ctx)=>{if(plan.idField===plan.nameField||[plan.values,plan.createValues??{}].some(values=>Object.hasOwn(values,plan.idField)||Object.hasOwn(values,plan.nameField)||Object.keys(values).length>20)||plan.concurrency&&[plan.idField,plan.nameField,...Object.keys(plan.values)].some(field=>field===plan.concurrency!.revisionField||field===plan.concurrency!.expectedRevisionField))ctx.addIssue({code:'custom',message:'Journey values cannot override the runner-owned identity or marker'});});
 export type BackendJourney=z.infer<typeof backendJourneySchema>;
-const journalSchema=z.strictObject({runId:z.string().min(1),sourceCommit:z.string(),contractSha256:z.string(),resultSha256:z.string().optional(),id:z.uuid(),marker:z.string(),phase:z.enum(['intent','created','validated','restored','cleaned'])});
+const journalSchema=z.strictObject({runId:z.string().min(1),sourceCommit:z.string(),contractSha256:z.string(),resultSha256:z.string().optional(),id:z.uuid(),marker:z.string(),phase:z.enum(['intent','created','validated','restored','cleaned']),operations:z.array(z.object({id:z.uuid(),method:z.enum(['POST','PATCH']),resource:z.string(),body:z.record(z.string(),z.unknown()).optional(),etag:z.string().optional(),beforeSha256:z.string().optional(),state:z.enum(['intent','returned','failed-or-unknown']),at:z.iso.datetime(),resultSha256:z.string().optional(),errorCode:z.string().optional()})).max(10).default([]),snapshots:z.array(z.object({name:z.string(),at:z.iso.datetime(),row:z.record(z.string(),z.unknown())})).max(12).default([])});
 function facts(value:unknown,fields:string[]){if(!value||typeof value!=='object')throw new Error('Pilot record response is unavailable');return Object.fromEntries(fields.map(field=>[field,(value as Record<string,unknown>)[field]]));}
 const digest=(value:unknown)=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 /** App-owned transaction evidence. Only a new client-generated GUID may be
@@ -21,15 +21,23 @@ const digest=(value:unknown)=>crypto.createHash('sha256').update(JSON.stringify(
  * refuse foreign ownership, unexpected children or an ambiguous prior intent. */
 export async function verifyBackendJourney(plan:BackendJourney,binding:z.infer<typeof targetBindingSchema>,request:Request,directory:string,signal:AbortSignal,context:{runId:string;sourceCommit:string},kind:'journey'|'recovery'='journey'){
   const file=`independent-${kind}.json`,journalFile=path.join(directory,`independent-${kind}-journal.json`),events:string[]=[];
-  const prior=await readBoundedJson(journalFile,16384);
+  const prior=await readBoundedJson(journalFile,128*1024);
   let journal=journalSchema.parse(prior??{...context,contractSha256:digest(plan),id:crypto.randomUUID(),marker:`SYNTHETIC P0 ${context.runId} ${kind==='recovery'?'R':'J'}`,phase:'intent'});
   if(journal.runId!==context.runId||journal.sourceCommit!==context.sourceCommit||journal.contractSha256!==digest(plan))throw new Error('Pilot transaction journal belongs to another run or contract');
   if(journal.marker.length>plan.maxNameLength)throw new Error('Pilot marker exceeds the approved name constraint');
   const fields=[plan.idField,plan.nameField,...Object.keys(plan.values),'_ownerid_value'],select=[...fields,'versionnumber',...(plan.concurrency?[plan.concurrency.revisionField]:[])].join(','),resource=`${plan.entitySet}(${journal.id})`;
   const guard=async()=>{signal.throwIfAborted();await verifyTarget(request,binding);signal.throwIfAborted();};
   const save=async(phase:typeof journal.phase,resultSha256?:string)=>{journal={...journal,phase,...(resultSha256?{resultSha256}:{})};await atomicWrite(journalFile,JSON.stringify(journal,null,2));};
-  const write=async(method:'POST'|'PATCH'|'DELETE',target:string,body?:object,etag?:string)=>{await guard();return request(method,target,body,etag?{'If-Match':etag}:undefined);};
-  const read=async()=>{await guard();return request('GET',`${resource}?$select=${select}`) as Promise<Record<string,unknown>>;};
+  let lastRead:Record<string,unknown>|undefined;
+  const noChildren=async()=>{await guard();const response=await request('GET',`${plan.childEntitySet}?$select=${plan.childIdField}&$filter=${plan.childLookup} eq ${journal.id}`);const children=z.object({value:z.array(z.unknown()),'@odata.nextLink':z.never().optional()}).parse(response);if(children.value.length)throw new Error('Unexpected dependent records; pilot mutation refused');};
+  const write=async(method:'POST'|'PATCH',target:string,body?:object,token?:string)=>{
+    await noChildren();await guard();
+    const operation={id:crypto.randomUUID(),method,resource:target,body:body as Record<string,unknown>|undefined,etag:token,beforeSha256:lastRead?digest(lastRead):undefined,state:'intent' as 'intent'|'returned'|'failed-or-unknown',at:new Date().toISOString(),resultSha256:undefined as string|undefined,errorCode:undefined as string|undefined};
+    journal.operations.push(operation);await save(journal.phase);signal.throwIfAborted();
+    try{const result=await request(method,target,body,token?{'If-Match':token}:undefined);operation.state='returned';operation.resultSha256=digest(result??null);await save(journal.phase);return result;}
+    catch(error){operation.state='failed-or-unknown';if(error instanceof PlatformCommandError)operation.errorCode=error.platformErrorCode;await save(journal.phase);throw error;}
+  };
+  const read=async()=>{await guard();const row=await request('GET',`${resource}?$select=${select}`) as Record<string,unknown>;lastRead=row;journal.snapshots.push({name:`read-${journal.snapshots.length+1}`,at:new Date().toISOString(),row});await save(journal.phase);return row;};
   const owns=(row:Record<string,unknown>)=>{if(row[plan.idField]!==journal.id||row[plan.nameField]!==journal.marker||row._ownerid_value!==binding.userId)throw new Error('Pilot record ownership or marker changed; leave it for reconciliation');};
   const etag=(row:Record<string,unknown>)=>{const value=row['@odata.etag'];if(typeof value!=='string'||!/^W\/"\d+"$/.test(value))throw new Error('Pilot record lacks a usable concurrency token');return value;};
   const edit=(row:Record<string,unknown>,name:string)=>{if(!plan.concurrency)return {[plan.nameField]:name};const revision=row[plan.concurrency.revisionField];if(typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<0)throw new Error('Pilot service revision is unavailable');return {[plan.nameField]:name,[plan.concurrency.expectedRevisionField]:revision};};
@@ -53,7 +61,7 @@ export async function verifyBackendJourney(plan:BackendJourney,binding:z.infer<t
     const changedName=`RECOVERY ${journal.marker}`.slice(0,plan.maxNameLength);
     await write('PATCH',resource,edit(afterInvalid,changedName),etag(afterInvalid));const changed=await read();if(changed[plan.idField]!==journal.id||changed[plan.nameField]!==changedName||changed._ownerid_value!==binding.userId||digest(facts(changed,fields.filter(field=>field!==plan.nameField)))!==digest(facts(baseline,fields.filter(field=>field!==plan.nameField))))throw new Error('Recovery rehearsal record changed ownership or value');
     await write('PATCH',resource,edit(changed,journal.marker),etag(changed));const restored=await read();owns(restored);const beforeSha256=digest(facts(baseline,fields)),afterSha256=digest(facts(restored,fields));if(beforeSha256!==afterSha256)throw new Error('Pilot record recovery did not restore business values');await save('restored');events.push('Restored the pilot-owned business values using guarded writes; service revision/audit fields may advance');
-    await guard();const children=z.object({value:z.array(z.unknown()),'@odata.nextLink':z.never().optional()}).parse(await request('GET',`${plan.childEntitySet}?$select=${plan.childIdField}&$filter=${plan.childLookup} eq ${journal.id}`));if(children.value.length)throw new Error('Unexpected dependent records; automatic pilot cleanup refused');
+    await noChildren();
     // Retain the owned synthetic row as audit evidence. A separate child query
     // cannot authorise a cascading parent delete atomically. No DELETE is issued.
     const retained=await read();owns(retained);if(digest(facts(retained,fields))!==beforeSha256)throw new Error('Retained audit record differs from the restored baseline');
