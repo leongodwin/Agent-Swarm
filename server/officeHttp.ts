@@ -28,8 +28,15 @@ import { parseBody, proposalSchema, loginSchema, selectSchema, notifySchema, app
 import type {OfficeReloadRequester} from './officeReload.mjs';
 import {healthEvidenceView,readHealthEvidenceArtifact} from './healthEvidence.ts';
 import {governanceEvidenceView} from './governanceEvidence.ts';
+import type {DeliveryRecords} from './deliveryRecords.ts';
+import type {RecordToolHandler} from './ceo.ts';
+import {recordPhase,discoveryBlockers} from '../shared/deliveryRecord.ts';
+import type {ManualGovernance} from './manualGovernance.ts';
 
 export interface OfficeHttpServices {
+  manualGovernance?:Pick<ManualGovernance,'view'>;
+  deliveryRecords?:DeliveryRecords;
+  managerRecordTool?:RecordToolHandler;
   officeReload?:Pick<OfficeReloadRequester,'prepare'|'view'>;
   workflowReliability?:Pick<WorkflowReliabilityService,'observe'>;
   synthesis?:HldSynthesisService;
@@ -105,6 +112,21 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   }));
 
   app.get('/api/state', route(() => swarm.snapshot()));
+  app.get('/api/repos/:repo/manual-governance',route(req=>{const repo=connectedRepo(repoId(req));if(!services.manualGovernance)throw new HttpError(503,'Manual governance unavailable');return {assessments:services.manualGovernance.view(repo.id)};}));
+  app.get('/api/repos/:repo/delivery-record',route(req=>{
+    const repo=connectedRepo(repoId(req));
+    if(!services.deliveryRecords)throw new HttpError(503,'Delivery records unavailable');
+    const record=services.deliveryRecords.current(repo.id);
+    let scopeError:string|undefined;
+    if(record)try{services.deliveryRecords.assertContext(record,{brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId});}catch{scopeError='Brief or deployment target changed. Refresh discovery and design review.';}
+    return {record,phase:scopeError?'discovery':record?recordPhase(record):'not-started',blockers:[...(scopeError?[scopeError]:[]),...(record?discoveryBlockers(record):['Ask the CEO to create the delivery record and discovery tasks'])],demo:backend.demo};
+  }));
+  app.post('/api/repos/:repo/delivery-record',route(async req=>{
+    connectedRepo(repoId(req));if(backend.demo||!services.managerRecordTool)throw new HttpError(409,'Record editing is unavailable in demo mode');
+    const input=parseBody(z.strictObject({expectedRevision:z.number().int().nonnegative(),content:z.unknown()}),req.body);
+    return JSON.parse(await services.managerRecordTool({repo_id:repoId(req),action:'save',expected_revision:input.expectedRevision,payload_json:JSON.stringify(input.content)}));
+  }));
+  app.post('/api/repos/:repo/delivery-record/review',route(req=>{connectedRepo(repoId(req));return swarm.requestRecordReview(repoId(req));}));
   app.get('/api/capabilities', route(() => capabilities.view()));
   app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
   app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, authenticationWork:backend.tenancy.activity(), deliveryAvailability:delivery.available?'ready':'unavailable', draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));

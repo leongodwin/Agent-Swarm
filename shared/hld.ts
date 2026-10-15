@@ -23,6 +23,7 @@ export interface HldResult {
   generatedAt: number;
   solutionName: string;
   status: 'draft';
+  deliveryRecord?: import('./deliveryRecord').RecordReference;
   generationMethod: 'requirements-template' | 'model-synthesis';
   synthesis?: {runtime:'codex-cli'|'claude-sdk';jobId:string;startedAt:number;elapsedMs:number;deadlineMs:300000};
   missingEvidence: string[];

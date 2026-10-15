@@ -100,6 +100,12 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   const release = await service.createRelease(repo, plan); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
   return { service, repo, calls, root, deps, release };
 }
+it('enforces the shared-record gate before release preparation and before deployment starts',async()=>{
+  const {service,repo,calls}=await fixture();const before=calls.length;
+  service.checkDeliveryRecord=()=>{throw new Error('Discovery or independent design review is missing');};
+  await expect(service.createRelease(repo,plan)).rejects.toThrow('Discovery');expect(calls).toHaveLength(before);
+  await expect(service.start(repo)).rejects.toThrow('Discovery');expect(calls).toHaveLength(before);
+});
 it.each(['manifest','escaped-manifest','required-issue','architecture'] as const)('rejects ambiguous %s preflight evidence without building or importing',async mode=>{
  const {service,repo,deps,calls}=await fixture(),native=deps.run;
  deps.run=async(...args)=>{

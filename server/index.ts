@@ -3,6 +3,8 @@ import {currentEnvironment} from '../shared/tenancy.ts';
 import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
+import {fileURLToPath} from 'node:url';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 import {MAX_OFFICE_WS_PAYLOAD} from './webSocketLimits.ts';
@@ -32,6 +34,11 @@ import {createAdvancedPolicyObserver} from './advancedPolicy.ts';
 import {createConnectorCatalogueObserver} from './connectorCatalogue.ts';
 import {HldSynthesisService} from './hldSynthesis.ts';
 import {discoverSkills} from './skillRegistry.ts';
+import {DeliveryRecords} from './deliveryRecords.ts';
+import {deliveryRecordHandler} from './deliveryRecordTools.ts';
+import {inspectRepository} from './repositoryDiscovery.ts';
+import {recordReference,recordPhase} from '../shared/deliveryRecord.ts';
+import {ManualGovernance} from './manualGovernance.ts';
 
 const backend = DEMO ? createDemoBackend() : realBackend;
 const runtimeStartedAt = new Date().toISOString();
@@ -47,24 +54,56 @@ const features = new FeatureStore(path.join(HOME_DIR, backend.demo ? 'demo-featu
 await features.init();
 const delivery = new DeliveryService(HOME_DIR, backend.demo, undefined, RESOURCE_LEASE_ROOT);
 await delivery.init({allowUnavailable:true});
+const deliveryRecords = new DeliveryRecords(path.join(HOME_DIR,backend.demo?'demo-planning':'planning'));
+try{await deliveryRecords.init();}catch{console.warn('Delivery records unavailable; preserve planning/delivery-records.json and inspect it before recovery');}
+const recordContext=(repoId:string)=>{
+  const repo=swarm.snapshot().repos.find(repo=>repo.id===repoId);
+  if(!repo)throw new HttpError(404,'Repository is not connected');
+  return {brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId,checkoutPath:repo.checkoutPath};
+};
+const recordDependencies={repo:recordContext,agents:()=>swarm.snapshot().agents,delivery:(repoId:string)=>delivery.view(repoId),get synthesis(){return synthesis;},inspectRepository:(checkoutPath:string,guard:()=>void)=>inspectRepository(checkoutPath,path.join(HOME_DIR,'planning','evidence'),guard),assertOpen:()=>{if(officeShutdown.closed||swarm.isDraining)throw new HttpError(503,'Office maintenance/shutdown pauses record changes');if(backend.demo)throw new HttpError(409,'Demo cannot change or certify delivery records');}};
+const recordHandler=(id:string,role:'ceo'|'dev'|'qa'|'manager',repoId?:string):import('./ceo.ts').RecordToolHandler=>async input=>{
+  const agent=role==='manager'?undefined:swarm.snapshot().agents.find(agent=>role==='ceo'?agent.role==='ceo':agent.id===id&&agent.repoId===repoId);
+  const assertSession=agent?swarm.planningSessionGuard(agent.id):undefined;
+  const assertOpen=()=>{
+    recordDependencies.assertOpen();if(role==='manager')return;
+    if(!assertSession)throw new HttpError(403,'Planning session is unavailable');assertSession();
+  };
+  return deliveryRecordHandler(deliveryRecords,{...recordDependencies,assertOpen},{id,role,repoId,reviewOnly:role==='qa'&&agent?.task==='qa'&&agent.prNumber===null})(input);
+};
+swarm.deliveryRecordTool=recordHandler('ceo','ceo');
+swarm.deliveryRecordContext=repoId=>{
+  if(backend.demo)return '';
+  try{const record=deliveryRecords.current(repoId);return JSON.stringify({deliveryRecord:record?recordReference(record):null,phase:record?recordPhase(record):'not-started',instruction:'Call delivery_record action read before work. Use the current requirements, discovery and contracts. Discovery/design tasks must not author or deploy the solution. Record findings with action finding; report unresolved assumptions honestly.'});}catch{return 'Delivery records unavailable; implementation must wait for recovery';}
+};
+swarm.deliveryWorkGate=(repoId,issue)=>deliveryRecords.assertWork(repoId,issue,recordContext(repoId));
+swarm.deliveryTaskStage=(repoId,issue)=>backend.demo?undefined:deliveryRecords.current(repoId)?.content.tasks.find(task=>task.issue===issue)?.stage;
+swarm.deliveryTaskFingerprint=(repoId,issue)=>{if(backend.demo)return '';try{const record=deliveryRecords.current(repoId);if(!record)return 'missing';const task=record.content.tasks.find(task=>task.issue===issue);if(task?.stage!=='discovery')return record.sha256;const {findings:_findings,sourceCommit:_source,...scope}=record.content;return JSON.stringify([record.id,scope]);}catch{return 'unavailable';}};
+delivery.checkDeliveryRecord=(repo,plan)=>{const record=deliveryRecords.assertRelease(repo.id,plan,recordContext(repo.id));if(record.content.environmentUrl?.replace(/\/$/,'').toLowerCase()!==delivery.view().policy?.environmentUrl.replace(/\/$/,'').toLowerCase())throw new HttpError(409,'Shared record target differs from the authorised deployment target');};
+swarm.requestRecordReview=async repoId=>{const record=deliveryRecords.current(repoId);if(!record)throw new HttpError(409,'Create a shared delivery record before requesting review');deliveryRecords.assertContext(record,recordContext(repoId));return swarm.reviewDeliveryRelease(record.content.qaOwner,repoId,`delivery record ${record.revision}`,true);};
 if(maintenance.draining)delivery.setDraining(true);
 const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'), () => (!delivery.available||!!delivery.view().policy?.copilotPaused));
 await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
 await tenantDlp.init();
-delivery.checkGovernance=createDeliveryGovernance(tenantDlp,createDeclaredSchemaObserver(),createAdvancedPolicyObserver(),createConnectorCatalogueObserver());
+const manualSourceFiles=['index.ts','manualGovernance.ts','deliveryGovernance.ts','lifecycleGovernance.ts','delivery.ts','backendJourney.ts','apiVerification.ts','packageInventory.ts','platformCommandError.ts','columnContracts.ts','tableStructure.ts','platformAuth.ts','identityContracts.ts','operationReconciliation.ts','deliveryRecords.ts','deliveryRecordTools.ts','releasePlan.ts','targetOperations.ts','ceo.ts','swarm.ts','../shared/governanceProfile.ts','../shared/deliveryRecord.ts','../shared/delivery.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url)));
+const manualRuntimeFiles=manualSourceFiles.every(file=>fs.existsSync(file))?manualSourceFiles:[fileURLToPath(import.meta.url)];
+const manualRuntimeEvidence=manualRuntimeFiles.map(file=>({file,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}));
+const manualGovernance=new ManualGovernance(HOME_DIR,id=>delivery.view().releases.find(release=>release.id===id),()=>{if(officeShutdown.closed||swarm.isDraining||backend.demo)throw new HttpError(409,'Manual governance is paused or unavailable');},{sha256:crypto.createHash('sha256').update(JSON.stringify(manualRuntimeEvidence)).digest('hex'),evidence:manualRuntimeEvidence});
+try{await manualGovernance.init();}catch{console.warn('Manual governance storage unavailable; preserve its history before recovery');}
+delivery.checkGovernance=createDeliveryGovernance(tenantDlp,createDeclaredSchemaObserver(),createAdvancedPolicyObserver(),createConnectorCatalogueObserver(),manualGovernance);
 setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, input, checkpoint));
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();
 swarm.capabilityStatus = () => JSON.stringify(capabilities.view());
-swarm.engineeringTools = authorize => createEngineeringTools(swarm.capabilityStatus, {
+swarm.engineeringTools = (authorize,agentId,repoId) => createEngineeringTools(swarm.capabilityStatus, {
   async acquire(app, owner) {
     if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
     const tenancy = await backend.tenancy.info(); const target = currentEnvironment(tenancy);
     if (!target || tenancy.status !== 'connected') throw new HttpError(409, 'Connect the authoring environment first');
     return canvasOwnership.acquire(target.url, app, owner);
   }, release: (token) => canvasOwnership.release(token),
-}, authorize);
+}, authorize,agentId&&repoId?recordHandler(agentId,'dev',repoId):undefined);
 swarm.capabilityFingerprint = () => JSON.stringify(capabilities.view().results.map((r) => [r.repoId, r.status, r.configHash, r.checks]));
 swarm.workerAdmissionContext = repoIds => JSON.stringify([capabilities.configurationFingerprint(repoIds), delivery.view().policy,delivery.available,backend.tenancy.activity().profileMutation]);
 swarm.capabilityPreflight = async (repoId, cli) => {
@@ -108,17 +147,17 @@ swarm.deliveryQaTools = (agentId, repoId, authorize) => createDeliveryQaTools(()
 }, authorize,async(id,hash,review)=>{
   if(!delivery.view(repoId).releases.some(r=>r.id===id))throw new HttpError(403,'Architecture belongs to another project');
   return JSON.stringify(await delivery.reviewArchitecture(id,agentId,hash,review));
-});
+},recordHandler(agentId,'qa',repoId),{read:()=>JSON.stringify(manualGovernance.view(repoId)),review:async(id,input)=>{const guard=swarm.planningSessionGuard(agentId);guard();const result=await manualGovernance.review(repoId,id,agentId,input,guard);guard();return JSON.stringify(result);}});
 swarm.requestDeliveryReview = async (id) => {
   const release = delivery.view().releases.find((r) => r.id === id);
   if (!release) throw new HttpError(404, 'Release not found');
-  if (release.approvedAt && !delivery.view().runs.some((r) => r.releaseId === id && r.phase === 'reviewing')) return 'Release plan approved; visual review becomes available after verification';
+  if (release.approvedAt && !delivery.view().runs.some((r) => r.releaseId === id && r.phase === 'reviewing')&&!manualGovernance.view(release.repoId).some(row=>row.releaseId===id&&!row.review&&Date.parse(row.expiresAt)>Date.now())) return 'Release plan approved; visual review becomes available after verification';
   return swarm.reviewDeliveryRelease(release.plan.qaOwner, release.repoId, id);
 };
 const synthesis=new HldSynthesisService(path.join(HOME_DIR,backend.demo?'demo-architecture':'architecture'),{
   reserve:(repoId,jobId)=>swarm.reserveArchitectureSession(repoId,jobId),
   assertOpen(){if(backend.demo)throw new HttpError(409,'Demo cannot synthesize with a live model');if(officeShutdown.closed)throw new HttpError(503,'Office is shutting down');if(!delivery.available)throw new HttpError(409,'Delivery initialization is unavailable; inspect recovery before architecture execution');if(swarm.isDraining)throw new HttpError(409,'Office maintenance pauses new architecture jobs');},
-  context(repoId,input){const repo=swarm.snapshot().repos.find(item=>item.id===repoId);if(!repo?.checkoutPath)throw new HttpError(404,'Architecture project checkout is unavailable');const catalogue=discoverSkills(),copilotPaused=(!delivery.available||!!delivery.view().policy?.copilotPaused);return {checkoutPath:repo.checkoutPath,fingerprint:JSON.stringify([repo.id,repo.localPath,repo.targetTenancy,repo.mission,catalogue.fingerprint,copilotPaused]),copilotPaused,skills:selectSynthesisSkills(catalogue,`${repo.mission} ${repo.summary}`,input,copilotPaused).map(({id,name,platform,sha256,version,description,toolStatus})=>({id,name,platform,sha256,version,description,toolStatus}))};},
+  context(repoId,input){const repo=swarm.snapshot().repos.find(item=>item.id===repoId);if(!repo?.checkoutPath)throw new HttpError(404,'Architecture project checkout is unavailable');const discoveryRecord=deliveryRecords.current(repoId);if(!discoveryRecord)throw new HttpError(409,'Create the shared discovery record before synthesis');deliveryRecords.assertContext(discoveryRecord,recordContext(repoId));const catalogue=discoverSkills(),copilotPaused=(!delivery.available||!!delivery.view().policy?.copilotPaused);return {discoveryRecord,checkoutPath:repo.checkoutPath,fingerprint:JSON.stringify([repo.id,repo.localPath,repo.targetTenancy,repo.mission,discoveryRecord.sha256,catalogue.fingerprint,copilotPaused]),copilotPaused,skills:selectSynthesisSkills(catalogue,`${repo.mission} ${repo.summary}`,input,copilotPaused).map(({id,name,platform,sha256,version,description,toolStatus})=>({id,name,platform,sha256,version,description,toolStatus}))};},
   admission:repoId=>swarm.capabilityPreflight(repoId,'codex'),start:(options,callbacks)=>backend.startSession(options,callbacks),
 });
 let synthesisUnavailableReason:string|undefined;
@@ -133,6 +172,8 @@ const officeShutdown = new OfficeShutdown([
   { name: 'launcher reload', close:()=>officeReload?.close() },
   { name: 'HTTP admission', close: () => closeHttpAdmission?.() },
   { name: 'architecture synthesis', close:()=>synthesis.close() },
+  { name: 'delivery records', close:()=>deliveryRecords.close() },
+  { name: 'manual governance', close:()=>manualGovernance.close() },
   { name: 'maintenance', close: () => maintenance.close() },
   { name: 'swarm', close: restart => swarm.shutdown(restart) },
   { name: 'tenancy', close: () => backend.tenancy.shutdown() },
@@ -170,7 +211,7 @@ if (officeShutdown.closed) await shutdown('stop');
 delivery.onChange = () => { if (swarm.snapshot().repos.length) swarm.requestReview(); };
 capabilities.onChange = delivery.onChange;
 
-const {app,browserAuth,closeAdmission}=createOfficeHttpApp({officeReload,synthesis:synthesisUnavailableReason?undefined:synthesis,synthesisUnavailableReason,backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,changeDrain:(value,apply)=>maintenance.change(value,apply),requestHandoff:()=>{void shutdown('restart');}});
+const {app,browserAuth,closeAdmission}=createOfficeHttpApp({manualGovernance,deliveryRecords,managerRecordTool:recordHandler('manager','manager'),officeReload,synthesis:synthesisUnavailableReason?undefined:synthesis,synthesisUnavailableReason,backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt,policyReaderMode,changeDrain:(value,apply)=>maintenance.change(value,apply),requestHandoff:()=>{void shutdown('restart');}});
 closeHttpAdmission=closeAdmission;
 deliveryTimer = setInterval(() => { void delivery.tick(swarm.snapshot().repos).catch((err) => console.warn('delivery scheduler:', err.message)); }, 30_000);
 deliveryTimer.unref();

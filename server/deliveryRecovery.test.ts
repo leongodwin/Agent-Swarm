@@ -14,6 +14,14 @@ it('preserves an interrupted marker and validated empty history without dispatch
   const audit=JSON.parse(await fs.readFile(path.join(root,'delivery-recovery',files.find(file=>!file.endsWith('.lock.json'))!),'utf8'));expect(audit.remoteOutcomeVerified).toBe(false);
   const next=await acquireDeliveryLease(root);await next.release();
 });
+it('recovers blocker-only history without erasing observations or claiming remote reconciliation',async()=>{
+  const {root}=await fixture(),file=path.join(root,'delivery.json'),state=JSON.parse(await fs.readFile(file,'utf8'));
+  state.blockers=[{repoId:'synthetic/repo',owner:'CEO',error:'No scoped release exists',recovery:'Create a reviewed release',at:new Date().toISOString()}];
+  const bytes=JSON.stringify(state);await fs.writeFile(file,bytes);const inspection=await inspectDeliveryRecovery(root);
+  expect(inspection).toMatchObject({history:'retained',owner:'absent',canRecover:true});expect(inspection.reason).toContain('blocker observations are retained');
+  await recoverEmptyDelivery(root,inspection.snapshotSha256!);expect(await fs.readFile(file,'utf8')).toBe(bytes);
+  const files=await fs.readdir(path.join(root,'delivery-recovery'));const receipt=JSON.parse(await fs.readFile(path.join(root,'delivery-recovery',files.find(name=>!name.endsWith('.lock.json'))!),'utf8'));expect(receipt.remoteOutcomeVerified).toBe(false);
+});
 it.each(['pid','token','runs','escaped-runs','releases','blockers','attempts'] as const)('refuses ambiguous recovery %s evidence even when the final value looks recoverable',async field=>{
  const {root,lease,state}=await fixture(),prior=await inspectDeliveryRecovery(root);
  let marker=lease,history=state;

@@ -16,7 +16,7 @@ import {synthesisSummary} from './synthesisMetrics.ts';
 import {synthesisRequirements,requireSynthesisTraceability} from './synthesisTraceability.ts';
 import {planningSkillReferences,requireSynthesisSkills} from './synthesisSkills.ts';
 
-export interface SynthesisContext {checkoutPath:string;fingerprint:string;copilotPaused:boolean;skills:unknown[]}
+export interface SynthesisContext {checkoutPath:string;fingerprint:string;copilotPaused:boolean;skills:unknown[];discoveryRecord?:import('../shared/deliveryRecord.ts').DeliveryRecord}
 export interface SynthesisDependencies {
   reserve(repoId:string,jobId:string):AuxiliarySessionLease;
   context(repoId:string,input?:HldInput):SynthesisContext;
@@ -84,7 +84,7 @@ export class HldSynthesisService {
     const requirements=JSON.stringify(input);
     if(Buffer.byteLength(requirements)>128*1024)throw new HttpError(413,'Synthesis requirements exceed their bound');
     if(auditDlpCompliance(requirements,'architecture-requirements').length)throw new HttpError(409,'Architecture requirements failed the local connector safeguard');
-    try{synthesisRequirements(input);}catch(error){throw new HttpError(413,errorText(error));}
+    try{synthesisRequirements(input,context.discoveryRecord);}catch(error){throw new HttpError(413,errorText(error));}
     const job:SynthesisJob={id:crypto.randomUUID(),repoId,status:'queued',runtime:'codex-cli',startedAt,deadlineMs:DEADLINE,events:[],costUsd:0,turns:0};
     const lease=this.deps.reserve(repoId,job.id);
     const controller=new AbortController();
@@ -151,9 +151,9 @@ export class HldSynthesisService {
     const blocker=await Promise.race([this.deps.admission(job.repoId),new Promise<string>(resolve=>{if(signal.aborted)resolve('Synthesis cancelled');else signal.addEventListener('abort',()=>resolve('Synthesis cancelled'),{once:true});})]);
     this.guard(job,context,signal);if(blocker){this.finish(job,'blocked',blocker);return;}
     job.status='running';this.event(job,'progress','Model synthesis started in isolated read-only Codex planning with inherited configuration disabled');await this.persist();this.guard(job,context,signal);
-    const catalogue=synthesisRequirements(input);
+    const catalogue=synthesisRequirements(input,context.discoveryRecord);
     const skills=planningSkillReferences(context.skills,context.copilotPaused);
-    const prompt=JSON.stringify({requirements:input,requirementCatalogue:catalogue,traceabilityRule:'Cover every catalogue ID exactly once; copy its sourceSha256, and link to existing unique implementationPlan step IDs. Design and acceptance text require independent QA review.',skillBindingRule:'Select at least one supplied skill when available. Copy its ID and sha256 into skillBindings, cite valid plan step IDs and explain its use. Installation does not verify runtime tools; toolStatus must remain unverified.',installedSkillReferences:skills,copilotStudioPaused:context.copilotPaused});
+    const prompt=JSON.stringify({requirements:input,discoveryEvidence:context.discoveryRecord??null,requirementCatalogue:catalogue,traceabilityRule:'Cover every catalogue ID exactly once; copy its sourceSha256, and link to existing unique implementationPlan step IDs. Design and acceptance text require independent QA review.',skillBindingRule:'Select at least one supplied skill when available. Copy its ID and sha256 into skillBindings, cite valid plan step IDs and explain its use. Installation does not verify runtime tools; toolStatus must remain unverified.',installedSkillReferences:skills,copilotStudioPaused:context.copilotPaused});
     if(Buffer.byteLength(prompt)>256*1024)throw new HttpError(413,'Architecture planning context exceeds its bound');
     let runtimeFinished=false;
     let finish!:(result:Parameters<SessionCallbacks['finished']>[0])=>void;
@@ -176,11 +176,12 @@ export class HldSynthesisService {
     job.status='saving';this.event(job,'progress','Validating and publishing the model-generated draft');await this.persist();this.guard(job,context,signal);
     const docId=`HLD-${crypto.randomUUID()}`,elapsedMs=Date.now()-job.startedAt;
     const sections=[['Summary',design.summary],['Architecture',design.architecture],['Data model',design.dataModel],['Security and governance',design.securityAndGovernance],['Operations and recovery',design.operationsAndRecovery]];
+    if(context.discoveryRecord)sections.push(['Captured discovery and delivery scope',JSON.stringify({reference:{id:context.discoveryRecord.id,revision:context.discoveryRecord.revision,sha256:context.discoveryRecord.sha256},content:context.discoveryRecord.content},null,2)]);
     sections.push(['Declared-source traceability',catalogue.map(source=>`${source.id}: ${source.text}\nSource SHA-256: ${source.sourceSha256}\nPlan steps: ${design.requirements.find(row=>row.requirementId===source.id)!.planStepIds.join(', ')}`).join('\n\n')]);
     sections.push(['Selected installed skill guidance',design.skillBindings.length?design.skillBindings.map(binding=>`${binding.skillId} · SHA-256 ${binding.sourceSha256}\nPlan steps: ${binding.planStepIds.join(', ')}\nRationale: ${binding.rationale}\nRuntime tool/tenant availability: unverified`).join('\n\n'):'No selected installed skill guidance is available; tool/tenant readiness remains unverified.']);
     const missingEvidence=[...new Set([...design.missingEvidence,'Independent architecture approval and live tenant schema, DLP, deployment and runtime verification remain required.'])];
     const markdownContent=`# Architecture draft: ${input.solutionName}\n\nDocument: ${docId}\nStatus: Draft, unreviewed. Model synthesis; no deployment or compliance approval.\n\n${sections.map(([title,text])=>`## ${title}\n${text}`).join('\n\n')}\n\n## Decisions and alternatives\n${design.decisions.map(item=>`${item.decision}\nRationale: ${item.rationale}\nAlternatives: ${item.alternatives}`).join('\n\n')}\n\n## Requirements and acceptance\n${design.requirements.map(item=>`${item.requirement}\nDesign: ${item.design}\nAcceptance: ${item.acceptance}`).join('\n\n')}\n\n## Risks\n${design.risks.map(item=>`${item.risk}\nMitigation: ${item.mitigation}`).join('\n\n')}\n\n## Implementation plan\n${design.implementationPlan.map(item=>`### ${item.id}: ${item.title}\nDeliverables: ${item.deliverables.join('; ')}\nAcceptance: ${item.acceptance.join('; ')}`).join('\n\n')}\n\n## Diagrams\n${Object.entries(design.mermaidDiagrams).map(([name,text])=>`### ${name}\n\`\`\`mermaid\n${text}\n\`\`\``).join('\n\n')}\n\n## Missing evidence\n${missingEvidence.map(text=>`- ${text}`).join('\n')}`;
-    const draft:HldResult={docId,generatedAt:Date.now(),solutionName:input.solutionName,status:'draft',generationMethod:'model-synthesis',synthesis:{runtime:'codex-cli',jobId:job.id,startedAt:job.startedAt,elapsedMs,deadlineMs:DEADLINE},missingEvidence,implementationPlan:design.implementationPlan,markdownContent,mermaidDiagrams:design.mermaidDiagrams};
+    const draft:HldResult={docId,generatedAt:Date.now(),solutionName:input.solutionName,status:'draft',generationMethod:'model-synthesis',...(context.discoveryRecord?{deliveryRecord:{id:context.discoveryRecord.id,revision:context.discoveryRecord.revision,sha256:context.discoveryRecord.sha256}}:{}),synthesis:{runtime:'codex-cli',jobId:job.id,startedAt:job.startedAt,elapsedMs,deadlineMs:DEADLINE},missingEvidence,implementationPlan:design.implementationPlan,markdownContent,mermaidDiagrams:design.mermaidDiagrams};
     hldResultSchema.parse(draft);
     const saved=await saveHldArtifact(context.checkoutPath,input,draft,()=>this.guard(job,context,signal),job.repoId);this.guard(job,context,signal);
     await this.commitCompletion(job,{docId,artifactSha256:saved.artifactSha256!},context,signal);

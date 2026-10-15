@@ -9,12 +9,14 @@ const digest=z.string().regex(/^[a-f0-9]{64}$/);
 export const governancePhase=z.enum(['build','test','import','post-deploy','verify','health']);
 export type GovernancePhase=z.infer<typeof governancePhase>;
 export interface LifecycleRequest {
-  phase:GovernancePhase;sourceCommit:string;environmentUrl:string;releaseId:string;checkout:string;manifest:unknown;packageSha256?:string;settingsSha256?:string;signal?:AbortSignal;evidenceDirectory?:string;resourceSchemaReferences?:ResourceSchemaReference[];
+  phase:GovernancePhase;sourceCommit:string;environmentUrl:string;releaseId:string;checkout:string;manifest:unknown;packageSha256?:string;settingsSha256?:string;signal?:AbortSignal;evidenceDirectory?:string;resourceSchemaReferences?:ResourceSchemaReference[];acceptanceProfile?:'production'|'functional-development';
 }
 const resultSchema=z.object({status:z.enum(['clear','blocked','unavailable']),phase:governancePhase,sourceCommit:digest.or(z.string().regex(/^[a-f0-9]{40}$/)),
   environmentUrl:z.url(),releaseId:z.string().min(1),manifestSha256:digest,checkedAt:z.iso.datetime(),
   artifactSha256:digest.optional(),policySha256:digest.optional(),schemaSha256:digest.optional(),
   settingsSha256:digest.optional(),
+  assurance:z.enum(['manual-functional-development']).optional(),manualAssessmentId:z.uuid().optional(),
+  manualAssessmentFile:z.string().regex(/^manual-assessment-[a-f0-9-]{36}\.json$/).optional(),
   packageInventoryFile:z.string().regex(/^package-inventory-[a-f0-9]{64}\.json$/).optional(),
   packageInventorySha256:digest.optional(),
   declaredSchemaFile:z.string().regex(/^declared-schema-[a-f0-9]{64}\.json$/).optional(),
@@ -23,6 +25,7 @@ const resultSchema=z.object({status:z.enum(['clear','blocked','unavailable']),ph
   reasons:z.array(z.string().min(1).max(1000)).min(1).max(30),
 }).strict().superRefine((result,ctx)=>{
   if(result.status==='clear'&&(!result.artifactSha256||!result.policySha256||!result.schemaSha256))ctx.addIssue({code:'custom',message:'Clear governance requires complete artifact, policy and schema evidence'});
+  if(result.assurance==='manual-functional-development'&&!result.manualAssessmentId)ctx.addIssue({code:'custom',message:'Manual development assurance requires its independent assessment identity'});
   if(result.packageInventorySha256&&!result.packageInventoryFile||result.packageInventoryFile&&result.artifactSha256&&result.packageInventoryFile!==`package-inventory-${result.artifactSha256}.json`)ctx.addIssue({code:'custom',message:'Package inventory digest and pointer must match the recorded artifact'});
   if(result.status==='clear'&&result.packageInventoryFile&&!result.packageInventorySha256)ctx.addIssue({code:'custom',message:'Clear governance requires a content digest for its package inventory'});
 });
@@ -38,7 +41,7 @@ export function unavailableGovernance(request:LifecycleRequest,reasons=['Complet
 export async function requireLifecycleGovernance(check:LifecycleCheck|undefined,request:LifecycleRequest,evidenceDirectory:string,index:number,now?:number,onCancellationPending?:(reason:'deadline'|'cancelled')=>void|Promise<void>) {
   const started=performance.now(),startedWall=now??Date.now();
   const captured={...request,manifest:structuredClone(request.manifest),resourceSchemaReferences:request.resourceSchemaReferences?structuredClone(request.resourceSchemaReferences):undefined};
-  const scopeDigest=(value:LifecycleRequest)=>manifestDigest({phase:value.phase,sourceCommit:value.sourceCommit,environmentUrl:value.environmentUrl,releaseId:value.releaseId,checkout:value.checkout,manifest:value.manifest,packageSha256:value.packageSha256,settingsSha256:value.settingsSha256,evidenceDirectory:value.evidenceDirectory,resourceSchemaReferences:value.resourceSchemaReferences});
+  const scopeDigest=(value:LifecycleRequest)=>manifestDigest({phase:value.phase,sourceCommit:value.sourceCommit,environmentUrl:value.environmentUrl,releaseId:value.releaseId,checkout:value.checkout,manifest:value.manifest,packageSha256:value.packageSha256,settingsSha256:value.settingsSha256,evidenceDirectory:value.evidenceDirectory,resourceSchemaReferences:value.resourceSchemaReferences,acceptanceProfile:value.acceptanceProfile});
   const pinned=scopeDigest(captured),manifestSha256=manifestDigest(captured.manifest),signal=request.signal;
   let providerInput:LifecycleRequest|undefined,providerSignal:AbortSignal|undefined;
   const unchanged=()=>{try{return request.signal===signal&&scopeDigest(request)===pinned&&(!providerInput||providerInput.signal===providerSignal&&scopeDigest(providerInput)===pinned);}catch{return false;}};
@@ -75,7 +78,7 @@ export async function requireLifecycleGovernance(check:LifecycleCheck|undefined,
     if(controller.signal.aborted||signal?.aborted||!unchanged()) throw new Error('cancelled or changed');
     result=resultSchema.parse(value);
     const evaluatedAt=now??Date.now();
-    if(!current(evaluatedAt)||!fresh(result,evaluatedAt)||result.phase!==captured.phase||result.sourceCommit!==captured.sourceCommit||result.environmentUrl!==captured.environmentUrl||result.releaseId!==captured.releaseId||result.manifestSha256!==manifestSha256||(result.status==='clear'&&captured.packageSha256&&result.artifactSha256!==captured.packageSha256)||(result.status==='clear'&&captured.settingsSha256&&result.settingsSha256!==captured.settingsSha256)) throw new Error('mismatch');
+    if(!current(evaluatedAt)||!fresh(result,evaluatedAt)||result.phase!==captured.phase||result.sourceCommit!==captured.sourceCommit||result.environmentUrl!==captured.environmentUrl||result.releaseId!==captured.releaseId||result.manifestSha256!==manifestSha256||(result.assurance==='manual-functional-development'&&captured.acceptanceProfile!=='functional-development')||(result.status==='clear'&&captured.packageSha256&&result.artifactSha256!==captured.packageSha256)||(result.status==='clear'&&captured.settingsSha256&&result.settingsSha256!==captured.settingsSha256)) throw new Error('mismatch');
   } catch {result=unavailableGovernance(captured,['Governance provider failed or returned stale, incomplete or mismatched evidence']);}
   const file=`governance-${index}-${captured.phase}.json`;
   try{await atomicWrite(path.join(evidenceDirectory,file),JSON.stringify(result,null,2),()=>result.status!=='clear'||authorized(result));}

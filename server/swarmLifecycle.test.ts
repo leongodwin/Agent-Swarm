@@ -59,6 +59,19 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(() => vi.useFakeTimers());
+it('blocks manual and automatic implementation assignment at the delivery stage gate before preparation',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{});
+  swarm.deliveryWorkGate=()=>{throw new Error('Independent design review is required');};
+  await expect(swarm.assign(agent.id,1)).rejects.toThrow('design review');expect(fake.prepareDesk).not.toHaveBeenCalled();
+  swarm.updateRepo('synthetic/repo',{autoAssign:true});await vi.advanceTimersByTimeAsync(60_000);expect(fake.prepareDesk).not.toHaveBeenCalled();expect(fake.startSession).not.toHaveBeenCalled();
+});
+it('gives discovery workers a documentation-only workflow and rechecks the gate before subsequent tools',async()=>{
+  const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{});let allowed=true;
+  swarm.deliveryTaskStage=()=> 'discovery';swarm.deliveryWorkGate=()=>{if(!allowed)throw new Error('Record target changed');};
+  await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+  const options=fake.startSession.mock.calls[0][0] as SessionOptions;expect(options.systemAppend).toContain('do not implement application code');
+  expect(await options.authorizeTool!()).toBeNull();allowed=false;expect(await options.authorizeTool!()).toBe('Record target changed');
+});
 it('keeps routing held through unavailable prerequisite reads and returns a fresh verified refusal after repair',async()=>{
  const {swarm,fake}=await office(true);let release!:(state:'CLOSED')=>void;
  fake.issueState.mockImplementation(async(_repo,number)=>{if(number===2)throw new Error('private-auth-token');return new Promise(resolve=>{release=resolve;});});
@@ -386,6 +399,12 @@ async function qaOffice(head = pull.headSha) {
   expect(fixture.fake.startSession).toHaveBeenCalledOnce();
   return {...fixture, callbacks: fixture.fake.startSession.mock.calls[0][1]};
 }
+it('holds unrelated queued QA before preparing a reviewer or starting its native session',async()=>{
+  const {swarm,fake}=await office(true,backend=>{backend.listPulls.mockResolvedValue([pull]);});
+  swarm.deliveryWorkGate=()=>{throw new Error('PR is outside the recorded pilot scope');};
+  await swarm.sendToQa('synthetic/repo',7);await vi.advanceTimersByTimeAsync(60_000);
+  expect(fake.startSession).not.toHaveBeenCalled();expect(fake.prepareDesk).not.toHaveBeenCalled();expect(swarm.snapshot().qa[0].status).toBe('queued');
+});
 async function finishQa(swarm: Swarm, callbacks: SessionCallbacks, report: unknown) {
   callbacks.finished({ok: true, structured: report, text: '', costUsd: 0, turns: 1, errors: []});
   for (let i = 0; i < 50 && swarm.snapshot().qa[0].status === 'testing'; i++) await Promise.resolve();

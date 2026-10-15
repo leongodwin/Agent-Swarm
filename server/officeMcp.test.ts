@@ -19,7 +19,7 @@ it('preserves schemas, guarded actions and revocation over stateless HTTP MCP',a
   const address=server.address() as {port:number};const client=new Client({name:'office-http-test',version:'1'});
   try{
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
-    const listed=await client.listTools();expect(listed.tools).toHaveLength(5);
+    const listed=await client.listTools();expect(listed.tools).toHaveLength(6);
     expect(listed.tools.find(tool=>tool.name==='canvas_authoring_acquire')?.inputSchema.additionalProperties).toBe(false);
     const args={app:'11111111-1111-4111-8111-111111111111',owner:'fixture'};
     expect((await client.callTool({name:'canvas_authoring_acquire',arguments:{...args,owner:''}})).isError).toBe(true);expect(acquire).not.toHaveBeenCalled();

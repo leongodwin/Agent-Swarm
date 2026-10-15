@@ -42,6 +42,8 @@ export interface FloorOptions {
 }
 
 export const api = {
+  deliveryRecord: (repoId:string) => call<{record:import('../../shared/deliveryRecord').DeliveryRecord|null;phase:string;blockers:string[];demo:boolean}>('GET',`${r(repoId)}/delivery-record`),
+  reviewDeliveryRecord: (repoId:string) => call('POST',`${r(repoId)}/delivery-record/review`,{}),
   officeRuntime:()=>call<{pid:number;startedAt:string;draining:boolean;authenticationWork?:import('../../shared/tenancy').TenancyActivity;reload?:import('../../server/officeReload.mjs').ReloadState}>('GET','/api/runtime',undefined,true),
   tenantDlp: () => call<import('../../shared/tenantDlp').TenantDlpView>('GET', '/api/governance/tenant'),
   toolGovernance: () => call<import('../../shared/toolGovernance').ToolGovernanceView>('GET', '/api/governance/tools'),
