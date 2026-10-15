@@ -1,5 +1,7 @@
 # Remediation — 9 October 2026
 
+Historical review and remediation checkpoint. Counts, line references and working-tree/process descriptions below are dated evidence, not current acceptance. See [current status](docs/PRODUCTION-GOAL-STATUS.md) and the [backend pilot report](docs/BACKEND-PILOT-COMPLETION.md).
+
 All twelve findings and the enhancement recommendations below have been implemented in the working tree. The original review is retained as historical context; its line references and original verification counts describe the pre-fix code.
 
 | Finding | Resolution |

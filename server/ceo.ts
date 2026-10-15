@@ -22,6 +22,8 @@ export interface CeoJob {
 
 /** What the CEO's tools do. Implemented by the swarm; errors are returned to the CEO as tool errors. */
 export interface OfficeHandlers {
+  deliveryRecord?: RecordToolHandler;
+  reviewDeliveryRecord?(repoId:string):Promise<string>;
   companyStatus(): string;
   deliveryStatus?(): string;
   capabilityStatus?(): string;
@@ -55,6 +57,13 @@ export interface OfficeTools {
 
 const EFFORT = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 
+export type RecordToolHandler = (input: {repo_id:string; action:'read'|'save'|'inspect_repository'|'finding'|'synthesize_design'|'design_result'|'review'|'accept_slice'; expected_revision?:number; payload_json?:string}) => Promise<string>;
+function recordTools(handler?:RecordToolHandler) {
+  return [tool('delivery_record', 'Read the shared delivery record and gates. CEO saves the scoped record; workers add discovery findings; assigned QA reviews an exact design. Payload contracts are in docs/DELIVERY.md. Evidence is reported observation, not automatic tenant certification.', {
+    repo_id:z.string(), action:z.enum(['read','save','inspect_repository','finding','synthesize_design','design_result','review','accept_slice']), expected_revision:z.number().int().nonnegative().optional(), payload_json:z.string().max(256*1024).optional(),
+  }, async input => {try{return {content:[{type:'text' as const,text:handler?await handler(input):'Delivery records unavailable'}]};}catch(error){return {isError:true,content:[{type:'text' as const,text:`Refused: ${(error as Error).message}`}]};}})];
+}
+
 function authorizeDefinitions<T extends OfficeToolDefinition>(defs: T[], authorize?: SessionAuthorization): T[] {
   return defs.map(def => ({...def, handler: async (args: Parameters<OfficeToolDefinition['handler']>[0], extra: Parameters<OfficeToolDefinition['handler']>[1]) => {
     const denied = authorize ? await sessionAuthority(authorize) : null;
@@ -72,6 +81,8 @@ export function createOfficeTools(h: OfficeHandlers, authorize?: SessionAuthoriz
     }
   };
   let defs = [
+    ...recordTools(h.deliveryRecord),
+    tool('review_delivery_record','Start the assigned independent QA agent on discovery and design before implementation.',{repo_id:z.string()},a=>run(()=>h.reviewDeliveryRecord?h.reviewDeliveryRecord(a.repo_id):'Delivery record review unavailable')),
     tool('installed_skills', 'Discover installed Power Platform instructions and content hashes. Installation does not prove tools or tenant access.', { task: z.string().max(2000).optional() }, (a) => run(() => { const catalogue = discoverSkills(); return JSON.stringify(a.task ? { ...catalogue, skills: selectSkills(catalogue, a.task) } : catalogue); })),
     tool('capability_status', 'Pre-assignment authentication, environment, licence, MCP, CLI and connector readiness; failed/unknown checks block new work.', {}, () => run(() => h.capabilityStatus?.() ?? 'Capability service unavailable')),
     tool('implementation_templates', 'List tested starter contracts or read a platform recipe. Tenant validation status is explicit.', { platform: z.enum(['canvas', 'power-pages', 'dataverse', 'flow', 'deployment', 'copilot-studio']).optional() }, (a) => run(() => JSON.stringify(a.platform ? templateFiles(a.platform as TemplateId) : templateCatalog()))),
@@ -203,7 +214,7 @@ export function ceoSystemPrompt(o: {
     'Your job is to run the company, not to write code:',
     '- Understand each project: what it is, its stack, how far along it is, and what kind of people it needs. Projects differ a lot. A static marketing site, a 3D browser game and a REST API need different specialists and different QA.',
     `- Shape each floor's team. Propose specialists with a specific title and a job description written for this project. Keep teams lean: agents on the same coding agent share one subscription's usage limits${o.sessionLimit ? ` and at most ${o.sessionLimit} sessions run at once` : ''}, so a floor rarely needs more than ${o.teamCap} people. Propose letting people go when a floor is clearly overstaffed or a specialty is no longer needed.`,
-    "- Plan the work: turn a floor's brief into small, well-specified GitHub issues, one agent-session each, with acceptance criteria. Route each to a specialty. The office hands issues out itself: a free specialist gets first pick of their specialty, and otherwise any free developer takes the next issue that can start, so a specialty is a preference, not a lock.",
+    "- Plan the next accepted user journey. Before implementation, use delivery_record to establish the outcome, users, measurable acceptance, scope/exclusions, distinct delivery/QA owners, discovery findings, shared contracts and first vertical slice. Read docs/DELIVERY.md for its contract. Create discovery issues first and link their returned issue numbers to the record. Do not invent observed evidence or a source commit: use null until inspected. Ask the manager about material scope/behaviour/cost/access decisions while independent discovery continues. Challenge whether reuse or a smaller change solves the problem.",
     "- Write each floor's QA brief: what QA testers must check for this kind of project (for a 3D game: the canvas renders, controls respond, frame rate is smooth; for a website: links, phone layout, accessibility; for an API: status codes, validation, error cases).",
     '',
     'How you work:',
@@ -218,7 +229,7 @@ export function ceoSystemPrompt(o: {
     '- Titles are specific ("Three.js graphics engineer", not "Developer"). A specialty is a short lowercase slug ("graphics", "gameplay", "frontend", "backend", "content", "a11y", "devops"). Only route an issue to a specialty that someone on the floor has, or that you are proposing to hire.',
     '- Before proposing a hire, check the floor and the pending proposals for someone who already covers it. If the manager declined a similar proposal (recentDecisions), do not propose it again unless something has changed, and say what.',
     `- ${o.hiring === 'auto' ? 'Hiring is on auto: proposals within the team cap are approved immediately, so be deliberate.' : 'The manager approves every hire, so explain each reason in a sentence or two they can decide on.'}`,
-    '- Issues: plan for parallel work. What keeps a floor busy is the number of issues that can start right now (capacity.issuesReadyToStart in company_status); aim for at least one per developer. Write "Depends on #N" only when an issue truly cannot start until #N\'s code is merged, because it waits until #N is closed. Keep dependency chains to two steps at most, keep foundation issues small, and split big pieces into parts that can be built side by side. The office starts the issues that hold up others first. Do not duplicate open issues: fix an existing issue\'s specialty or dependencies with route_issue. File at most 12 issues per job, or per message from the manager.',
+    '- Issues: honour real dependencies and stable shared contracts; do not manufacture parallel work to occupy developers. Finish discovery, synthesize a design from its evidence, and request review_delivery_record before implementation. Build/deploy/independently accept the smallest real vertical slice before wider implementation. Preserve existing issue ownership and link every task to requirement IDs and its stage. Do not duplicate open issues; use route_issue to correct routing. File at most 12 issues per job, or per message from the manager.',
     "- When company.usage in company_status says pacing or paused, the configured coding runtime's usage is constrained and the office is finishing open work first: file only what is needed next, not a whole milestone.",
     '- Your final message goes straight to the manager\'s phone. Keep it short and plain: what you found, what you proposed, what you filed, and any question you need answered. No headings, no tables.',
   ].join('\n');
@@ -273,7 +284,7 @@ export function ceoJobPrompt(
         '',
         'Plan the next milestone toward it:',
         `- Read the current code and the ${floor.backlog} open issues first, so you build on what exists and do not duplicate anything.`,
-        '- If the repository is empty or nearly empty, the first issue sets up a small project skeleton, and the others depend on it. Everything after that should be able to run side by side.',
+        '- Read delivery_record first. Establish discovery and resolve critical assumptions before implementation. Use the real dependency sequence; request independent design review, then prove a deployed vertical slice before wider work.',
         '- File the issues, each routed to a specialty. Enforce the target tenancy domain across all issues.',
         '- Make sure the floor has the specialists those issues need; propose hires if not.',
         '- Update the floor profile and QA brief if the brief changes what the project is.',
@@ -431,12 +442,15 @@ export function specialtySlug(s: string | undefined) {
 export const specialtyLabel = (slug: string) => `swarm:${slug}`;
 
 /** QA-only authority: reviewer identity is captured from the session, never accepted as an argument. */
-export function createDeliveryQaTools(status: () => string, approve: (id: string, hash: string) => Promise<string>, visual?: (id: string, review: unknown) => Promise<string>, authorize?: SessionAuthorization, architecture?: (id:string,hash:string,review:unknown)=>Promise<string>): OfficeTools {
+export function createDeliveryQaTools(status: () => string, approve: (id: string, hash: string) => Promise<string>, visual?: (id: string, review: unknown) => Promise<string>, authorize?: SessionAuthorization, architecture?: (id:string,hash:string,review:unknown)=>Promise<string>, records?:RecordToolHandler, manual?:{read:()=>string;review:(id:string,input:unknown)=>Promise<string>}): OfficeTools {
   const run = async (fn: () => string | Promise<string>) => {
     try { return { content: [{ type: 'text' as const, text: await fn() }] }; }
     catch (err) { return { content: [{ type: 'text' as const, text: String((err as Error).message) }], isError: true }; }
   };
   let defs = [
+    ...recordTools(records),
+    tool('manual_governance','Inspect pending hash-bound manual development assessments and their evidence. No production authority.',{},()=>run(()=>manual?.read()??'Manual governance unavailable')),
+    tool('review_governance','Independently review every required manual control for the exact assessment. Inspect actual referenced bytes and declare limits. A known conflict cannot be overridden.',{assessment_id:z.uuid(),decision:z.enum(['approved','rejected']),controls:z.array(z.enum(['package-scope','effective-policy','schema-and-permissions','licence-baseline','recovery-and-data'])).length(5),notes:z.string().min(80).max(8000)},a=>run(()=>manual?manual.review(a.assessment_id,{decision:a.decision,controls:a.controls,notes:a.notes}):'Manual governance unavailable')),
     tool('delivery_status', 'Read pinned releases and their immutable acceptance plans for independent QA review.', {}, () => run(status)),
     tool('review_architecture','Independently assess the committed HLD and implementation plan at the exact release head. Inspect requirements, decisions, risks and missing evidence. This does not certify model synthesis or tenant governance.',{release_id:z.string(),plan_hash:z.string(),artifact_sha256:z.string().regex(/^[a-f0-9]{64}$/),decision:z.enum(['approved','rejected']),notes:z.string().trim().min(80).max(8000)},a=>run(()=>architecture?architecture(a.release_id,a.plan_hash,{artifactSha256:a.artifact_sha256,decision:a.decision,notes:a.notes}):'Architecture review unavailable')),
     tool('approve_backend', 'Inspect runner-owned API assertions, correlated transaction evidence and recovery rehearsal for an API-only release. Does not approve UI or permission isolation.', { run_id: z.string(), evidence_hash: z.string(), notes: z.string().min(40), recovery_reviewed: z.literal(true) }, (a) => run(() => visual ? visual(a.run_id, { evidenceHash: a.evidence_hash, scores: [], notes: a.notes, recoveryReviewed: a.recovery_reviewed }) : 'Backend review unavailable')),
@@ -449,8 +463,9 @@ export function createDeliveryQaTools(status: () => string, approve: (id: string
 }
 
 /** Developer sessions can discover starters/readiness without obtaining release approval authority. */
-export function createEngineeringTools(capabilities: () => string, authoring?: { acquire(app: string, owner: string): Promise<unknown>; release(token: string): Promise<void> }, authorize?: SessionAuthorization): OfficeTools {
+export function createEngineeringTools(capabilities: () => string, authoring?: { acquire(app: string, owner: string): Promise<unknown>; release(token: string): Promise<void> }, authorize?: SessionAuthorization, records?:RecordToolHandler): OfficeTools {
   let defs = [
+    ...recordTools(records),
     tool('installed_skills', 'Discover installed Power Platform skills and hashes; verify their tools inside your session before using them.', { task: z.string().max(2000).optional() }, async (a) => { const catalogue = discoverSkills(); return { content: [{ type: 'text' as const, text: JSON.stringify(a.task ? { ...catalogue, skills: selectSkills(catalogue, a.task) } : catalogue) }] }; }),
     tool('capability_status', 'Read verified project capabilities and actionable blockers.', {}, async () => ({ content: [{ type: 'text' as const, text: capabilities() }] })),
     tool('canvas_authoring_acquire', 'Acquire exclusive local Canvas ownership before Studio/MCP edits. Keep the token until saving and closing your session. This does not force a remote Studio unlock.', { app: z.uuid(), owner: z.string().min(1).max(80) }, async (a) => { if (!authoring) throw new Error('Canvas ownership unavailable'); return { content: [{ type: 'text' as const, text: JSON.stringify(await authoring.acquire(a.app, a.owner)) }] }; }),

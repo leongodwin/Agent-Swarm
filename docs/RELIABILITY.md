@@ -1,5 +1,9 @@
 # Reliability priorities 5–8
 
+## Reading this evidence — updated 15 October 2026
+
+This file combines reliability contracts and dated implementation/validation checkpoints. Historical PIDs, runtime availability, test/coverage counts and “current” observations are not current operating state. Use [current status](PRODUCTION-GOAL-STATUS.md), [roadmap](AGENT-SWARM-IMPLEMENTATION-PLAN.md) and [delivery contract](DELIVERY.md) for present scope. The [accepted backend pilot](BACKEND-PILOT-COMPLETION.md) demonstrates only reference-only development delivery and owned-record recovery; it does not close full-app, production, sustained reliability or whole-backend coverage gaps. Codex, Gemini and OpenCode are the permitted runtimes; historical Claude/Copilot execution guidance is superseded.
+
 ## Live policy-reader warm reuse, 13 October
 
 After the user's sign-in reply, the running server initially had stale evidence and no reader handle. A fresh read created reader PID 37928. Selecting the already-authorized leon@graspai.co.uk account completed native authentication and policy discovery; the browser's localhost error page did not prevent the server from returning the authenticated observation. No callback URL, authentication code or token was replayed, stored in the evidence receipt or used to bypass the browser page.

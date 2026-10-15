@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DeliveryService, deliveryManifest, containedFile, installedSolution, pacReportedError, importJobId, type DeliveryDependencies } from './delivery.ts';
+import { DeliveryService, deliveryManifest, containedFile, installedSolution, pacReportedError, importJobId, retainOwnedRecoveryEvidence, type DeliveryDependencies } from './delivery.ts';
 import type { RepoView } from '../shared/types.ts';
 import { manifestDigest } from './lifecycleGovernance.ts';
 import {generateHldContent} from '../shared/hld.ts';
@@ -100,6 +100,44 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   const release = await service.createRelease(repo, plan); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
   return { service, repo, calls, root, deps, release };
 }
+it('binds raw recovery proof after retry, detects journal tampering and refuses an incomplete archive',async()=>{
+ const {service,root}=await fixture(),directory=path.join(root,'delivery-runs','retention-test','evidence');await fs.mkdir(directory,{recursive:true});
+ const files=['recovery-rehearsal.json'];await fs.writeFile(path.join(directory,files[0]),'signed summary');
+ await fs.writeFile(path.join(directory,'independent-recovery.json'),'owned result');
+ await expect(retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files)).rejects.toThrow();expect(files).toEqual(['recovery-rehearsal.json']);
+ await fs.writeFile(path.join(directory,'independent-recovery-journal.json'),'six snapshots');
+ await retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files);await retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files);
+ expect(files).toHaveLength(3);
+ const hash=(service as unknown as {evidenceHash(run:{id:string;evidence:string[]}):Promise<string>}).evidenceHash.bind(service),run={id:'retention-test',evidence:files};
+ const before=await hash(run);await fs.writeFile(path.join(directory,'independent-recovery-journal.json'),'changed snapshots');expect(await hash(run)).not.toBe(before);
+ await expect(retainOwnedRecoveryEvidence(undefined,path.join(root,'missing'),[])).resolves.toBeUndefined();
+});
+it('persists a restart-readable evidence set when project and independent reports share a file',async()=>{
+ const {service,repo,deps,root}=await fixture();deps.verify=async()=>['results.json'];
+ await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
+ expect(run.phase,run.error).toBe('reviewing');expect(run.evidence.filter(file=>file==='results.json')).toHaveLength(1);
+ const saved=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));expect(()=>validateDeliveryState(saved)).not.toThrow();
+ await service.close();const restarted=new DeliveryService(root,false,deps);services.push(restarted);await restarted.init();
+ expect(restarted.view().runs[0].evidenceHash).toBe(run.evidenceHash);expect(restarted.view().runs[0].phase).toBe('reviewing');
+});
+it.each(['production','functional-development'] as const)('limits broad publication to the original import path: %s',async profile=>{
+ const {service,repo,calls,deps}=await fixture(),base=deps.run,scoped={...manifest,manualDevelopmentGovernance:true};
+ deps.run=async(command,cwd,env,signal)=>{
+  if(command.executable==='git'&&command.args[0]==='show'&&command.args[1].endsWith(':cubefarm.delivery.json'))return JSON.stringify(scoped);
+  const output=await base(command,cwd,env,signal);
+  if(command.executable==='git'&&command.args[0]==='worktree'){await fs.writeFile(path.join(command.args[3],'cubefarm.delivery.json'),JSON.stringify(scoped));await fs.writeFile(path.join(command.args[3],'release.zip'),'PK build artifact');}
+  return output;
+ };
+ const release=await service.createRelease(repo,{...plan,acceptanceProfile:profile});await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);
+ await service.start(repo,true,release.id);await service.waitForIdle();const native=calls.find(call=>call.startsWith('pac solution import'));expect(native).toBeDefined();expect(native!.includes('--publish-changes')).toBe(profile==='production');
+});
+it('enforces the shared-record gate before release preparation and before deployment starts',async()=>{
+  const {service,repo,calls}=await fixture();const before=calls.length;
+  service.checkDeliveryRecord=()=>{throw new Error('Discovery or independent design review is missing');};
+  await expect(service.createRelease(repo,plan)).rejects.toThrow('Discovery');expect(calls).toHaveLength(before);
+  await expect(service.start(repo)).rejects.toThrow('Discovery');expect(calls).toHaveLength(before);
+});
+it('rejects unregistered monitoring contracts before storing a new release for QA',async()=>{const {service,repo}=await fixture();service.validateMonitoring=()=>{throw new Error('Unregistered monitoring probe');};const before=service.view().releases.length;await expect(service.createRelease(repo,{...plan,name:'Bad monitoring'})).rejects.toThrow('Unregistered monitoring');expect(service.view().releases).toHaveLength(before);});
 it.each(['manifest','escaped-manifest','required-issue','architecture'] as const)('rejects ambiguous %s preflight evidence without building or importing',async mode=>{
  const {service,repo,deps,calls}=await fixture(),native=deps.run;
  deps.run=async(...args)=>{

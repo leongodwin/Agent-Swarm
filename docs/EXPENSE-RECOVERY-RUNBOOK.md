@@ -1,5 +1,7 @@
 # Expense application forward-repair rehearsal
 
+Scope clarification, 15 October 2026: this is the combined-application forward-repair procedure for its explicitly named Development target. It is separate from the [reference-only backend pilot](BACKEND-PILOT-COMPLETION.md) and its retained owned-record rehearsal in MyDevNet. Neither procedure authorizes switching targets, production recovery or replaying ambiguous operations. Reconfirm current authorization, identity and independent review before use.
+
 ## Authorized scope and prerequisites
 
 Use only the explicitly authorized Development target `https://org68dad46d.crm4.dynamics.com`; organization `276d6f5c-20f4-46de-a631-825a64953d21`, Leon Dataverse user `5a89d846-73f1-eb11-94ee-000d3ab40fca`. Verify WhoAmI before every mutation phase. Do not switch the default authentication profile or modify MyDevNet. Keep Copilot Studio paused and reject archives containing bot components.

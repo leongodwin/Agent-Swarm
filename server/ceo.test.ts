@@ -10,7 +10,7 @@ it('gives developers readiness and templates without QA approval authority', asy
   await tools.server.instance.connect(serverTransport); await client.connect(clientTransport);
   try {
     const listed = await client.listTools();
-    expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['canvas_authoring_acquire', 'canvas_authoring_release', 'capability_status', 'implementation_templates', 'installed_skills']);
+    expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['canvas_authoring_acquire', 'canvas_authoring_release', 'capability_status', 'delivery_record', 'implementation_templates', 'installed_skills']);
     const catalogue = await client.callTool({ name: 'installed_skills', arguments: { task: 'Dataverse schema' } });
     expect(catalogue.isError).not.toBe(true);
     const status = await client.callTool({ name: 'capability_status', arguments: {} });
@@ -28,7 +28,7 @@ it('exposes only status and session-bound release approval to QA', async () => {
   await tools.server.instance.connect(serverTransport); await client.connect(clientTransport);
   try {
     const listed = await client.listTools();
-    expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['approve_backend', 'approve_release', 'approve_visual', 'delivery_status', 'review_architecture']);
+    expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['approve_backend', 'approve_release', 'approve_visual', 'delivery_record', 'delivery_status', 'manual_governance', 'review_architecture', 'review_governance']);
     await client.callTool({ name: 'approve_release', arguments: { release_id: 'release', plan_hash: 'hash' } });
     expect(approved).toEqual([['release', 'hash']]);
   } finally { await client.close(); await tools.server.instance.close(); }
@@ -154,7 +154,7 @@ describe('office tools', () => {
   it('lists every tool the CEO relies on', async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['agent_detail', 'capability_status', 'company_status', 'create_release', 'delivery_status', 'file_issue', 'implementation_templates', 'installed_skills', 'propose_hire', 'propose_let_go', 'review_release', 'route_issue', 'set_floor_profile', 'update_job']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['agent_detail', 'capability_status', 'company_status', 'create_release', 'delivery_record', 'delivery_status', 'file_issue', 'implementation_templates', 'installed_skills', 'propose_hire', 'propose_let_go', 'review_delivery_record', 'review_release', 'route_issue', 'set_floor_profile', 'update_job']);
   });
 
   it('still takes preview_env as a map of strings', async () => {

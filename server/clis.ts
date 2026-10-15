@@ -318,28 +318,37 @@ const chunks = [];let inputBytes=0;
 process.stdin.on('data', (c) => {inputBytes+=c.length;if(inputBytes<=1024*1024)chunks.push(c);});
 process.stdin.on('end', async () => {
   let body = {};
+  let stage = 'input';
   try {
     if(inputBytes>1024*1024)throw new Error('Hook input exceeds its bound');
     body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    stage = 'identity';
     const actualHash=require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync(__filename)).digest('hex');
     if(expectedEvent&&body.hook_event_name!==expectedEvent)throw new Error('Hook event identity changed');
     if(expectedHash&&expectedHash!==actualHash)throw new Error('Hook source identity changed');
     body.bridgeSha256=actualHash;
+    stage = 'endpoint';
     if (!url) throw new Error('Office hook URL unavailable');
     const endpoint = new URL(url);
     if (endpoint.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) throw new Error('Office hook must use loopback');
-    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+    // Persisted governance decisions can outlast five seconds under native
+    // startup/disk load. Stay bounded within the CLI's 120-second hook budget.
+    stage = 'transport';
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+    stage = 'response';
     if (!response.ok) throw new Error('Office hook unavailable');
     const answer = await response.json();
+    stage = 'decision';
     if (body.hook_event_name === 'PreToolUse' && !['allow', 'deny'].includes(answer?.hookSpecificOutput?.permissionDecision)) throw new Error('No verified pre-tool decision');
     // Codex retains its native permission rules. Claude's existing unattended
     // mode explicitly opts into approval after the office safeguard succeeds.
     const preservePermissions = !process.argv.includes('--approve-governed');
     process.stdout.write(JSON.stringify(preservePermissions && body.hook_event_name === 'PreToolUse' && answer?.hookSpecificOutput?.permissionDecision === 'allow' ? {} : answer));
-  } catch {
+  } catch (error) {
     if ((expectedEvent??body.hook_event_name) === 'PreToolUse') {
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Office governance unavailable; execution denied' } }));
-      process.stderr.write('Office governance unavailable; execution denied.');
+      const reason = 'Office governance unavailable at ' + stage + (error?.name === 'TimeoutError' ? ' (timeout)' : '') + '; execution denied';
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
+      process.stderr.write(reason + '.');
       // Native Codex reliably honors a successful structured denial; an error exit can be treated as a failed hook.
       process.exitCode = 0;
     } else process.stdout.write('{}');

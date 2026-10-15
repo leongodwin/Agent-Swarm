@@ -1,16 +1,18 @@
 # Tool request safeguards and operational evidence
 
-The office now applies a common request checkpoint to Claude Agent SDK pre-tool hooks and permission callbacks, plus connected CLI PreToolUse hooks. Recognized local connector patterns, anonymous-auth payloads and paused Copilot Studio operations can be denied before dispatch. Invalid/uninspectable requests, unavailable governance and unsaved audit decisions deny execution.
+The office applies request-local governance through supported runtime bridges and connected CLI pre-tool hooks. Current execution policy permits Codex, Gemini and OpenCode; Claude, GitHub Copilot CLI and SDK execution are disabled. Historical SDK hooks remain implementation/test history, not an available runtime. Recognized local connector patterns, anonymous-auth payloads and paused Copilot Studio operations can be denied before dispatch. Invalid/uninspectable requests, unavailable governance and unsaved audit decisions deny execution.
 
 This is a request-local safeguard, **not full tenant DLP enforcement, schema validation or a command sandbox**. A safe-looking shell request can invoke an indirect script with different behavior. Native Read/Glob/Grep remain available for diagnosis; non-artifact documentation remains writable. File edits and patches inspect proposed additions/replacements so removal of a prohibited integration is not blocked merely because the old text contains it. Full resulting-artifact checks and actual tenant policy evaluation remain separate work.
 
 ## Runtime and restart behavior
 
+The SDK/Claude bullets below describe legacy hook behavior only. Current native bridges are implemented for permitted runtimes, but bridge presence is not end-to-end certification of every vendor execution path. See [reliability evidence](RELIABILITY.md) and the delivery contract; reverify installed-version behavior before relying on enforcement.
+
 - SDK pre-tool hooks check requests even where acceptEdits would bypass permission prompting. Successful hooks leave normal SDK handling in control; denials override execution. Permission callbacks also check and can produce a second checkpoint for the same tool. Counts therefore describe observed checkpoints, not distinct calls or coverage percentages.
 - Claude's unattended mode approves only after the office check and audit succeed. Its pre-tool command bridge returns a denial on unavailable or malformed responses.
 - Trusted Codex hooks relay denials rather than discarding the reply. Allowed checks preserve native Codex permission handling. The helper only sends request data to a validated loopback office endpoint and uses explicit deny output plus exit code 2 on transport failure. Hook program crash or timeout outside that handling remains a vendor/runtime limitation; this is not a guarantee that every Codex execution path is gated.
 - Retained CLI helpers are upgraded before reopening keeper hooks after restart. Missing sessions, handler failures and keeper wait timeouts produce denial responses for PreToolUse; observational event failures remain nonblocking.
-- OpenCode, GitHub Copilot CLI and untrusted hooks are not certified as pre-tool-enforced by this feed. Do not infer enforcement from the presence of an installed CLI or from historical green tests. Strict governed cloud delivery still needs certified runtime/adapters and tenant policy/schema evidence.
+- Untrusted hooks are not certified as pre-tool-enforced. OpenCode and Gemini require their supported governance bridges and runtime prerequisites; GitHub Copilot CLI is excluded. Do not infer enforcement from the presence of an installed CLI or from historical green tests. Strict governed cloud delivery still needs certified runtime/adapters and tenant policy/schema evidence.
 
 Protocol behavior is based on the installed SDK types and [official Codex hook documentation](https://developers.openai.com/codex/hooks), including native permission behavior and blocking output. Version-specific end-to-end runtime certification remains required.
 

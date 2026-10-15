@@ -7,5 +7,7 @@ for(const kind of ['storage','limit','invalid'] as const)test(`shows ${kind} fai
  await page.goto('/?quality=low');await page.getByRole('button',{name:'Enter the office',exact:true}).click();await page.evaluate(()=>{const store=(window as any).__swarmStore;store.setState({demo:false});store.getState().openOverlay({kind:'alm-kiosk'});});
  const message=kind==='storage'?'Readiness could not be saved':kind==='limit'?'Readiness records exceed their size or processing limit':'Readiness records could not be validated';
  const alert=page.getByRole('alert').filter({hasText:message});await expect(alert).toBeVisible();await expect(page.getByRole('button',{name:'Run / resume latest release',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'Pause automatic delivery',exact:true})).toBeEnabled();
- await page.getByText('Capabilities and implementation starters',{exact:true}).click();await expect(page.getByRole('button',{name:'Refresh readiness',exact:true})).toBeEnabled();await alert.screenshot({animations:'disabled',path:`.swarm-reliability/capability-${kind}-ui.png`});
+ await page.getByText('Capabilities and implementation starters',{exact:true}).click();await expect(page.getByRole('button',{name:'Refresh readiness',exact:true})).toBeEnabled();await page.screenshot({animations:'disabled',path:`.swarm-reliability/capability-${kind}-ui.png`});
+ // Polling can replace the alert during capture; the warning and execution hold must persist.
+ await expect(alert).toBeVisible();await expect(page.getByRole('button',{name:'Run / resume latest release',exact:true})).toBeDisabled();
 });

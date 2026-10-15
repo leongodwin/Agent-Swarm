@@ -2,9 +2,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { targetBindingSchema, verifyTarget, type Request } from './targetOperations.ts';
+import {backendJourneySchema,verifyBackendJourney} from './backendJourney.ts';
 
 export const apiVerificationSchema = z.object({
   binding: targetBindingSchema,
+  transaction:backendJourneySchema.optional(),
   checks: z.array(z.object({ name: z.string().min(5).max(200), criterion: z.number().int().nonnegative(),
     category: z.enum(['journey', 'authorization', 'persistence', 'error-handling']),
     resource: z.string().min(1).max(2000).refine((value) => /^[A-Za-z][A-Za-z0-9_]*(?:[?(\/]|$)/.test(value) && !/[\\\r\n#]/.test(value) && !value.includes('://') && !value.includes('..'), 'Use a relative Dataverse resource'),
@@ -16,11 +18,13 @@ function at(value: unknown, pointer: string[]) {
   return pointer.reduce<unknown>((current, key) => current && typeof current === 'object' && Object.hasOwn(current, key) ? (current as Record<string, unknown>)[key] : undefined, value);
 }
 
-/** Runner-owned, read-only assertions; never executes project verification code. */
-export async function verifyApiIndependently(plan: ApiVerification, request: Request, evidence: string, signal: AbortSignal) {
+/** Runner-owned assertions plus an explicitly approved owned-record transaction;
+ * never executes project verification code. Legacy plans remain read-only. */
+export async function verifyApiIndependently(plan: ApiVerification, request: Request, evidence: string, signal: AbortSignal,context?:{runId:string;sourceCommit:string},authorizeTransaction?:()=>Promise<void>) {
   const results: { name: string; criterion: number; category: string; passed: boolean }[] = [];
   try {
     await verifyTarget(request, plan.binding);
+    const transaction=plan.transaction?(context?await verifyBackendJourney(plan.transaction,plan.binding,request,evidence,signal,context,'journey',authorizeTransaction):(()=>{throw new Error('Runner transaction context is required');})()):undefined;
     for (const check of plan.checks) {
       if (signal.aborted) throw new Error('API verification cancelled');
       await verifyTarget(request, plan.binding);
@@ -32,8 +36,8 @@ export async function verifyApiIndependently(plan: ApiVerification, request: Req
     await verifyTarget(request, plan.binding);
     if (signal.aborted) throw new Error('API verification cancelled');
     await fs.writeFile(path.join(evidence, 'independent-api.json'), JSON.stringify({ schemaVersion: 1, method: 'dataverse-api', binding: plan.binding, checkedAt: new Date().toISOString(), results,
-      limitations: ['Read-only backend observations; no UI acceptance or least-privilege isolation certification. Transaction scenarios require separate correlated runtime evidence.'] }, null, 2));
-    return ['independent-api.json'];
+      limitations: transaction?['Includes the explicit runner-owned synthetic transaction and audit-retention receipt; no UI acceptance or least-privilege isolation certification.']:['Read-only backend observations; no UI acceptance or least-privilege isolation certification. Transaction scenarios require separate correlated runtime evidence.'] }, null, 2));
+    return ['independent-api.json',...(transaction?[transaction.file,'independent-journey-journal.json']:[])];
   } catch (error) {
     await fs.writeFile(path.join(evidence, 'independent-api-failure.json'), JSON.stringify({ results, failed: true }, null, 2));
     throw error;

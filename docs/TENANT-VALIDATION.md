@@ -1,5 +1,9 @@
 # Tenant readiness and validation — 13 October 2026
 
+## Current scope — 15 October 2026
+
+The [reference-only backend pilot](BACKEND-PILOT-COMPLETION.md) is now deployed and independently accepted, including its shared slice receipt. It used the separately approved MyDevNet development target and existing-licence manual controls. This does not supersede the full-app gaps below: current UI receipt acceptance, intended-user isolation, integrated flows and production assurance remain open. Copilot remains paused. See [current status](PRODUCTION-GOAL-STATUS.md). All process states, authentication observations and “current/latest” headings below describe dated historical checkpoints; recheck them before action.
+
 ## Current checkpoint — 13 October 2026
 
 The combined non-Copilot expense application passed a live package reimport and data-preserving forward-repair rehearsal in the authorized Development test environment. Canvas submission/approval, independent Dataverse persistence, two independently received Inbox notifications, replay without duplicate sends, and 34 live server regression checks passed. All run-owned tenant fixtures were cleaned up and all pre-existing data/receipts and component membership preserved. The worker is Started; Copilot Studio remains paused.

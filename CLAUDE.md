@@ -1,16 +1,14 @@
 # cubefarm
 
-A cartoon first-person 3D office (React Three Fiber) over a Node orchestrator that runs one Claude Code session
-(Claude Agent SDK) per developer, QA tester and the CEO, each in its own git worktree, working through GitHub issues.
-This is the app the company runs on: a live office is running from this repo right now. README.md is the quick start; docs/how-it-works.md and CONTRIBUTING.md have the details.
+A cartoon first-person 3D office (React Three Fiber) over a Node orchestrator running coding-agent CLI sessions for developers, QA and the CEO in separate Git worktrees. Codex is the default; Gemini and OpenCode are the other permitted runtimes. Claude, GitHub Copilot CLI and SDK execution are excluded by current policy. This filename is retained for project-instruction compatibility, not permission to launch Claude.
+
+See [the documentation index](docs/README.md), [delivery contract](docs/DELIVERY.md) and [current status](docs/PRODUCTION-GOAL-STATUS.md). Live office location and process state must be discovered for the current session; historical paths and PIDs are not authoritative.
 It ships on npm as `cubefarm` (`npx cubefarm`); it used to be called Office Swarm.
 
 ## SAFETY (read first)
 
-- The live office runs from `C:\Projects\office-swarm` on this machine, on ports 4317 (server) and 5317 (Vite),
-  with its state in `~/.cubefarm`. Never edit or run anything there, never read or write `~/.cubefarm` directly, and
-  never use ports 4317 or 5317.
-- Test only in demo mode (fake GitHub, fake agents, no Claude usage), with an isolated `SWARM_HOME` and your reserved
+- Protect any running office and its real state. Do not assume a machine-specific checkout path. Use an isolated test home and reserved ports; never mutate live office state or restart its services as part of routine tests. Real delivery needs explicit session authorization and the scoped delivery gates.
+- Test only in demo mode (fake GitHub, fake agents, no real coding-agent usage), with an isolated `SWARM_HOME` and your reserved
   `SWARM_PORT` (from your job instructions):
 
   ```bash
@@ -29,10 +27,7 @@ It ships on npm as `cubefarm` (`npx cubefarm`); it used to be called Office Swar
   updates its own folder (git fetch + merge, npm install, build) when the office or you ask for it (`u`). Run it
   only in a throwaway clone outside the live office, with `--demo` and your `SWARM_HOME`, `SWARM_PORT` and
   `SWARM_CLIENT_PORT`.
-- Agents are ordinary coding-agent CLI sessions on the manager's own setup, unsandboxed, by the manager's choice. The
-  office's workflow rules (no pushes to the default branch, no merging, QA leaves GitHub alone) live in their prompts
-  and instructions, not in enforcement: don't add hooks, permission rules or sandboxes that refuse tool calls.
-  `ANTHROPIC_*` / `CLAUDE_*` are stripped from agent and preview env.
+- Agents run locally without filesystem/account sandbox guarantees. Supported hooks and office tools enforce request-local governance, delivery-record stages, scoped authority and independent review. Preserve these controls; they do not contain arbitrary external tools or revoke requests already issued. See [tool governance](docs/TOOL-GOVERNANCE.md). `ANTHROPIC_*` / `CLAUDE_*` are stripped from agent and preview environments.
 
 ## Scripts
 
@@ -45,9 +40,9 @@ It ships on npm as `cubefarm` (`npx cubefarm`); it used to be called Office Swar
 | `node scripts/smoke-package.mjs` | after a build: packs the npm package, installs it into a temp folder and boots its demo |
 | `node --import tsx server/index.ts --demo` | a demo office (see SAFETY for the env it needs) |
 
-CI (`.github/workflows/ci.yml`): Node 24 on `ubuntu-latest` and `windows-latest`, `npm ci` → `typecheck` → `test` →
-`build` → package smoke test, for every PR and push to `main`, with a throwaway `SWARM_HOME` and `SWARM_PORT=0`; a separate `e2e`
-job on `ubuntu-latest` runs `npm run test:e2e`. All three must pass locally
+CI (`.github/workflows/ci.yml`): Node 24 on `ubuntu-latest`, `windows-latest` and `macos-latest`, `npm ci` → `typecheck` → `test` →
+`build` → package smoke test, for every PR and push to `main`, with a throwaway `SWARM_HOME` and `SWARM_PORT=0`; three isolated `e2e` shards
+on `ubuntu-latest` run the full Playwright suite; a separate coverage job enforces 90.01% backend branch coverage. Required checks must pass locally
 before you open a PR.
 
 ## Code map
@@ -58,20 +53,14 @@ Server (`server/`, Node + Express 5 + ws, run by tsx in development; esbuild bun
   the default projects folder.
 - `swarm.ts`: the orchestrator. Floors, agents, scheduling/auto-assign, dev → QA → fix → merge loop, dev and QA
   prompts, CEO job queue, phone messages, persistence (`state.json` / `demo-state.json`), websocket fan-out.
-- `agentRunner.ts`: one Agent SDK session; options, env stripping, Playwright MCP, and turning the SDK stream into
-  terminal lines.
-- `cliRunner.ts`: the terminal runtime (the default): one agent as the real CLI in a node-pty, same session contract
-  as `agentRunner.ts`. Claude Code reports through HTTP hooks (`POST /api/hooks/:token`; PreToolUse approves every
-  call); Codex reports turn endings (notify) and, once the manager trusts them, its steps (`-c hooks.*`); OpenCode
-  only turn endings. Codex/OpenCode screenshots are collected from the session's Playwright output folder. Esc in a
-  terminal ends the session as `interrupted`. The CEO's office tools are served over MCP (`/api/mcp/:token`).
+- `agentRunner.ts`: historical SDK implementation; current runtime policy disables SDK execution.
+- `cliRunner.ts`: terminal runtime; permitted native CLIs, task lifecycle, governance bridges and session-scoped office MCP tools. Runtime capability and authentication must be verified separately.
 - `ptyHost.ts`: the terminal keeper, a detached process of its own (`launch` re-spawns it outside the office's process
   tree) holding the CLIs' pseudo-terminals and relaying their hooks, so agents keep working through office restarts.
   `ptyClient.ts` is the office's side (start/connect, spawn, adopt after a restart, local fallback); `ptyProtocol.ts`
   their JSON-lines messages. The launcher's `office:shutdown` says `restart: false` when quitting: CLIs stop then.
   A developer's CLI stays at its prompt after the task (`keepAlive`): follow-ups and prompts typed there reuse it.
-- `clis.ts`: the CLIs (Claude Code from the SDK's bundled binary, Codex, OpenCode): detection, Windows `.cmd` shim
-  unwrapping, each one's command line, and the helper scripts they call back with.
+- `clis.ts`: permitted Codex, Gemini and OpenCode discovery, Windows shim handling, launch commands and bridge helpers.
 - `terminal.ts`: `AgentTerminal`, a headless xterm mirror per agent (replay for late viewers, saved to disk), its
   `/ws/term` viewers, and keystrokes/resizes to the running CLI.
 - `ceo.ts`: the CEO's office MCP tools (`createOfficeTools`, zod-validated), `ceoSystemPrompt`, `ceoJobPrompt`.
@@ -87,7 +76,7 @@ Server (`server/`, Node + Express 5 + ws, run by tsx in development; esbuild bun
 - `officeUpdate.ts`: the office's self-update: the drain decision, the launcher contract (IPC, `last-update.json`).
 - `pacing.ts`: pacing new work after Claude's usage warnings: the start/skip decision and the usage state.
 
-The `cubefarm` command (`bin/cubefarm.js`, plain JS): checks Node/git/gh/Claude login, starts `dist-server/index.js`,
+The `cubefarm` command (`bin/cubefarm.js`, plain JS): checks Node/git/gh/Codex readiness, starts `dist-server/index.js`,
 opens the browser; `login` and `doctor` subcommands.
 
 The launcher (`scripts/office.mjs`, plain JS; `npm run dev` / `demo` / `start`): runs the server (plus Vite with
@@ -122,7 +111,7 @@ Client (`client/`, Vite root; React 19, R3F, drei, zustand, @react-three/postpro
   functions and interface fields when the name isn't enough, inline notes for Windows or safety reasons, and
   `// ---------- section ----------` dividers in long files. No commented-out code.
 - Demo parity: every new `Backend` method, CEO tool or capability gets a fake in `server/demo.ts`, so `--demo` works
-  with no GitHub, no git/npm and no Claude usage.
+  with no GitHub, no git/npm and no real coding-agent usage.
 - UI state comes from the server: on connect the client gets a `snapshot`, then typed `ServerEvent`s (`repo`,
   `agent`, `log`, `qa`, `ceo`, `message`, `toast`, …) from `Swarm.broadcast`. Add new state to `shared/types.ts`, the
   snapshot and an event, and handle it in `store.ts`'s `apply`. REST is for commands, not for polling state.
@@ -141,7 +130,7 @@ Client (`client/`, Vite root; React 19, R3F, drei, zustand, @react-three/postpro
 
 - Vitest, `*.test.ts` next to the code, anywhere under `client/`, `server/`, `shared/` or `scripts/`
   (e.g. `shared/issues.test.ts`, `client/src/world/layout.test.ts`, `server/ceo.test.ts`). Config: `vitest.config.ts`.
-- Test pure functions directly; extract logic into pure helpers rather than mocking. No network, no `gh`, no Claude
+- Test pure functions directly; extract logic into pure helpers rather than mocking. No network, no `gh`, no real coding-agent
   sessions, no real `~/.cubefarm`: `npm test` already points `SWARM_HOME` at a temp folder and `SWARM_PORT` at 0.
 - Must pass on both CI runners (ubuntu + windows): don't hardcode `/` or `\` in expected paths.
 

@@ -33,7 +33,7 @@ export function verifyMappedCanvasUrls(mapping: MappedComponent[], urls: string[
     if (!matched) throw new Error(`Verification URLs do not include target Canvas app ${component.key}`);
   }
 }
-export type Request = (method: 'GET' | 'PATCH' | 'POST', resource: string, body?: object, headers?: Record<string, string>) => Promise<unknown>;
+export type Request = (method: 'GET' | 'PATCH' | 'POST' | 'DELETE', resource: string, body?: object, headers?: Record<string, string>) => Promise<unknown>;
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 const rows = (result: unknown): Record<string, unknown>[] => {
   const parsed = z.object({ value: z.array(z.record(z.string(), z.unknown())) }).parse(result);

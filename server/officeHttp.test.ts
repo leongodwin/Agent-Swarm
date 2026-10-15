@@ -22,6 +22,7 @@ import { TenantDlpService, type StartPolicyReader } from './tenantDlp.ts';
 import { CanvasOwnership } from './canvasOwnership.ts';
 import { createOfficeHttpApp } from './officeHttp.ts';
 import { OfficeMaintenance } from './officeMaintenance.ts';
+import {DeliveryRecords} from './deliveryRecords.ts';
 import {observeWorkflowReliability} from './workflowReliability.ts';
 import {unavailableGovernance} from './lifecycleGovernance.ts';
 
@@ -64,19 +65,41 @@ async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliab
   const reader=vi.fn<StartPolicyReader>(()=>({pid:123,refresh(){},stop(){}}));
   const tenantDlp=new TenantDlpService(path.join(HOME_DIR,'governance'),reader);await tenantDlp.init();cleanup.push(()=>tenantDlp.close());
   const canvasOwnership=new CanvasOwnership(path.join(HOME_DIR,'leases'));cleanup.push(()=>canvasOwnership.close());
-  const {app,closeAdmission}=createOfficeHttpApp({officeReload,backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,workflowReliability,changeDrain:(value,apply)=>maintenance.change(value,apply)});
+  const deliveryRecords=new DeliveryRecords(path.join(HOME_DIR,'planning'));await deliveryRecords.init();cleanup.push(()=>deliveryRecords.close());
+  const {app,closeAdmission}=createOfficeHttpApp({deliveryRecords,officeReload,backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,workflowReliability,changeDrain:(value,apply)=>maintenance.change(value,apply)});
   const server=http.createServer(app);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
   const url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const session=await fetch(`${url}/api/session`);const cookie=session.headers.get('set-cookie')!.split(';')[0];
   const request=(resource:string,method='GET',body?:unknown,headers:Record<string,string>={})=>fetch(url+resource,{method,headers:{Cookie:cookie,...(body===undefined?{}:{'Content-Type':'application/json'}),...headers},body:body===undefined?undefined:JSON.stringify(body)});
-  return {url,cookie,request,swarm,external,tenancy,delivery,features,capabilities,reader,closeAdmission,maintenance};
+  return {url,cookie,request,swarm,external,tenancy,delivery,features,capabilities,reader,closeAdmission,maintenance,deliveryRecords};
 }
+it('exposes shared planning only to authenticated connected projects and keeps missing records explicit',async()=>{
+  const {url,request,swarm}=await office();
+  const endpoint='/api/repos/synthetic%2Frepo/delivery-record';
+  expect((await fetch(url+endpoint)).status).toBe(401);
+  expect((await request('/api/repos/foreign%2Frepo/delivery-record')).status).toBe(404);
+  const response=await request(endpoint);expect(response.status).toBe(200);expect(await response.json()).toMatchObject({record:null,phase:'not-started',blockers:['Ask the CEO to create the delivery record and discovery tasks']});
+  const review=vi.fn(async()=> 'Assigned independent review started');swarm.requestRecordReview=review;
+  expect((await request(endpoint+'/review','POST',{})).status).toBe(200);expect(review).toHaveBeenCalledWith('synthetic/repo');
+  expect((await request(endpoint,'POST',{expectedRevision:0,content:{}})).status).toBe(409);
+});
 it('reads reliability only for authenticated connected repositories and rejects scope overrides',async()=>{
   const observe=vi.fn(()=>observeWorkflowReliability('synthetic/repo',async()=>{throw new Error('Synthetic history unavailable');}));const {url,request}=await office(false,undefined,{observe});
   expect((await fetch(url+'/api/repos/synthetic%2Frepo/reliability')).status).toBe(401);expect((await request('/api/repos/foreign%2Frepo/reliability')).status).toBe(404);
   expect((await request('/api/repos/synthetic%2Frepo/reliability?branch=other')).status).toBe(400);expect(observe).not.toHaveBeenCalled();
   expect((await request('/api/repos/synthetic%2Frepo/reliability')).status).toBe(200);expect(observe).toHaveBeenCalledExactlyOnceWith('synthetic/repo');
+});
+it('uses the approved tenant when displaying a licence-aware governance baseline',async()=>{
+  const f=await office(),snapshot=f.swarm.snapshot();
+  snapshot.repos[0].targetTenancy={tenantId,tenantName:'Synthetic',tenantDomain:'synthetic.test',user:'synthetic@example.com',environmentName:'Synthetic',environmentUrl:environment};
+  vi.spyOn(f.swarm,'snapshot').mockReturnValue(snapshot);
+  const record={content:{brief:snapshot.repos[0].mission,environmentUrl:environment,sourceCommit:null,findings:[],governanceProfile:{tenantId,controls:[],subscriptions:[]}}};
+  vi.spyOn(f.deliveryRecords,'current').mockImplementation(()=>record as never);
+  const body=await (await f.request('/api/repos/synthetic%2Frepo/delivery-record')).json();
+  expect(body.blockers.join(';')).not.toContain('Brief or deployment target changed');
+  record.content.governanceProfile.tenantId='22222222-2222-4222-8222-222222222222';
+  expect((await (await f.request('/api/repos/synthetic%2Frepo/delivery-record')).json()).blockers.join(';')).toContain('Brief or deployment target changed');
 });
 it.each(['stale','not-real','ambiguous','no-active','unsafe-root'])('blocks tenant writes from %s profile discovery before provider calls',async mode=>{
   const f=await office();if(mode==='stale')f.tenancy.status='stale';if(mode==='not-real')f.tenancy.isReal=false;

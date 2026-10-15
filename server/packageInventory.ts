@@ -20,7 +20,7 @@ export interface PackageInventory {
   schemaVersion:1;scope:'package-metadata-inventory';packageSha256:string;archiveComplete:boolean;resourceInventoryComplete:boolean;
   solution?:{name:string;version:string;managed:boolean};files:PackageFile[];
   components:{type:number;id?:string;name?:string;behavior?:string}[];
-  tables:{name:string;partial:boolean;attributes:{name:string;type:string;required:string;metadataSha256:string;constraints:PackagedConstraints}[];keys:{schemaName:string;attributes:string[];metadataSha256:string}[]}[];
+  tables:{name:string;partial:boolean;referenceOnly?:boolean;attributes:{name:string;type:string;required:string;metadataSha256:string;constraints:PackagedConstraints}[];keys:{schemaName:string;attributes:string[];metadataSha256:string}[]}[];
   relationships:PackageRelationship[];
   connections:{name:string;connector:string}[];resources:PackageResource[];issues:string[];complianceVerified:false;
 }
@@ -110,7 +110,9 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
         return {schemaName,attributes:columns,metadataSha256:sha(JSON.stringify(key))};
       });
       if(keys.length>10||new Set(keys.map(key=>key.schemaName.toLowerCase())).size!==keys.length)throw new Error('Ambiguous package keys');
-      report.tables.push({name,partial:root?.behavior!=='0',attributes,keys});
+      const emptyReferencePayload=(value:unknown):boolean=>value===''||value===undefined||value!==null&&typeof value==='object'&&Object.entries(value).every(([key,child])=>key==='@_Id'?child==='Mscrm.Templates':!key.startsWith('@_')&&emptyReferencePayload(child));
+      const referenceOnly=root?.behavior==='2'&&attributes.length===0&&keys.length===0&&!!info&&info['@_unmodified']==='1'&&Object.entries(info).every(([key,value])=>['@_Name','@_unmodified'].includes(key)||key==='attributes'&&emptyReferencePayload(value))&&Object.entries(entity).every(([key,value])=>['Name','EntityInfo'].includes(key)||key==='RibbonDiffXml'&&emptyReferencePayload(value));
+      report.tables.push({name,partial:root?.behavior!=='0',referenceOnly,attributes,keys});
     }
     const relationships=array(custom.EntityRelationships?.EntityRelationship),relationshipNames=new Set<string>();if(relationships.length>10000)throw new Error('Relationship schema inventory limit');
     for(const relationship of relationships){

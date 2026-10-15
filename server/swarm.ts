@@ -344,7 +344,13 @@ export class Swarm {
   deliveryRevision = () => 0;
   requestDeliveryReview: (id: string) => Promise<string> = async () => { throw new Error('Delivery unavailable'); };
   createDeliveryRelease: (repoId: string, plan: unknown) => Promise<string> = async () => { throw new Error("Delivery unavailable"); };
-  engineeringTools: (authorize?: SessionAuthorization) => OfficeTools | undefined = () => undefined;
+  deliveryRecordTool?: import('./ceo.ts').RecordToolHandler;
+  requestRecordReview: (repoId:string) => Promise<string> = async () => {throw new Error('Delivery records unavailable');};
+  deliveryWorkGate: (repoId:string,issue:number) => void = () => {};
+  deliveryTaskStage: (repoId:string,issue:number) => string|undefined = () => undefined;
+  deliveryTaskFingerprint: (repoId:string,issue:number) => string = () => '';
+  deliveryRecordContext: (repoId:string) => string = () => '';
+  engineeringTools: (authorize?: SessionAuthorization, agentId?:string, repoId?:string) => OfficeTools | undefined = () => undefined;
   deliveryQaTools: (agentId: string, repoId: string, authorize?: SessionAuthorization) => OfficeTools | undefined = () => undefined;
   deliveryStatus = () => JSON.stringify({ message: 'Delivery service is unavailable' });
   private state: Persisted = {
@@ -380,6 +386,8 @@ export class Swarm {
    */
   private officeTools(authorize?: SessionAuthorization): OfficeTools {
     return createOfficeTools({
+      deliveryRecord: this.deliveryRecordTool,
+      reviewDeliveryRecord: this.requestRecordReview,
       companyStatus: () => this.companyStatus(),
       deliveryStatus: () => this.deliveryStatus(),
       capabilityStatus: () => this.capabilityStatus(),
@@ -408,6 +416,10 @@ export class Swarm {
   }
 
   private taskGeneration(a: PersistedAgent) { return this.taskGenerations.get(a.id) ?? 0; }
+  planningSessionGuard(agentId:string) {
+    const agent=this.agent(agentId),generation=this.taskGeneration(agent);
+    return ()=>{this.requireOpen();if(agent.status!=='working'||!this.ownsTask(agent,generation))throw new HttpError(403,'Planning session changed or stopped; stale record updates are denied');};
+  }
   private reserveTask(a: PersistedAgent) {
     this.taskStops.get(a.id)?.abort();
     this.taskStops.set(a.id, new AbortController());
@@ -1705,6 +1717,7 @@ export class Swarm {
     this.ensureSlot();
     const issue = this.repoRt.get(repo.id)?.issues.find((i) => i.number === issueNumber);
     if (!issue) throw new HttpError(404, `Issue #${issueNumber} is not open on ${repo.fullName}`);
+    if(!this.backend.demo)this.deliveryWorkGate(repo.id,issueNumber);
     if (this.taskPaused?.(issue.title)) throw new HttpError(409, 'This platform is paused by the manager');
     const holder = this.state.agents.find((x) => x.id !== a.id && x.repoId === repo.id && x.issueNumber === issueNumber && BUSY.includes(x.status));
     if (holder) throw new HttpError(409, `${holder.name} is already working on #${issueNumber}`);
@@ -1821,10 +1834,12 @@ export class Swarm {
   private buildSystemAppend(a: PersistedAgent, repo: PersistedRepo, cwd: string, branch: string, fixing?: { pr: number; headRef: string }) {
     const linked = this.linkedRepos(repo).map((r) => `- ${r.fullName}: read-only reference clone at ${this.backend.mainDir(r.fullName)}`);
     const push = fixing ? `git push origin HEAD:${fixing.headRef}` : `git push -u origin ${branch}`;
+    const stage=a.issueNumber?this.deliveryTaskStage(repo.id,a.issueNumber):undefined;
     return [
       `You are ${a.name}, ${a.title ? `the team's ${a.title},` : 'a software engineer'} on an autonomous agent team ("cubefarm"). Several teammates work in parallel on other issues of the same repository, each in their own git worktree. Nobody is watching live to answer questions, so make sensible decisions yourself and record assumptions in the PR description. The manager may occasionally send you messages; follow their instructions.`,
       `Every pull request is reviewed and tested by a QA teammate. ${repo.autoMerge ? "Once they sign off and GitHub's checks pass, the office merges it by itself" : 'Once they sign off, the manager merges it'}. If they find problems, or checks fail, or it conflicts with the default branch, you will get the details; fix them on the same branch.`,
       DELIVERY_ENGINEERING,
+      this.deliveryRecordContext(repo.id),
       deliveryCapabilitiesPrompt([a.brief, repo.summary, repo.mission].filter(Boolean).join('\n')),
       a.brief ? `\nYour job description:\n${a.brief}` : '',
       '',
@@ -1851,7 +1866,7 @@ export class Swarm {
       '',
       'Workflow:',
       '1. Read the issue and explore the relevant code before changing anything.',
-      '2. Implement the change with focused commits and clear messages.',
+      stage==='discovery'||stage==='design' ? `2. This is a ${stage} task. Gather read-only evidence and document findings/design; do not implement application code, author platform components or deploy. Use delivery_record for observations and design synthesis. Commit supporting evidence/design documentation in your worktree and open a documentation PR. Never commit credentials or sign-in state. Do not describe assumptions as observed facts.` : '2. Implement the change with focused commits and clear messages.',
       "3. Run the project's existing tests, linters and build (if any) and fix what you broke. Install dependencies first if needed.",
       repo.browserTesting
         ? `4. If the project has a web UI, start its dev server in the background on port ${this.port(a)} (reserved for you, so you don't collide with teammates), then check your change with the Playwright browser tools (mcp__playwright__browser_navigate, browser_snapshot, browser_click, browser_take_screenshot). Stop the dev server when you're done.`
@@ -2035,8 +2050,12 @@ export class Swarm {
     const live = () => !completed && this.ownsTask(a, generation);
     const admission = this.workerAdmissions.get(a.id)!;
     const checkpointCli = a.sessionCli;
+    const deliveryIssue=a.task==='issue'||a.task==='fix'||a.task==='qa'&&a.prNumber!==null?a.issueNumber??0:null;
+    const deliveryFingerprint=deliveryIssue!==null?this.deliveryTaskFingerprint(repo.id,deliveryIssue):'';
     const authority = () => {
       if (!live() || a.status !== 'working') return 'This task no longer owns the session; execution denied';
+      try{if(!this.backend.demo&&deliveryIssue!==null)this.deliveryWorkGate(repo.id,deliveryIssue);}catch(error){return error instanceof Error?error.message:'Delivery stage could not be verified';}
+      if(deliveryIssue!==null&&deliveryFingerprint!==this.deliveryTaskFingerprint(repo.id,deliveryIssue))return 'Delivery scope or reviewed record changed; stop and retry with current task context';
       return admission.context === this.workerContext(a, repo, admission.resume, admission.retainedCli, checkpointCli)
         ? null : 'Execution configuration changed; stop and retry with fresh readiness';
     };
@@ -2062,7 +2081,7 @@ export class Swarm {
         effort: a.effort || this.state.settings.defaultEffort,
         browserTesting: repo.browserTesting,
         additionalDirectories: this.linkedRepos(repo).map((r) => this.backend.mainDir(r.fullName)),
-        office: a.role === 'qa' ? this.deliveryQaTools(a.id, repo.id, authorizeTool) : this.engineeringTools(authorizeTool),
+        office: a.role === 'qa' || a.task === 'qa' ? this.deliveryQaTools(a.id, repo.id, authorizeTool) : this.engineeringTools(authorizeTool,a.id,repo.id),
         authorizeTool,
         role: a.task === 'qa' ? 'qa' : a.role, // a developer covering QA works under QA's rules
         outputSchema,
@@ -2810,7 +2829,12 @@ export class Swarm {
   private startPipelineWork(repo: PersistedRepo): boolean {
     const devs = this.available(repo, 'dev');
     const testers = this.available(repo, 'qa');
-    const waiting = (status: QaRecord['status']) => this.state.qa.filter((q) => q.repoId === repo.id && q.status === status && !this.taskPaused?.(this.repoRt.get(repo.id)?.pulls.find((pull) => pull.number === q.prNumber)?.title ?? this.repoRt.get(repo.id)?.issues.find((issue) => issue.number === q.issueNumber)?.title ?? '')).sort((x, y) => x.updatedAt - y.updatedAt);
+    const waiting = (status: QaRecord['status']) => this.state.qa.filter((q) => {
+      if(q.repoId!==repo.id||q.status!==status)return false;
+      const pull=this.repoRt.get(repo.id)?.pulls.find(pull=>pull.number===q.prNumber);
+      if(this.taskPaused?.(pull?.title??this.repoRt.get(repo.id)?.issues.find(issue=>issue.number===q.issueNumber)?.title??''))return false;
+      try{if(!this.backend.demo)this.deliveryWorkGate(repo.id,q.issueNumber??pull?.closesIssues[0]??0);return true;}catch{return false;}
+    }).sort((x,y)=>x.updatedAt-y.updatedAt);
     for (const rec of waiting('queued')) {
       const tester =
         testers[0] ??
@@ -2843,7 +2867,10 @@ export class Swarm {
   private startIssueWork(repo: PersistedRepo): boolean {
     if (!repo.autoAssign || !this.mayStart('issue')) return false;
     const free = this.available(repo, 'dev');
-    const ready = free.length ? this.readyIssues(repo).filter((item) => !this.taskPaused?.(item.issue.title)) : [];
+    const ready = free.length ? this.readyIssues(repo).filter((item) => {
+      if(this.taskPaused?.(item.issue.title))return false;
+      try{if(!this.backend.demo)this.deliveryWorkGate(repo.id,item.issue.number);return true;}catch{return false;}
+    }) : [];
     if (ready.length === 0) return false;
     const fits = (a: PersistedAgent, want: string) => a.specialty.toLowerCase() === want;
     // Of the issues holding up the most, take one a free specialist fits.
@@ -3435,7 +3462,7 @@ export class Swarm {
     this.enqueueCeo({ kind: 'chat', text: t, at: Date.now() });
   }
 
-  async reviewDeliveryRelease(agentId: string, repoId: string, releaseId: string) {
+  async reviewDeliveryRelease(agentId: string, repoId: string, releaseId: string, recordReview = false, closeSlice = false) {
     this.requireOpen();
     const a = this.state.agents.find((a) => a.id === agentId && a.repoId === repoId && a.role === 'qa');
     if (!a || BUSY.includes(a.status) || this.agentRt.get(a.id)?.session || this.slotsFull()) throw new HttpError(409, 'Assigned QA reviewer or session slot is busy; request the release review when available');
@@ -3450,7 +3477,9 @@ export class Swarm {
     await this.deskWriters.get(a.id)?.drain().catch(() => undefined);
     if (!this.ownsTask(a, generation) || a.status !== 'preparing') throw new HttpError(409, 'Reviewer stopped while waiting for workspace cleanup');
     const started = this.startAgentSession(a, repo, this.backend.mainDir(repo.fullName),
-      `Independently review release ${releaseId}. If its run is reviewing, inspect every captured desktop/mobile screenshot, accessibility report, usability results and recovery rehearsal evidence, then call approve_visual with the run ID, evidence hash, five visual scores and specific review notes. Otherwise review the plan and its pinned architecture. Call delivery_status, inspect the exact pinned commit with git show, read docs/DELIVERY.md, and inspect all acceptance scenarios. Do not modify source or approve weak/static assertions. Every required issue must be implemented in the pinned commit, each component packaged, authorization must exercise denied access, and persistence must prove a write survives reload. Read docs/architecture/drafts/<architecture.docId>.json and .md from the exact pinned commit with git show. Assess requirements coverage, data and permission boundaries, tradeoffs, risks, implementation sequence and missing evidence. Call review_architecture with the release ID, plan hash, artifact hash, approved or rejected decision, and specific notes. A saved template does not prove model synthesis or governance compliance. If architecture and acceptance are adequate call approve_release with the exact plan hash. Otherwise explain the specific gaps without approving.`, DELIVERY_ENGINEERING);
+      closeSlice ? `Independently close the already accepted delivery slice for release ${releaseId} in ${repoId}. Read docs/DELIVERY.md, call delivery_record action read and delivery_status. Inspect the completed run, exact release/head/target, saved independent backend or visual decision and current evidence hash. Recompute the signed filename-and-bytes hash. Assess the signed recovery summary and transport receipts; distinguish any additional raw files outside the signed set and report their limits. Do not silently claim unsigned files are hash-bound. Verify the declared slice criteria against actual run evidence. If adequate, call delivery_record action accept_slice with payload {reference:{id,revision,sha256},runId} using the current exact reference, then read back the saved receipt. If insufficient, withhold acceptance and report the specific owner/remedy. Do not repeat unchanged design, release or backend approvals. Do not change source, discovery findings, tenant data or deployments. Historical execution uses its captured implementation version; this closing task grants no new mutation authority.` :
+      recordReview ? `Independently review the discovery and proposed design for ${repoId}. Read docs/DELIVERY.md and call delivery_record action read. Inspect the exact architecture version, discovery evidence, source commit, requirements, alternatives including reuse, contracts, permissions, risks, experience and first vertical slice. Challenge reported observations; hashes prove identity, not correctness. Do not mutate findings or call inspect_repository during review: that invalidates the design snapshot. Read the architectureDraft.result returned by action read; local uncommitted drafts are not available from GitHub. If evidence cannot be accessed, reject with that limitation. Do not implement or deploy. Submit delivery_record action review with the current record revision and payload {reference:{id,revision,sha256},docId,artifactSha256,decision,notes}. Reject missing or unsubstantiated critical decisions. ${this.deliveryRecordContext(repoId)}` :
+      `Independently review release ${releaseId}. First call manual_governance. For a pending manual assessment on this release, inspect all referenced evidence bytes, exact package shape, policy applicability, schema/permissions, existing licence baseline and owned-data/recovery contracts. Approve or reject using review_governance with all five control IDs; this is development-only manual assurance and cannot override known conflicts. Never infer E5 features or require optional premium automation. When a pending assessment exists, this is a phase review: compare with prior decisions, rehash every referenced file, inspect changed facts and preserve all five controls. Save the phase decision and finish. Do not repeat an unchanged architecture or release approval; report any material inconsistency instead. Do not modify the record or source. If its API-only run is reviewing, inspect runner-owned transaction, persistence, rejected-write, recovery and explicit audit-retention evidence and call approve_backend with the exact evidence hash; employee isolation is excluded from functional-development scope. For production/browser verification retain all original denied-access and visual requirements. If its browser run is reviewing, inspect every captured desktop/mobile screenshot, accessibility report, usability results and recovery rehearsal evidence, then call approve_visual with the run ID, evidence hash, five visual scores and specific review notes. Otherwise review the plan and its pinned architecture. Call delivery_status, inspect the exact pinned commit with git show, read docs/DELIVERY.md, and inspect all acceptance scenarios. Do not modify source or approve weak/static assertions. Every required issue must be implemented in the pinned commit, each component packaged, and persistence must prove a write survives reload. Production and browser authorization must exercise denied access. The explicit functional-development API slice proves the pinned caller and runner-owned mutation boundaries; do not certify employee isolation or demand it as an undeclared acceptance criterion. Read docs/architecture/drafts/<architecture.docId>.json and .md from the exact pinned commit with git show. Assess requirements coverage, data and permission boundaries, tradeoffs, risks, implementation sequence and missing evidence. Call review_architecture with the release ID, plan hash, artifact hash, approved or rejected decision, and specific notes. A saved template does not prove model synthesis or governance compliance. If architecture and acceptance are adequate call approve_release with the exact plan hash. Otherwise explain the specific gaps without approving.`, `${DELIVERY_ENGINEERING}\n${deliveryCapabilitiesPrompt('delivery discovery architecture review')}`);
     if (!started) throw new HttpError(409, a.lastError || 'Release-review admission was cancelled');
     this.save(); return 'Assigned QA review started';
   }
@@ -3641,6 +3670,7 @@ export class Swarm {
           description: r.description,
           clone: rt.cloneStatus === 'ready' ? this.backend.mainDir(r.fullName) : `(not available: clone ${rt.cloneStatus})`,
           brief: r.mission || null,
+          deliveryPlan: this.deliveryRecordContext(r.id),
           profile: r.summary || null,
           qaBrief: r.qaBrief || null,
           preview: { command: r.preview.command, env: r.preview.env, status: this.previews.view(r).status },
@@ -3745,6 +3775,9 @@ export class Swarm {
 
   private setFloorProfile(x: { floor: number; summary?: string; qa_brief?: string; preview_command?: string; preview_env?: Record<string, string> }) {
     const r = this.floorRepo(x.floor);
+    if (this.state.agents.some(a => a.repoId === r.id && BUSY.includes(a.status))) {
+      throw new Error(`Floor ${r.floor} has active work. Keep its profile and QA brief stable until those sessions finish, then retry.`);
+    }
     const preview = parsePreviewPatch(x.preview_command, x.preview_env);
     if (x.summary !== undefined) r.summary = String(x.summary).trim().slice(0, 140);
     if (x.qa_brief !== undefined) r.qaBrief = String(x.qa_brief).trim().slice(0, 2500);
@@ -3758,6 +3791,7 @@ export class Swarm {
   private updateJob(x: { agent_id: string; title?: string; specialty?: string; job_description?: string }) {
     const a = this.agentByRef(x.agent_id);
     if (a.role === 'ceo') throw new Error("That's you.");
+    if (BUSY.includes(a.status)) throw new Error('This agent has active work. Wait until its session finishes before changing its job.');
     this.updateAgent(a.id, { title: x.title, specialty: x.specialty, brief: x.job_description });
     const title = a.title || (a.role === 'qa' ? 'QA tester' : 'Developer');
     this.appendLog(a, [{ kind: 'system', text: `🪪 ${this.ceo().name} updated ${a.name}'s job: ${title}${a.specialty ? ` · swarm:${a.specialty}` : ''}` }]);
