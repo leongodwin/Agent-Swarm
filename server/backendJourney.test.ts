@@ -17,6 +17,15 @@ it.each(['journey','recovery'] as const)('holds %s before journalling a write wh
 it('refuses a generic invalid-argument error as proof of length validation',()=>{
  expect(()=>backendJourneySchema.parse({...plan,validationErrorCodes:['0x80040203']})).toThrow();
 });
+it('accepts the observed Dataverse MaxLength code only when the pinned plan permits it',async()=>{
+ const denied=await fixture('metadata-length');
+ await expect(verifyBackendJourney(plan,binding,denied.request,denied.root,new AbortController().signal,context)).rejects.toMatchObject({platformErrorCode:'0x80044331'});
+ const {root,request}=await fixture('metadata-length');
+ const configured={...plan,validationErrorCodes:['0x80044331'] as const};
+ const parsed=backendJourneySchema.parse(configured);
+ const result=await verifyBackendJourney(parsed,binding,request,root,new AbortController().signal,context);
+ expect(result.result).toHaveProperty('validationErrorCode','0x80044331');
+});
 async function fixture(mode='normal'){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'backend-journey-'));roots.push(root);let row:Record<string,unknown>|null=null,version=1;const writes:string[]=[];
  const request:Request=async(method,resource,body,headers)=>{
@@ -32,7 +41,7 @@ async function fixture(mode='normal'){
   if(method==='PATCH'){
    if(mode.startsWith('revision')&&(body as Record<string,unknown>).exp_expectedrevision!==row!.exp_revision)throw new Error('Service revision differs');
    const name=(body as Record<string,unknown>).exp_title as string;
-   if(name.length>100){if(mode==='permission')throw new PlatformCommandError('Forbidden','0x80040220');if(mode==='corrupt')row!.exp_amount=123;if(mode==='revision-change')row!.exp_revision=Number(row!.exp_revision)+1;throw new PlatformCommandError('Metadata length validation','0x80073001');}
+   if(name.length>100){if(mode==='permission')throw new PlatformCommandError('Forbidden','0x80040220');if(mode==='corrupt')row!.exp_amount=123;if(mode==='revision-change')row!.exp_revision=Number(row!.exp_revision)+1;throw new PlatformCommandError('Metadata length validation',mode==='metadata-length'?'0x80044331':'0x80073001');}
    if(mode==='ambiguous-update'&&name.startsWith('RECOVERY')){row={...row,...body};version++;throw new Error('Ambiguous intermediate update');}
    row={...row,...body,...(mode.startsWith('revision')?{exp_revision:Number(row!.exp_revision)+1}:{})};version++;return null;
   }
