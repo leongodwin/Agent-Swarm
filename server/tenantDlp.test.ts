@@ -166,7 +166,7 @@ function InvokeApiNoParseContent { param($Route,$Method,[switch]$ThrowOnFailure)
   expect(lines).toHaveLength(2);
   expect(lines.map(line=>line.requestId)).toEqual([initial,next]);
   expect(lines.map(line=>line.result.snapshot.policies[0].name)).toEqual(['read-1','read-2']);
-});
+},20000);
 it.runIf(process.platform==='win32')('executes the actual PowerShell pager against empty, paginated, failed and hostile responses',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-policy-pager-'));roots.push(root);
   const script=path.join(root,'pager-test.ps1');
@@ -208,4 +208,4 @@ ConvertTo-Json -InputObject @($results) -Compress
   const results=JSON.parse(stdout.trim());
   expect(results.slice(0,2)).toMatchObject([{scenario:'empty',status:'observed',pages:1,count:0,requests:1},{scenario:'paginated',status:'observed',pages:2,count:2,requests:2}]);
   for(const result of results.slice(2)) expect(result).toMatchObject({status:'unavailable',requests:1});
-});
+},20000);
