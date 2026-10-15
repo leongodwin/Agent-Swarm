@@ -721,6 +721,14 @@ it('reserves a release reviewer while checking and requires readiness before sta
   expect((fake.startSession.mock.calls[0][0] as SessionOptions).prompt).toContain('exact pinned commit');
   expect(fake.commentPull).not.toHaveBeenCalled();expect(fake.prForBranch).not.toHaveBeenCalled();
 });
+it('gives completed slices an explicit independent receipt task without repeating design approval',async()=>{
+ const {swarm,fake}=await office(true);const qa=swarm.snapshot().agents.find(a=>a.role==='qa')!;
+ await swarm.reviewDeliveryRelease(qa.id,'synthetic/repo','accepted-release',false,true);
+ const options=fake.startSession.mock.calls[0][0] as SessionOptions;
+ expect(options.prompt).toContain('action accept_slice');expect(options.prompt).toContain('outside the signed set');
+ expect(options.prompt).toContain('Do not repeat unchanged design');expect(options.prompt).not.toContain('action review with');
+ expect(await options.authorizeTool!()).toBeNull();
+});
 
 it('does not start release QA on blocked readiness or after the reviewer is stopped', async () => {
   const {swarm, fake} = await office(true); const qa = swarm.snapshot().agents.find(a => a.role === 'qa')!;

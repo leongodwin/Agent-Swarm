@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DeliveryService, deliveryManifest, containedFile, installedSolution, pacReportedError, importJobId, type DeliveryDependencies } from './delivery.ts';
+import { DeliveryService, deliveryManifest, containedFile, installedSolution, pacReportedError, importJobId, retainOwnedRecoveryEvidence, type DeliveryDependencies } from './delivery.ts';
 import type { RepoView } from '../shared/types.ts';
 import { manifestDigest } from './lifecycleGovernance.ts';
 import {generateHldContent} from '../shared/hld.ts';
@@ -100,6 +100,18 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   const release = await service.createRelease(repo, plan); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
   return { service, repo, calls, root, deps, release };
 }
+it('binds raw recovery proof after retry, detects journal tampering and refuses an incomplete archive',async()=>{
+ const {service,root}=await fixture(),directory=path.join(root,'delivery-runs','retention-test','evidence');await fs.mkdir(directory,{recursive:true});
+ const files=['recovery-rehearsal.json'];await fs.writeFile(path.join(directory,files[0]),'signed summary');
+ await fs.writeFile(path.join(directory,'independent-recovery.json'),'owned result');
+ await expect(retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files)).rejects.toThrow();expect(files).toEqual(['recovery-rehearsal.json']);
+ await fs.writeFile(path.join(directory,'independent-recovery-journal.json'),'six snapshots');
+ await retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files);await retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files);
+ expect(files).toHaveLength(3);
+ const hash=(service as unknown as {evidenceHash(run:{id:string;evidence:string[]}):Promise<string>}).evidenceHash.bind(service),run={id:'retention-test',evidence:files};
+ const before=await hash(run);await fs.writeFile(path.join(directory,'independent-recovery-journal.json'),'changed snapshots');expect(await hash(run)).not.toBe(before);
+ await expect(retainOwnedRecoveryEvidence(undefined,path.join(root,'missing'),[])).resolves.toBeUndefined();
+});
 it.each(['production','functional-development'] as const)('limits broad publication to the original import path: %s',async profile=>{
  const {service,repo,calls,deps}=await fixture(),base=deps.run,scoped={...manifest,manualDevelopmentGovernance:true};
  deps.run=async(command,cwd,env,signal)=>{

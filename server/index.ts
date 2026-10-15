@@ -153,6 +153,7 @@ swarm.deliveryQaTools = (agentId, repoId, authorize) => createDeliveryQaTools(()
 swarm.requestDeliveryReview = async (id) => {
   const release = delivery.view().releases.find((r) => r.id === id);
   if (!release) throw new HttpError(404, 'Release not found');
+  if(release.plan.deliveryRecord?.purpose==='slice'&&delivery.view().runs.some(run=>run.releaseId===id&&run.phase==='complete')&&!deliveryRecords.current(release.repoId)?.sliceReceipt)return swarm.reviewDeliveryRelease(release.plan.qaOwner,release.repoId,id,false,true);
   if (release.approvedAt && !delivery.view().runs.some((r) => r.releaseId === id && r.phase === 'reviewing')&&!manualGovernance.view(release.repoId).some(row=>row.releaseId===id&&!row.review&&Date.parse(row.expiresAt)>Date.now())) return 'Release plan approved; visual review becomes available after verification';
   return swarm.reviewDeliveryRelease(release.plan.qaOwner, release.repoId, id);
 };

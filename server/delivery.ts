@@ -160,6 +160,14 @@ export function installedSolution(output: string, name: string, version: string)
 }
 
 /** One real release at a time. An interrupted/failed release never resumes deployment automatically. */
+/** Include the raw owned-record proof on every retry, not just its summary. */
+export async function retainOwnedRecoveryEvidence(scope:string|undefined,directory:string,files:string[]) {
+  if(scope!=='pilot-owned-development-records')return;
+  const required=['independent-recovery.json','independent-recovery-journal.json'];
+  await Promise.all(required.map(file=>containedFile(directory,file)));
+  for(const file of required)if(!files.includes(file))files.push(file);
+}
+
 export class DeliveryService {
   private state: DeliveryStoredState = { schemaVersion: 1, policy: null, runs: [], releases: [], blockers: [], revision: 0 };
   onChange: () => void = () => {};
@@ -629,6 +637,7 @@ export class DeliveryService {
         run.recovery = { inventoryFile: 'previous-inventory.json', runbook: 'recovery-runbook.md', drillReport: 'recovery-rehearsal.json', packageSha256: await stablePackageDigest(zip,controller.signal) };
         run.evidence.push('previous-inventory.json', 'recovery-rehearsal.json', 'recovery-runbook.md'); await this.save();
       }
+      await retainOwnedRecoveryEvidence(manifest.recovery.scope,evidence,run.evidence);
       const capabilityHash = await this.requireCapabilities(repo, release);
       const mutation = async (id: string, kind: 'import' | 'post-deploy', executable: string, args: string[]) => {
         await targetLease!.assertOwned();
