@@ -67,8 +67,13 @@ jobs:
 
   # The built app in a real browser: a demo office boots, renders, and its panels open (e2e/, Playwright).
   e2e:
+    name: e2e (shard ${{ matrix.shard }}/3)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
@@ -89,12 +94,14 @@ jobs:
       - run: npx playwright install --with-deps chromium
 
       # playwright.config.ts builds the app and boots a demo office on a test port with a temp SWARM_HOME.
-      - run: npm run test:e2e
+      # Each shard boots its own isolated office; keep the single-worker WebGL budget.
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/3 --reporter=line,github,html
+        timeout-minutes: 17
 
-      - if: failure()
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/
