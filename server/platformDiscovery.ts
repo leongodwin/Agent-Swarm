@@ -1,4 +1,5 @@
 import {standardDlpEvidence} from './standardDlpEvidence.ts';
+import {aiPromptMetadata} from './aiPromptMetadata.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -29,6 +30,7 @@ const connector=z.enum(['shared_sharepointonline','shared_teams','shared_approva
 export const platformDiscoveryRequest=z.discriminatedUnion('kind',[
  z.strictObject({kind:z.literal('identity')}),
  z.strictObject({kind:z.literal('assigned-licenses')}),
+ z.strictObject({kind:z.literal('ai-prompt-metadata')}),
  z.strictObject({kind:z.literal('user-entitlements'),username:z.email().max(254)}),
  z.strictObject({kind:z.literal('resource-permissions')}),
  z.strictObject({kind:z.literal('delivery-permissions')}),
@@ -47,7 +49,7 @@ export type PlatformDiscoveryRequest=z.infer<typeof platformDiscoveryRequest>;
 export function platformDiscoveryBudget(input:unknown){const {kind}=platformDiscoveryRequest.parse(input);return kind==='delivery-authoring-prerequisites'?100_000:['write-readiness','sharepoint-list-schema','user-entitlements','delivery-permissions'].includes(kind)?90_000:45_000;}
 /** Stable catalogue/schema observations need enough time for independent planning
  * review. This never extends identity, permissions, licence or writer readiness. */
-export function platformDiscoveryValidity(input:unknown){const {kind}=platformDiscoveryRequest.parse(input);return ['environments','sharepoint-sites','sharepoint-list-schema','connector-operations','operation'].includes(kind)?15*60_000:60_000;}
+export function platformDiscoveryValidity(input:unknown){const {kind}=platformDiscoveryRequest.parse(input);return ['environments','sharepoint-sites','sharepoint-list-schema','connector-operations','operation','ai-prompt-metadata'].includes(kind)?15*60_000:60_000;}
 /** Only reviewed identity assertions may select this discovery target. */
 export function platformDiscoveryBinding(config:CapabilityConfig){
  const url=new URL(config.environmentUrl);
@@ -73,6 +75,7 @@ interface Dependencies{
  run:typeof deliveryCommands.run;
  connect:(cwd:string,signal:AbortSignal)=>Promise<FlowAdapter>;
  licensing?:typeof callerLicensing;
+ aiMetadata?:typeof aiPromptMetadata;
  entitlements?:typeof userEntitlements;
  permissions?:typeof resourcePermissions;
  writer?:typeof sharepointWriteReadiness;
@@ -130,6 +133,7 @@ export class PlatformDiscovery{
     if(snapshot===undefined)data=await(this.deps.dlp??standardDlpEvidence)(binding,cwd,signal,guard);
     else{const identity={tenantId:binding.tenantId,caller:binding.username};data={status:'observed',scope:'standard-policy-inventory',inventory:verifyTenantSnapshot(snapshot,identity),complianceVerified:false,limits:['Standard policy inventory only; effective target policy, connector classification and operation eligibility remain unverified']};}
    }
+   else if(request.kind==='ai-prompt-metadata')data=await(this.deps.aiMetadata??aiPromptMetadata)(binding,cwd,signal,guard);
    else if(request.kind==='environments')data=await flow!.call('list_environments',{});
    else if(request.kind==='sharepoint-sites'||request.kind==='sharepoint-list-schema'){
     const connections=config.checks.flatMap(check=>check.probe.kind==='pac-connection'&&check.probe.api==='shared_sharepointonline'&&new URL(check.probe.environmentUrl).origin===binding.environmentUrl&&check.probe.account?.toLowerCase()===binding.username.toLowerCase()&&check.probe.connectionId?[check.probe.connectionId]:[]);
