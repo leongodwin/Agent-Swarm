@@ -16,10 +16,23 @@ export function submitCodexPaste(options:{text:string;screen:()=>string;write:(t
   const prior=input(before);
   if(prior===null||prior.trim()&&prior.trim()!=='Ask Codex to do anything'){cancel();options.failed();return cancel;}
   const marker=`[Pasted Content ${Array.from(options.text).length} chars]`;
+  // Codex wraps the native editor at word boundaries and indents continuation
+  // rows by two columns. Match the complete pasted bytes across those visual
+  // boundaries; never accept a prefix or an echoed conversation message.
+  const wrapped=(active:string)=>{
+    let remaining=options.text.trimEnd();
+    for(const [index,row] of active.split('\n').entries()){
+      const line=index>0&&row.startsWith('  ')?row.slice(2):row;
+      if(index>0){if(!remaining.startsWith('\n')&&!remaining.startsWith(' '))return false;remaining=remaining.slice(1);}
+      if(!remaining.startsWith(line))return false;
+      remaining=remaining.slice(line.length);
+    }
+    return remaining==='';
+  };
   const rendered=(screen:string)=>{
     const active=input(screen);
     return active!==null&&screen!==before&&active!==prior&&(
-      active===marker||options.text.length>0&&active===options.text.trimEnd());
+      active===marker||options.text.length>0&&(active===options.text.trimEnd()||wrapped(active)));
   };
   options.write(`\x1b[200~${options.text}\x1b[201~`);
   const observe=()=>{
