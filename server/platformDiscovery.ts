@@ -89,9 +89,10 @@ interface Dependencies{
 /** Fixed metadata-only methods. A caller cannot supply a command, URL, env or tool name. */
 export class PlatformDiscovery{
  constructor(private root:string,private deps:Dependencies={run:deliveryCommands.run,connect:connectFlowAdapter}){}
- async inspect(config:CapabilityConfig,cwd:string,input:unknown,guard:()=>void,signal:AbortSignal,repoId?:string,configurationRoot=this.root,scope?:{record:DeliveryRecord;issue:number}){
+ async inspect(config:CapabilityConfig,cwd:string,input:unknown,guard:()=>void,signal:AbortSignal,repoId?:string,configurationRoot=this.root,scope?:{record:DeliveryRecord;issue?:number;independentReview?:boolean}){
   const request=platformDiscoveryRequest.parse(input),binding=platformDiscoveryBinding(config);
-  if(['delivery-permissions','delivery-authoring-prerequisites','headless-authoring-rights','private-report-metadata'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)))throw Error('Delivery permission discovery requires a server-bound current task');
+  if(['delivery-permissions','delivery-authoring-prerequisites'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)))throw Error('Delivery permission discovery requires a server-bound current task');
+  if(['headless-authoring-rights','private-report-metadata'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!(scope.independentReview===true||scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)||scope.record.content.tasks.some(t=>t.issue===scope.issue&&t.stage==='discovery'))))throw Error('Headless metadata requires a server-bound current task or independent review');
   if(['write-readiness','sharepoint-list-schema'].includes(request.kind)&&!repoId)throw new Error('Write readiness and schema discovery require server-bound repository context');
   const assert=()=>{signal.throwIfAborted();guard();};assert();
   let flow:FlowAdapter|undefined,pac!:ReturnType<typeof parsePacIdentity>,data:unknown;
