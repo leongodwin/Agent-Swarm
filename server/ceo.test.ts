@@ -173,6 +173,11 @@ describe('office tools', () => {
     expect((await client.callTool({name:'read_delivery_source',arguments:{request_json:JSON.stringify({kind:'repository-file',file:'README.md'})}})).isError).toBe(true);
     expect((await client.callTool({name:'read_delivery_source',arguments:{request_json:JSON.stringify({kind:'office-document',document:'../../secret'})}})).isError).toBe(true);await client.close();
   });
+  it('withholds coordinator document bytes when authority changes during the read',async()=>{
+    let observations=0;const office=createOfficeTools({companyStatus:()=> '{}',agentDetail:()=> '{}',setFloorProfile:()=> '',updateJob:()=> '',proposeHire:()=> '',proposeLetGo:()=> '',fileIssue:async()=> '',routeIssue:async()=> ''},()=>++observations===1?null:'Coordinator scope changed');
+    const [a,b]=InMemoryTransport.createLinkedPair(),client=new Client({name:'source-revocation',version:'1'});await office.server.instance.connect(a);await client.connect(b);
+    try{const result=await client.callTool({name:'read_delivery_source',arguments:{request_json:JSON.stringify({kind:'office-document',document:'HEADLESS-FLOW',maxLines:2})}});expect(result.isError).toBe(true);expect(JSON.stringify(result.content)).toContain('Coordinator scope changed');expect(JSON.stringify(result.content)).not.toContain('approved-office-guidance');}finally{await client.close();await office.server.instance.close();}
+  });
 
   it.each(['primary','fresh'] as const)('revokes CEO mutation authority on the %s native transport',async kind=>{
     let active=true;const update=vi.fn(()=> 'saved');
