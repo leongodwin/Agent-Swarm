@@ -1,3 +1,4 @@
+import {headlessChecks} from './headlessFlowVerification.ts';
 import {HttpError} from './httpError.ts';
 import crypto from 'node:crypto';
 import {z} from 'zod';
@@ -18,7 +19,7 @@ export function assertFirstSlicePlan(content:DeliveryRecordContent,plan:ReleaseP
   // manifest is checked separately at release preparation and execution.
   const supported=new Set(['dataverse','sharepoint','canvas','flow','copilot-studio']);
   if(execution.components.some(c=>!supported.has(c.platform)))throw new HttpError(409,'First-slice component has no supported typed target mapping');
-  const tests=plan.verification.headlessFlow?.checks??plan.verification.scenarios;
+  const tests=(plan.verification.headlessFlow?headlessChecks(plan.verification.headlessFlow):undefined)??plan.verification.scenarios;
   const journeys=spec.journeys.filter(relevant),scenarios=journeys.flatMap(j=>j.scenarios);
   for(const journey of journeys)for(const kind of ['happy','denied','failure'])if(!journey.scenarios.some(s=>s.kind===kind))throw new HttpError(409,`First journey ${journey.id} requires happy, denied and failure scenarios`);
   const checks=spec.checks.filter(c=>relevant(c)&&['runtime','access'].includes(c.kind));

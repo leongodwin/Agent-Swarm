@@ -1,3 +1,4 @@
+import {repositoryAccessMetadata} from './repositoryAccessMetadata.ts';
 import {reconcileHeadlessDispatch} from './headlessFlowVerification.ts';
 import {standardDlpEvidence} from './standardDlpEvidence.ts';
 import {privateReportMetadata} from './privateReportMetadata.ts';
@@ -36,6 +37,8 @@ export const platformDiscoveryRequest=z.discriminatedUnion('kind',[
  z.strictObject({kind:z.literal('headless-authoring-rights')}),
  z.strictObject({kind:z.literal('private-report-metadata')}),
  z.strictObject({kind:z.literal('headless-dispatch-reconciliation')}),
+ z.strictObject({kind:z.literal('repository-access')}),
+ z.strictObject({kind:z.literal('headless-discovery-contracts')}),
  z.strictObject({kind:z.literal('user-entitlements'),username:z.email().max(254)}),
  z.strictObject({kind:z.literal('resource-permissions')}),
  z.strictObject({kind:z.literal('delivery-permissions')}),
@@ -94,7 +97,7 @@ export class PlatformDiscovery{
  async inspect(config:CapabilityConfig,cwd:string,input:unknown,guard:()=>void,signal:AbortSignal,repoId?:string,configurationRoot=this.root,scope?:{record:DeliveryRecord;issue?:number;independentReview?:boolean}){
   const request=platformDiscoveryRequest.parse(input),binding=platformDiscoveryBinding(config);
   if(['delivery-permissions','delivery-authoring-prerequisites'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)))throw Error('Delivery permission discovery requires a server-bound current task');
-  if(['headless-authoring-rights','private-report-metadata','headless-dispatch-reconciliation'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!(scope.independentReview===true||scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)||scope.record.content.tasks.some(t=>t.issue===scope.issue&&t.stage==='discovery'))))throw Error('Headless metadata requires a server-bound current task or independent review');
+  if(['headless-authoring-rights','private-report-metadata','headless-dispatch-reconciliation','repository-access','headless-discovery-contracts'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!(scope.independentReview===true||scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)||scope.record.content.tasks.some(t=>t.issue===scope.issue&&t.stage==='discovery'))))throw Error('Headless metadata requires a server-bound current task or independent review');
   if(['write-readiness','sharepoint-list-schema'].includes(request.kind)&&!repoId)throw new Error('Write readiness and schema discovery require server-bound repository context');
   const assert=()=>{signal.throwIfAborted();guard();};assert();
   let flow:FlowAdapter|undefined,pac!:ReturnType<typeof parsePacIdentity>,data:unknown;
@@ -138,6 +141,14 @@ export class PlatformDiscovery{
     assert();let snapshot:unknown;try{snapshot=this.deps.dlpObservation?.({tenantId:binding.tenantId,caller:binding.username});}catch{assert();}
     if(snapshot===undefined)data=await(this.deps.dlp??standardDlpEvidence)(binding,cwd,signal,guard);
     else{const identity={tenantId:binding.tenantId,caller:binding.username};data={status:'observed',scope:'standard-policy-inventory',inventory:verifyTenantSnapshot(snapshot,identity),complianceVerified:false,limits:['Standard policy inventory only; effective target policy, connector classification and operation eligibility remain unverified']};}
+   }
+   else if(request.kind==='repository-access')data={...await repositoryAccessMetadata(repoId!,cwd,signal,guard,this.deps.run),reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
+   else if(request.kind==='headless-discovery-contracts'){
+    if(!scope!.record.content.brief.includes('AS-Recruitment-E2E')||!flow!.metadata)throw Error('Pinned recruitment scope and active adapter handshake metadata required');
+    const templates=z.array(z.object({id:z.string(),name:z.string(),description:z.string(),connectors:z.array(z.string())})).max(100).parse(await flow!.call('list_templates',{}));assert();
+    const inventory=async()=>{const rows=z.array(z.object({name:z.string(),displayName:z.string(),state:z.string()})).max(5000).parse(await flow!.call('list_flows',{env:pac.environmentId,top:50}));assert();if(new Set(rows.map(r=>r.name)).size!==rows.length)throw Error('Duplicate native flow inventory');return{nativeReturnedRows:rows.length,unsaturated:rows.length<50,dedicatedMatches:rows.filter(r=>r.displayName.toLowerCase().includes('as-recruitment-e2e'))};};
+    const before=await inventory(),after=await inventory();if(JSON.stringify(before)!==JSON.stringify(after))throw Error('Flow inventory changed during observation');
+    data={status:'observed',scope:'recruitment-template-runtime-inventory',runtime:flow!.metadata,templates,inventory:after,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit,limits:['Installed active MCP handshake and entry hash plus repeated native visible-flow inventory; no template instantiated','Inventory covers only caller-visible metadata; saturation blocks absence claims; no hidden-resource, connection execution, licence, DLP or runtime assurance','Duplicate-name checks still required at stopped-flow creation; never adopt or change unrelated flows']};
    }
    else if(request.kind==='headless-dispatch-reconciliation')data={...await reconcileHeadlessDispatch({...binding,environmentId:pac.environmentId},scope!.record.id,flow!,signal,guard),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
    else if(request.kind==='private-report-metadata')data={...await privateReportMetadata(scope!.record.id,cwd,signal,guard),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};

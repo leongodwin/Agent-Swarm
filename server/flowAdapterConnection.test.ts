@@ -3,7 +3,7 @@ import {afterEach,expect,it,vi} from 'vitest';
 const state=vi.hoisted(()=>({connect:vi.fn(),list:vi.fn(),call:vi.fn(),clientClose:vi.fn(),transportClose:vi.fn(),transport:null as null|{onclose?:()=>void;close():Promise<void>}}));
 vi.mock('./skillRegistry.ts',()=>({discoverSkills:()=>({skills:[]})}));
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js',()=>({StdioClientTransport:class{onclose?:()=>void;closed=false;constructor(){state.transport=this;}async close(){await state.transportClose();if(!this.closed){this.closed=true;this.onclose?.();}}}}));
-vi.mock('@modelcontextprotocol/sdk/client/index.js',()=>({Client:class{connect(...args:unknown[]){return state.connect(...args);}listTools(...args:unknown[]){return state.list(...args);}callTool(...args:unknown[]){return state.call(...args);}async close(){await state.clientClose();await state.transport?.close();}}}));
+vi.mock('@modelcontextprotocol/sdk/client/index.js',()=>({Client:class{getServerVersion(){return{name:'synthetic-flowagent',version:'1.0.0'};}connect(...args:unknown[]){return state.connect(...args);}listTools(...args:unknown[]){return state.list(...args);}callTool(...args:unknown[]){return state.call(...args);}async close(){await state.clientClose();await state.transport?.close();}}}));
 import {connectFlowAdapter} from './flowAdapter.ts';
 const names=['whoami','get_flow','get_flow_context','preflight_flow','publish_flow','disable_flow','get_run_history','get_run_details','get_run_actions','get_run_action_content'];
 const roots:string[]=[];

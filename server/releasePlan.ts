@@ -1,3 +1,4 @@
+import {headlessChecks} from './headlessFlowVerification.ts';
 import {functionalShowcaseSchema,functionalLimits} from '../shared/functionalShowcase.ts';
 import {nativeDeniedCheckSchema} from '../shared/nativeQa.ts';
 import {qualityContractSchema} from '../shared/qualityEvidence.ts';
@@ -57,7 +58,7 @@ export const releasePlanSchema = z.object({
   if(plan.firstSlice&&plan.deliveryRecord?.purpose!=='slice')fail('First-slice execution requires a pinned slice release');
   if(plan.verification.api&&plan.verification.nativeDeniedChecks)fail('Native denied checks require browser and native verification together');
   for(const check of plan.verification.nativeDeniedChecks??[]){if(check.contract.observationWindowMs+60000>plan.quality.maxTaskDurationMs)fail('Native denied observation and request budget exceed the approved task duration');const test=plan.verification.scenarios.find(t=>t.name===check.testName);if(!test||test.category!=='authorization'||test.identity!==check.deniedIdentity||!plan.verification.identities.some(i=>i.id===check.deniedIdentity&&i.expectedUser.toLowerCase()===check.deniedUsername.toLowerCase())||!plan.verification.identities.some(i=>i.id===check.observerIdentity&&i.id!==check.deniedIdentity&&i.expectedUser.toLowerCase()===check.observerUsername.toLowerCase()))fail('Native denied check identity or scenario binding differs');}
-  const testNames=(plan.verification.headlessFlow?.checks??plan.verification.api?.checks??plan.verification.scenarios).map(t=>t.name);
+  const testNames=((plan.verification.headlessFlow?headlessChecks(plan.verification.headlessFlow):undefined)??plan.verification.api?.checks??plan.verification.scenarios).map(t=>t.name);
   if((plan.firstSlice||plan.qualityEvidence)&&new Set(testNames).size!==testNames.length)fail('Verification test names must be unique');
   for(const c of plan.firstSlice?.cases??[])if(!testNames.includes(c.testName))fail('First-slice case refers to an unknown executable test');
   if (plan.owner === plan.qaOwner) fail('Delivery owner and QA reviewer must be different agents');
@@ -65,8 +66,8 @@ export const releasePlanSchema = z.object({
     if(plan.verification.headlessFlow.privateReport&&plan.verification.headlessFlow.privateReport.recordId!==plan.deliveryRecord?.id)fail('Private report capture must bind the current delivery record');
     if(plan.verification.headlessFlow.allowDispatch&&plan.verification.headlessFlow.dispatchKey!==plan.deliveryRecord?.id)fail('Dispatch claim must bind the delivery record identity across revisions and retries');
     if(plan.verification.api||plan.verification.identities.length||plan.verification.scenarios.length||plan.verification.browserSession||plan.verification.frame||plan.verification.nativeDeniedChecks||plan.verification.copilotChecks)fail('Headless flow acceptance cannot mix UI, Dataverse API or other identity adapters');
-    for(const check of plan.verification.headlessFlow.checks)if(check.criterion>=plan.acceptanceCriteria.length)fail('Headless check has an unknown acceptance criterion');
-    plan.acceptanceCriteria.forEach((_,i)=>{if(!plan.verification.headlessFlow!.checks.some(c=>c.criterion===i))fail('Headless acceptance criterion has no executable check');});
+    for(const check of headlessChecks(plan.verification.headlessFlow))if(check.criterion>=plan.acceptanceCriteria.length)fail('Headless check has an unknown acceptance criterion');
+    plan.acceptanceCriteria.forEach((_,i)=>{if(!headlessChecks(plan.verification.headlessFlow!).some(c=>c.criterion===i))fail('Headless acceptance criterion has no executable check');});
     return;
   }
   if (plan.verification.api) {
