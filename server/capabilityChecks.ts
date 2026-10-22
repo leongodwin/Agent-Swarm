@@ -114,7 +114,7 @@ export function matchesObservation(actual: unknown, expected: unknown): boolean 
 export function connectedAccount(output: string, api: string, account?: string, id?: string) {
   if (!account && !id) return false;
   return output.split(/\r?\n/).some((line) => {
-    const fields = line.trim().match(/^(\S+)\s{2,}(.+?)\s{2,}(\/providers\/Microsoft\.PowerApps\/apis\/\S+)\s+(\S+)$/);
+    const fields = line.trim().match(/^(\S+)\s+(.+?)\s+(\/providers\/Microsoft\.PowerApps\/apis\/\S+)\s+(\S+)$/);
     return !!fields && (!id || fields[1] === id) && (!account || fields[2].toLowerCase() === account.toLowerCase()) && fields[3] === `/providers/Microsoft.PowerApps/apis/${api}` && fields[4] === 'Connected';
   });
 }
