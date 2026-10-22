@@ -1,7 +1,7 @@
 import {prepareCodexHooks} from './codexHookTrust.ts';
 import {createCodexInstructionProfile,codexTrustedProjects,verifyCodexInstructionProfile,finishCodexInstructionProfile,assertWindowsCommandBound,type CodexInstructionProfile} from './codexInstructionProfile.ts';
 import {submitGeminiPaste} from './geminiInput.ts';
-import {submitCodexPaste,type PendingCodexPaste} from './codexInput.ts';
+import {submitCodexPaste,codexComposerReady,type PendingCodexPaste} from './codexInput.ts';
 import {WorkerPreflight} from './workerPreflight.ts';
 import {retainWorkerPreflightReceipt} from './workerPreflightReceipt.ts';
 import {toolObservation} from './toolObservation.ts';
@@ -514,6 +514,8 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   let shotTimer: NodeJS.Timeout | undefined;
   let capacityTimer: NodeJS.Timeout | undefined;
   let geminiStartupTimer:NodeJS.Timeout|undefined;
+  let codexStartupTimer:NodeJS.Timeout|undefined;
+  let codexInitialTaskSent=false;
   let geminiPromptSent=false;
   let cancelGeminiPaste:(()=>void)|undefined;
   let cancelCodexPaste:PendingCodexPaste|undefined;
@@ -552,7 +554,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     cancelCodexPaste?.();
     const pending=readiness.get(admission);if(pending){pending.view.state='cancelled';quietly(cleanupChanged);}
     releaseAdmission();
-    for (const t of [finishTimer, bootTimer,geminiStartupTimer]) clearTimeout(t);
+    for (const t of [finishTimer, bootTimer,geminiStartupTimer,codexStartupTimer]) clearTimeout(t);
     clearInterval(screenTimer);
     clearInterval(shotTimer);
     clearInterval(capacityTimer);
@@ -940,6 +942,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   const hookUrl = `${keeper ?? officeUrl}/api/hooks/${token}`;
   let browser:ReturnType<typeof playwrightServer>|null=null;let coordinatorBrowser=false;let effectiveInstructions=[opts.systemAppend,workerPreflight?.instructions()].filter(Boolean).join('\n\n');
   let prompt = cli === 'copilot' ? `${opts.systemAppend}\n\n${opts.prompt}` : opts.prompt;
+  let deferredCodexPrompt:string|undefined;
   if (opts.outputSchema) {
     prompt += `\n\nWhen you are done, end your final message with your report as one JSON object in a \`\`\`json block, matching this JSON schema:\n${JSON.stringify(opts.outputSchema)}`;
   }
@@ -973,14 +976,14 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     if (prompt.length > INLINE_PROMPT_MAX) {
       const file = path.join(dir, 'task.md');
       fs.writeFileSync(file, prompt);
-      prompt = `Your task is in ${file}. Read all of it first, then do what it says.`;
+      if(cli==='codex'){deferredCodexPrompt=prompt;prompt='';}
+      else prompt = `Your task is in ${file}. Read all of it first, then do what it says.`;
     }
   } catch (err) {
     setTimeout(() => finish({ ok: false, text: '', errors: [`Could not prepare ${label}: ${(err as Error).message}`] }), 0);
     return handle;
   }
-  officePrompts.push(prompt.trim()); // as given: a long one is a pointer to its file
-  launched.push(prompt.trim());
+  if(prompt.trim()){officePrompts.push(prompt.trim());launched.push(prompt.trim());}
 
   const launch = launchArgs(cli, {
     prompt,
@@ -1046,6 +1049,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     monitorCapacity();
     if(cli==='gemini'){log([{kind:'system',text:'Gemini task withheld while verifying the governance bridge and terminal readiness.'}]);cb.tool('Runtime readiness');}
     if(cli==='gemini')geminiStartupTimer=setTimeout(()=>{if(!geminiPromptSent)finish({ok:false,text:'',errors:['Gemini governance startup was not verified; no task was sent. Provision trusted system hook settings and check CLI authentication.']});},90000);
+    if(deferredCodexPrompt)codexStartupTimer=setTimeout(()=>{if(!codexInitialTaskSent)finish({ok:false,text:'',errors:['Codex initial task readiness was not verified; no task was sent.']});},90000);
 
     // Starting up: answer the folder-trust question for the office's own worktrees (the answer that trusts it), and
     // say so when a CLI is waiting on something only the manager can do (signing in),
@@ -1053,6 +1057,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     screenTimer = setInterval(() => {
       if (done || (cli !== 'opencode' && cli !== 'gemini' && Date.now() - started > BOOT_MS * 2)) return clearInterval(screenTimer);
       const screen = term.screen();
+      if(cli==='codex'&&deferredCodexPrompt&&!codexInitialTaskSent&&live?.governanceReady&&codexComposerReady(screen)){codexInitialTaskSent=true;clearTimeout(codexStartupTimer);handle.send(deferredCodexPrompt);}
       if(cli==='gemini'&&live?.governanceReady&&!geminiPromptSent&&/Type your message|Type a message|Send a message/i.test(screen)){geminiPromptSent=true;clearTimeout(geminiStartupTimer);handle.send(`${effectiveInstructions}\n\n${prompt}`);}
       const review = hookReviewKey(screen);
       // Office hooks were independently attested before launch. Unknown plugin

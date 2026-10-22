@@ -180,7 +180,7 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         // the credential store, so git and gh fail in it).
         '--dangerously-bypass-approvals-and-sandbox',
       ];
-      return { args: ctx.resumeId ? ['resume', ...args, ctx.resumeId, ctx.prompt] : [...args, '--', ctx.prompt], env: { CUBEFARM_HOOK_URL: ctx.notify.url } };
+      return { args: ctx.resumeId ? ['resume', ...args, ctx.resumeId, ...(ctx.prompt?[ctx.prompt]:[])] : [...args, ...(ctx.prompt?['--',ctx.prompt]:[])], env: { CUBEFARM_HOOK_URL: ctx.notify.url } };
     }
     case 'opencode': {
       const config = {

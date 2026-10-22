@@ -1,18 +1,23 @@
 /** Submit once only after Codex renders the pasted input. A busy TUI can process
  * Enter before processing a large paste, leaving the task unsent. */
 export type PendingCodexPaste=(()=>void)&{pending:()=>boolean};
+const editorInput=(screen:string)=>{
+ const last=[...screen.matchAll(/(?:^|\n)› /g)].at(-1);
+ return last?screen.slice(last.index!+last[0].length).split(/\n\s*(?:(?:GPT-|gpt-)[^\n]* · |tab to queue message\b)/)[0].trimEnd():null;
+};
+/** Initial large tasks use the existing acknowledged paste path after startup,
+ * rather than asking a tool-restricted coordinator to read a local task file. */
+export function codexComposerReady(screen:string){
+ const active=editorInput(screen);
+ return !/Starting MCP servers|MCP startup|Not logged in/i.test(screen)&&(active===''||active==='Ask Codex to do anything');
+}
 export function submitCodexPaste(options:{text:string;screen:()=>string;write:(text:string)=>void;current:()=>boolean;failed:()=>void}):PendingCodexPaste {
   const before=options.screen(),started=Date.now();
   let cancelled=false,acknowledged=false,timer:ReturnType<typeof setTimeout>|undefined;
   const cancel=Object.assign(()=>{cancelled=true;clearTimeout(timer);},{pending:()=>!cancelled});
   if(!options.current())return cancel;
   // The last native input prompt excludes earlier conversation/tool output.
-  const input=(screen:string)=>{
-    const matches=[...screen.matchAll(/(?:^|\n)› /g)],last=matches.at(-1);
-    if(!last)return null;
-    // The observed native model/status footer follows the editor on its own line.
-    return screen.slice(last.index!+last[0].length).split(/\n\s*(?:(?:GPT-|gpt-)[^\n]* · |tab to queue message\b)/)[0].trimEnd();
-  };
+  const input=editorInput;
   const prior=input(before);
   if(prior===null||prior.trim()&&prior.trim()!=='Ask Codex to do anything'){cancel();options.failed();return cancel;}
   const marker=`[Pasted Content ${Array.from(options.text).length} chars]`;
