@@ -33,3 +33,11 @@ Read `EXECUTION-ADMISSION-CONTRACT` through the bounded source reader for the in
 To keep planning input bounded, the model receives an explicit index of prose omitted from noncritical findings and typed execution findings. Every finding identity, criticality, conclusion, original evidence identity/expiry, full-finding byte count/hash and complete execution contract remain in its input. Unclassified critical findings remain whole. The full record is retained for independent QA; omitted prose is explicitly uninspected, and no classification or conclusion is changed by this input projection.
 
 Repeated byte-identical receipt objects are represented once in a planning-only `evidencePool`. Every finding retains ordered `evidenceIndex` links to the complete original objects. Receipts with differing paths, hashes, observation times or expiry times remain distinct. This is lossless input representation, not deletion, renewal, validation or a change to the retained record. Independent admission and QA still use the original full record.
+
+### Headless verification task and report boundaries
+
+The runner passes the approved `maxTaskDurationMs` (at most 120 seconds) into each headless check. Every provider call during that check is bounded by the same deadline. A timeout bounds the host's wait; it does not cancel a cloud run or prove its outcome.
+
+Before invocation, an exclusive persistent hold is created for the owner, tenant, environment and flow. A missing response, timeout or unverified terminal identity preserves the hold across attempts and restarts. Further triggers are refused. Exact terminal-run evidence is archived before the hold is released. Original-operation read-only reconciliation is required for an unresolved hold; there is no automatic replay or timeout-based release.
+
+Private report capture requires nonempty text and keeps the existing size and protected-folder checks. A reviewed `operationScope: "standard-mail-v1"` excludes AI, Dataverse and attachment downloads. Historical plans retain their legacy operation scope; current standard-only designs must explicitly select the new scope. None of these host checks establish tenant run-history privacy, licensing, effective DLP, successful runtime execution or independent acceptance.
