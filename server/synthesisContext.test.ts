@@ -16,7 +16,7 @@ it('retains current scope, critical findings and evidence while explicitly index
 it('retains whole verified evidence when it fits and explicitly marks omitted evidence without truncating',()=>{
  const refs=[{reference:'large',sha256:'a'.repeat(64),status:'captured',text:'£'.repeat(1000)},{reference:'small',sha256:'b'.repeat(64),status:'captured',text:'current source'}],original=JSON.stringify(refs);
  const text=boundedSynthesisPrompt({requirements:'exact original requirements'},refs,800),result=JSON.parse(text);
- expect(Buffer.byteLength(text)).toBeLessThanOrEqual(800);expect(result.capturedEvidence[0]).toMatchObject({reference:'large',sha256:'a'.repeat(64),status:'unavailable'});expect(result.capturedEvidence[0].text).toBeUndefined();expect(result.capturedEvidence[0].reason).toContain('do not infer');expect(result.capturedEvidence[1]).toEqual(refs[1]);expect(JSON.stringify(refs)).toBe(original);
+ expect(Buffer.byteLength(text)).toBeLessThanOrEqual(800);expect(result.capturedEvidence[0]).toMatchObject({reference:'large',sha256:'a'.repeat(64),status:'unavailable',textOmitted:true});expect(result.capturedEvidence[0].text).toBeUndefined();expect(result.capturedEvidenceOmissionRule).toContain('do not infer');expect(result.capturedEvidence[1]).toEqual(refs[1]);expect(JSON.stringify(refs)).toBe(original);
 });
 it('blocks oversized current scope instead of omitting requirements or increasing the bound',()=>{
  expect(()=>boundedSynthesisPrompt({contracts:'x'.repeat(2000)},[],1000)).toThrow('scope exceeds');expect(synthesisRecordContext(undefined)).toBeNull();
@@ -25,7 +25,16 @@ it('retains complete catalogue text when no discovery record can supply a same-p
 it('does not refill saved history capacity with large evidence texts and retains their exact references',()=>{
  const refs=[{reference:'large-current-source',sha256:'a'.repeat(64),status:'captured',text:'x'.repeat(16*1024+1)},{reference:'small-contract',sha256:'b'.repeat(64),status:'captured',text:'Current exact contract'}];
  const value=JSON.parse(boundedSynthesisPrompt({contracts:'Current contracts stay whole'},refs));
- expect(value.capturedEvidence[0]).toMatchObject({reference:refs[0].reference,sha256:refs[0].sha256,status:'unavailable'});expect(value.capturedEvidence[0]).not.toHaveProperty('text');expect(value.capturedEvidence[0].reason).toContain('do not infer');expect(value.capturedEvidence[1]).toEqual(refs[1]);expect(value.contracts).toBe('Current contracts stay whole');
+ expect(value.capturedEvidence[0]).toMatchObject({reference:refs[0].reference,sha256:refs[0].sha256,status:'unavailable',textOmitted:true});expect(value.capturedEvidence[0]).not.toHaveProperty('text');expect(value.capturedEvidenceOmissionRule).toContain('do not infer');expect(value.capturedEvidence[1]).toEqual(refs[1]);expect(value.contracts).toBe('Current contracts stay whole');
+});
+it('shares omission instructions without losing any source identity or original failure reason at the bound',()=>{
+ const refs=[...Array.from({length:24},(_,i)=>({reference:'source-'+i,sha256:i.toString(16).padStart(64,'0'),status:'captured',text:'x'.repeat(32768)})),{reference:'missing-source',sha256:'f'.repeat(64),status:'unavailable',reason:'Original digest mismatch'}],base={criticalContract:'x'.repeat(257000)},before=JSON.stringify(refs);
+ const text=boundedSynthesisPrompt(base,refs),value=JSON.parse(text);
+ expect(Buffer.byteLength(text)).toBeLessThanOrEqual(262144);expect(value.criticalContract).toBe(base.criticalContract);
+ expect(value.capturedEvidenceOmissionRule).toContain('textOmitted:true');expect(value.capturedEvidenceOmissionRule).toContain('do not infer');
+ expect(value.capturedEvidence.slice(0,24)).toEqual(refs.slice(0,24).map(({text,...ref})=>({...ref,status:'unavailable',textOmitted:true})));
+ expect(value.capturedEvidence[24]).toEqual(refs[24]);expect(JSON.stringify(refs)).toBe(before);
+ expect(()=>boundedSynthesisPrompt({...base,additionalContract:'y'.repeat(3000)},refs)).toThrow('scope exceeds');
 });
 it('keeps accumulated historical context within the existing bound and detects changes beyond an excerpt',()=>{
  const record={id:'record',revision:105,sha256:'b'.repeat(64),content:{contracts:['current executable contract'],findings:Array.from({length:160},(_,i)=>({id:'history-'+i,critical:false,status:'observed',conclusion:'blocked',statement:'Historical detail '.repeat(300),remedy:'Original remedy '.repeat(300),evidence:[{reference:'retained-'+i+'.json',sha256:'a'.repeat(64)}]}))}} as unknown as DeliveryRecord;

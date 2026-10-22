@@ -1,5 +1,7 @@
 # Phase-specific execution evidence, version 1
 
+When whole captured evidence texts cannot fit, each affected entry is marked `status: "unavailable"` and `textOmitted: true`. A single `capturedEvidenceOmissionRule` states that the model must not infer those texts. Original references, digests and pre-existing failure reasons are retained. Whole texts that fit retain their original captured entries. The source files and the 256 KiB limit are unchanged.
+
 Design approval approves requirements and named validation contracts. It cannot certify that a sixty-second authentication or connection observation remains current throughout synthesis and independent review.
 
 The supported headless-flow host can explicitly classify a **narrow metadata prerequisite** using `finding.executionEvidence`. All existing findings retain their evidence, timestamps, conclusions and history. No existing record is automatically classified. Independent QA must assess each classification and its rationale before design and task approval. Unclassified findings keep the existing discovery rules, including freshness requirements. Broad privacy, effective DLP, licensing eligibility, inference feasibility and quality findings must remain separate; these probes cannot resolve them.
