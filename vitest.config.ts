@@ -1,6 +1,11 @@
 import os from 'node:os';
+import fs from 'node:fs';
 import path from 'node:path';
 import { configDefaults, defineConfig } from 'vitest/config';
+
+// macOS exposes /var as a symlink to /private/var. Security fixtures must
+// start below a canonical temp root rather than weakening path admission.
+const testTemp = fs.realpathSync(os.tmpdir());
 
 // Kept apart from vite.config.ts, whose root is client/, so tests in server/, shared/ and scripts/ are found too.
 export default defineConfig({
@@ -14,7 +19,7 @@ export default defineConfig({
     // concurrent files to reduce CPU contention around their unchanged deadlines.
     maxWorkers: 4,
     // Anything a test imports must never see the live office's state (~/.cubefarm) or its ports.
-    env: { SWARM_HOME: path.join(os.tmpdir(), `cubefarm-vitest-${process.pid}`), SWARM_PORT: '0' },
+    env: { SWARM_HOME: path.join(testTemp, `cubefarm-vitest-${process.pid}`), SWARM_PORT: '0', TEMP:testTemp, TMP:testTemp, TMPDIR:testTemp },
     coverage: {
       provider: 'v8',
       include: ['server/**/*.{ts,mjs}'],
