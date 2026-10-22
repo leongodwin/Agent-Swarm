@@ -28,7 +28,7 @@ it('does not refill saved history capacity with large evidence texts and retains
  expect(value.capturedEvidence[0]).toMatchObject({reference:refs[0].reference,sha256:refs[0].sha256,status:'unavailable',textOmitted:true});expect(value.capturedEvidence[0]).not.toHaveProperty('text');expect(value.capturedEvidenceOmissionRule).toContain('do not infer');expect(value.capturedEvidence[1]).toEqual(refs[1]);expect(value.contracts).toBe('Current contracts stay whole');
 });
 it('shares omission instructions without losing any source identity or original failure reason at the bound',()=>{
- const refs=[...Array.from({length:24},(_,i)=>({reference:'source-'+i,sha256:i.toString(16).padStart(64,'0'),status:'captured',text:'x'.repeat(32768)})),{reference:'missing-source',sha256:'f'.repeat(64),status:'unavailable',reason:'Original digest mismatch'}],base={criticalContract:'x'.repeat(257000)},before=JSON.stringify(refs);
+ const refs:{reference:string;sha256:string;status:string;text?:string;reason?:string}[]=[...Array.from({length:24},(_,i)=>({reference:'source-'+i,sha256:i.toString(16).padStart(64,'0'),status:'captured',text:'x'.repeat(32768)})),{reference:'missing-source',sha256:'f'.repeat(64),status:'unavailable',reason:'Original digest mismatch'}],base={criticalContract:'x'.repeat(257000)},before=JSON.stringify(refs);
  const text=boundedSynthesisPrompt(base,refs),value=JSON.parse(text);
  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(262144);expect(value.criticalContract).toBe(base.criticalContract);
  expect(value.capturedEvidenceOmissionRule).toContain('textOmitted:true');expect(value.capturedEvidenceOmissionRule).toContain('do not infer');
