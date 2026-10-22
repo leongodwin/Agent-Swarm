@@ -42,6 +42,8 @@ The CEO reads the record and existing issues before filing work, then maps actua
 
 Use `environmentUrl: null` while no target is connected/approved. Discovery work can start in that state; design and deployment remain held. Once the approved target is known, the CEO updates the record to match the connected project/delivery target. Do not invent an environment merely to create the record.
 
+To move an existing project to another approved environment, first select that environment for the existing account. The manager API `POST /api/repos/:repo/target` takes `expectedEnvironmentUrl` (the previous URL or null), `environmentUrl` and `username`. It only adopts the authenticated selected organization while native work, authentication and deployment are idle; concurrent target changes or another account are rejected. Automatic assignment and merging are paused. Record content, review history and releases are preserved, so the existing context checks hold the changed target in discovery until fresh evidence and independent reviews are recorded. This operation neither moves tenant assets nor grants deployment approval.
+
 Workers use `inspect_repository` to capture a real source commit and tracked-file inventory using bounded read-only Git commands. The adapter stores hashed JSON evidence and records its expiry. Inventory does not establish code semantics or tenant readiness. Workers inspect relevant source and platform state separately and add/update findings with action `finding`, for example:
 
 ```json
