@@ -62,6 +62,7 @@ export const releasePlanSchema = z.object({
   for(const c of plan.firstSlice?.cases??[])if(!testNames.includes(c.testName))fail('First-slice case refers to an unknown executable test');
   if (plan.owner === plan.qaOwner) fail('Delivery owner and QA reviewer must be different agents');
   if(plan.verification.headlessFlow){
+    if(plan.verification.headlessFlow.privateReport&&plan.verification.headlessFlow.privateReport.recordId!==plan.deliveryRecord?.id)fail('Private report capture must bind the current delivery record');
     if(plan.verification.headlessFlow.allowDispatch&&plan.verification.headlessFlow.dispatchKey!==plan.deliveryRecord?.id)fail('Dispatch claim must bind the delivery record identity across revisions and retries');
     if(plan.verification.api||plan.verification.identities.length||plan.verification.scenarios.length||plan.verification.browserSession||plan.verification.frame||plan.verification.nativeDeniedChecks||plan.verification.copilotChecks)fail('Headless flow acceptance cannot mix UI, Dataverse API or other identity adapters');
     for(const check of plan.verification.headlessFlow.checks)if(check.criterion>=plan.acceptanceCriteria.length)fail('Headless check has an unknown acceptance criterion');

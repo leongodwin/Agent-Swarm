@@ -1,3 +1,4 @@
+import {rehearseHeadlessLifecycle} from './headlessFlowVerification.ts';
 import {functionalTransportCheck} from '../shared/functionalShowcase.ts';
 import {verifyFunctionalRejection} from './functionalRejection.ts';
 import {createFunctionalRecovery} from './functionalRecovery.ts';
@@ -73,7 +74,7 @@ export const deliveryManifest = z.object({
   importTransport:z.enum(['pac','dataverse-tracked']).optional(),
   preparation:pinnedArtifactSchema.optional(),
   canvasAuthoringApps: z.array(z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i)).max(30).default([]),
-  recovery: z.object({ runbook: z.string().min(1), rehearsalReport: z.string().min(1).optional(),scope:z.enum(['pilot-owned-development-records','empty-solution-only','functional-owned-request']).optional() }).strict(),
+  recovery: z.object({ runbook: z.string().min(1), rehearsalReport: z.string().min(1).optional(),scope:z.enum(['pilot-owned-development-records','empty-solution-only','functional-owned-request','headless-owned-development-flow']).optional() }).strict(),
   documentation: z.array(z.string().min(1)).min(3),
   build: z.array(command).max(10), test: z.array(command).max(10),
   postDeploy: z.array(command).max(10).default([]), verify: z.array(command).max(10),
@@ -87,6 +88,7 @@ export const deliveryManifest = z.object({
   if(manifest.preparation){if(manifest.build.length||manifest.test.length||manifest.verify.length||manifest.postDeploy.length)ctx.addIssue({code:'custom',message:'Pinned preparation forbids custom executable commands'});}
   else if(!manifest.build.length||!manifest.test.length||!manifest.verify.length)ctx.addIssue({code:'custom',message:'Legacy delivery requires build, test and verification commands'});
   if(manifest.recovery.scope==='empty-solution-only'&&(!manifest.preparation||!manifest.manualDevelopmentGovernance||manifest.importTransport!=='dataverse-tracked'||manifest.hasUi||manifest.targetComponents.length||manifest.postDeployActions.length||manifest.settingsFile))ctx.addIssue({code:'custom',message:'Empty-solution exclusion requires typed tracked development import with no application components/actions'});
+  if(manifest.recovery.scope==='headless-owned-development-flow'&&(manifest.hasUi||!manifest.manualDevelopmentGovernance||!manifest.targetBinding||!manifest.platformIdentity||manifest.targetComponents.filter(c=>c.kind==='cloud-flow').length!==1||manifest.targetComponents.some(c=>!['cloud-flow','connection-reference'].includes(c.kind))||manifest.sharepoint))ctx.addIssue({code:'custom',message:'Headless recovery is restricted to one explicitly bound Development flow and its connection references'});
   if(manifest.importTransport==='dataverse-tracked'&&(!manifest.manualDevelopmentGovernance||manifest.settingsFile))ctx.addIssue({code:'custom',message:'Tracked import currently requires reviewed manual development governance without PAC settings or publish-changes'});
   if(manifest.importTransport==='dataverse-tracked'&&(!manifest.targetBinding||!manifest.platformIdentity))ctx.addIssue({code:'custom',message:'Tracked import requires the approved target binding and executing platform identity'});
   if(!manifest.recovery.scope&&!manifest.recovery.rehearsalReport)ctx.addIssue({code:'custom',message:'Production recovery requires a separate-environment rehearsal report'});
@@ -819,6 +821,17 @@ export class DeliveryService {
         await atomicWrite(path.join(evidence,'previous-inventory.json'),priorInventory);await atomicWrite(path.join(evidence,'recovery-runbook.md'),new TextDecoder('utf-8',{fatal:true}).decode(bytes));
         await atomicWrite(path.join(evidence,'functional-recovery-pending.json'),JSON.stringify({schemaVersion:1,kind:'functional-request-recovery-pending',runId:run.id,sourceCommit:run.head,solutionRollbackVerified:false,requestRecoveryVerified:false}));
         run.recovery={inventoryFile:'previous-inventory.json',runbook:'recovery-runbook.md',drillReport:'functional-recovery-pending.json',packageSha256:await stablePackageDigest(zip,controller.signal)};run.evidence.push('previous-inventory.json','recovery-runbook.md','functional-recovery-pending.json');await this.save();
+      }
+      if(!run.recovery&&manifest.recovery.scope==='headless-owned-development-flow'){
+        const plan=release.plan.verification.headlessFlow;
+        if(!plan||!flow||manifest.hasUi||!manifest.manualDevelopmentGovernance||release.plan.acceptanceProfile!=='functional-development'||cloudComponents.length!==1||manifest.targetComponents.some(c=>!['cloud-flow','connection-reference'].includes(c.kind)))throw Error('Headless recovery requires an explicitly reviewed dedicated manual Development flow');
+        const mapping=await mapTargetComponents(request,manifest.solutionUniqueName,manifest.targetComponents,run.environmentUrl);if(mapping.find(c=>c.kind==='cloud-flow')?.id.toLowerCase()!==plan.flowId.toLowerCase())throw Error('Headless recovery flow differs from the exact owned solution component');
+        const bytes=await fs.readFile(await containedFile(checkout,manifest.recovery.runbook));
+        const guard=async()=>{controller.signal.throwIfAborted();recordGate();await this.assertLeaseOwned();await targetLease!.assertOwned();await this.governance(run,manifest,'post-deploy');recordGate();};
+        await guard();const observed=await rehearseHeadlessLifecycle(plan,run.environmentUrl,evidence,flow,controller.signal,guard);
+        await atomicWrite(path.join(evidence,'previous-inventory.json'),priorInventory);await fs.writeFile(path.join(evidence,'recovery-runbook.md'),bytes,{flag:'wx'});
+        await atomicWrite(path.join(evidence,'headless-recovery-binding.json'),JSON.stringify({runId:run.id,sourceCommit:run.head,procedureSha256:crypto.createHash('sha256').update(bytes).digest('hex'),receipt:observed.receipt}));
+        run.recovery={inventoryFile:'previous-inventory.json',runbook:'recovery-runbook.md',drillReport:'headless-recovery-binding.json',packageSha256:await stablePackageDigest(zip,controller.signal)};run.evidence.push('previous-inventory.json','recovery-runbook.md','headless-recovery-binding.json',...observed.files);await this.save();
       }
       if (!run.recovery) {
         const runbook = await containedFile(checkout, manifest.recovery.runbook);

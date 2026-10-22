@@ -2,10 +2,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {z} from 'zod';
-import {deliveryCommands} from './delivery.ts';
+import type {DeliveryDependencies} from './delivery.ts';
+const nativeRun:DeliveryDependencies['run']=async(...args)=>(await import('./delivery.ts')).deliveryCommands.run(...args);
 import {parseUnambiguousJson} from './unambiguousJson.ts';
 /** A fixed Windows ACL observation, never a caller-selected file or a repair. */
-export async function privateReportMetadata(recordId:string,cwd:string,signal:AbortSignal,guard:()=>void,deps={run:deliveryCommands.run,home:os.homedir(),platform:process.platform,stat:fs.lstat,realpath:fs.realpath}){
+export async function privateReportMetadata(recordId:string,cwd:string,signal:AbortSignal,guard:()=>void,deps={run:nativeRun,home:os.homedir(),platform:process.platform,stat:fs.lstat,realpath:fs.realpath}){
  const check=()=>{signal.throwIfAborted();guard();};check();
  try{
   z.uuid().parse(recordId);if(deps.platform!=='win32')throw Error();
