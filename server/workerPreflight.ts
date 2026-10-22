@@ -160,7 +160,7 @@ export class WorkerPreflight {
     if(call.name==='mcp__office__read_skill'&&typeof call.input.id==='string')this.reads.delete(call.input.id);
     if(failed||name!==undefined&&name!==call.name)return;
     try{
-      const canvas=canvasProbeObservation(probes[0]?.tool??call.name,raw),connections=flowConnectionProbeObservation(probes[0]?.tool??call.name,raw),adapted=canvas??connections,data=adapted??toolObservation(raw).data;if(!data||data.success===false||data.found===false||data.valid===false)return;
+      const nativeTool=probes[0]?.tool??call.name,canvas=canvasProbeObservation(nativeTool,raw),connections=flowConnectionProbeObservation(nativeTool,raw),data=nativeTool==='mcp__flowagent__list_connections'?connections:canvas??toolObservation(raw).data;if(!data||data.success===false||data.found===false||data.valid===false)return;
       if(call.name==='mcp__office__read_skill'){
         const skill=this.plan!.skills.find(s=>s.id===call.input.id&&s.sha256===call.input.sha256);
         if(skill&&data.id===skill.id&&data.sha256===skill.sha256&&typeof data.content==='string'&&digest(data.content)===skill.sha256)this.reads.add(skill.id);
