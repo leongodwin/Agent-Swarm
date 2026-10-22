@@ -36,4 +36,4 @@ for (const file of ['deliveryPermissions.ts','canvasPackagingRecovery.ts','canva
 console.log(`built ${path.relative(root, out)}/index.js`);
 fs.copyFileSync(path.join(root,'server','headlessFlowVerification.ts'),path.join(out,'headlessFlowVerification.ts'));
 
-for(const file of ['aiPromptMetadata.ts','privateReportMetadata.ts','repositoryAccessMetadata.ts','platformDiscovery.ts','headlessAcceptedReport.ts'])fs.copyFileSync(path.join(root,'server',file),path.join(out,file));
+for(const file of ['aiPromptMetadata.ts','privateReportMetadata.ts','repositoryAccessMetadata.ts','platformDiscovery.ts','headlessAcceptedReport.ts','delivery.ts','index.ts'])fs.copyFileSync(path.join(root,'server',file),path.join(out,file));
