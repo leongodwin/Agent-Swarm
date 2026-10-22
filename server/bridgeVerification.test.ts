@@ -41,9 +41,10 @@ function native(value:unknown){return {content:[{type:'text',text:'### Result\n'
 it.each(['abort','deadline'] as const)('dispatches no later browser action after %s between steps',async mode=>{
  const browser=await chromium.launch({headless:true});cleanups.push(()=>browser.close());const context=await browser.newContext(),page=await context.newPage();
  await context.route('https://verification.test/**',route=>route.fulfill({contentType:'text/html',body:'<p id="user">maker@example.test</p><button id="act" onclick="this.dataset.count=Number(this.dataset.count||0)+1">Act</button>'}));
+ // The injected clock controls expiry; real Chromium setup still needs an ordinary action budget.
  const controller=new AbortController();let clock=100,actions=0;
- const call=async(code:string)=>{const result=await new Function('return ('+code+')')()(page);if(result.phase==='step'){actions++;if(mode==='abort')controller.abort();else clock=201;}return native(result);};
- await expect(runBridgeScenario({baseUrl:'https://verification.test/',identity:{userSelector:'#user',expectedUser:'maker@example.test'},viewport:{width:600,height:600},budget:100,first:true,nonce:'n',scenario:{steps:[{action:'click',selector:'#act'},{action:'click',selector:'#act'}]}},call,controller.signal,()=>clock)).rejects.toThrow();
+ const call=async(code:string)=>{const result=await new Function('return ('+code+')')()(page);if(result.phase==='step'){actions++;if(mode==='abort')controller.abort();else clock=10101;}return native(result);};
+ await expect(runBridgeScenario({baseUrl:'https://verification.test/',identity:{userSelector:'#user',expectedUser:'maker@example.test'},viewport:{width:600,height:600},budget:10000,first:true,nonce:'n',scenario:{steps:[{action:'click',selector:'#act'},{action:'click',selector:'#act'}]}},call,controller.signal,()=>clock)).rejects.toThrow();
  expect(actions).toBe(1);expect(await page.locator('#act').getAttribute('data-count')).toBe('1');
 });
 it.each(['independent-verification.json','independent-failure.json'])('retains existing %s without connecting or overwriting it',async name=>{
