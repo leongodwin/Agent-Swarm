@@ -1,5 +1,23 @@
 import crypto from 'node:crypto';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
+import type {SynthesisRequirement} from './synthesisTraceability.ts';
+
+/** Replace exact duplicate JSON with pointers into the same complete prompt.
+ * The retained source, hashes and independent review remain authoritative. */
+export function synthesisCatalogueContext(catalogue:readonly SynthesisRequirement[],record:DeliveryRecord|undefined){
+ const sources=new Map<string,string>();
+ for(const [index,item] of (record?.content.requirements??[]).entries())sources.set(JSON.stringify(item),`/discoveryEvidence/content/requirements/${index}`);
+ for(const [section,items] of Object.entries(record?.content.applicationSpec??{}))if(Array.isArray(items)){
+  const escaped=section.replace(/~/g,'~0').replace(/\//g,'~1');
+  for(const [index,item] of items.entries())sources.set(JSON.stringify(item),`/discoveryEvidence/content/applicationSpec/${escaped}/${index}`);
+ }
+ return catalogue.map(row=>{
+  const pointer=['delivery-requirement','application-specification'].includes(row.kind)?sources.get(row.text):undefined;
+  if(!pointer)return row;
+  const {text,...identity}=row;
+  return {...identity,textSource:{jsonPointer:pointer,serialization:'JSON.stringify',rule:'Complete text is the JSON serialization of the referenced value in this same prompt; nothing is abbreviated.'}};
+ });
+}
 
 /** A model input projection, never a replacement for the retained record or QA.
  * Keep current scope/contracts and every evidence identity. Noncritical prose
