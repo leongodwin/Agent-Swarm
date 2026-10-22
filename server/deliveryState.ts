@@ -1,3 +1,7 @@
+import {qualityResultSchema,qualityReviewSchema} from '../shared/qualityEvidence.ts';
+import {qualityContractHash,assertQualityDecisions} from './qualityEvidence.ts';
+import {firstSliceResultSchema} from '../shared/firstSlice.ts';
+import {firstSliceContractHash} from './firstSlice.ts';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { releasePlanSchema,acceptanceScope } from './releasePlan.ts';
@@ -5,6 +9,7 @@ import {architectureReviewSchema} from './architectureGate.ts';
 import type { DeliveryPolicy, DeliveryRun, DeliveryRelease, DeliveryBlocker,DeliveryAttemptHistory } from '../shared/delivery.ts';
 import {preflightRetrySchema} from './deliveryRetry.ts';
 import {attemptHistorySchema} from './deliveryAttempts.ts';
+import {trackedImportSchema} from './trackedImport.ts';
 
 export interface DeliveryStoredState { attemptHistory?:DeliveryAttemptHistory;schemaVersion: 1; policy: DeliveryPolicy | null; runs: DeliveryRun[]; releases: DeliveryRelease[]; blockers: DeliveryBlocker[]; revision: number }
 const text = z.string().min(1).max(4000);
@@ -15,16 +20,19 @@ const commit = z.string().regex(/^[a-f0-9]{40,64}$/);
 const https = z.url().max(4096).refine(value => { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; });
 const relative = z.string().min(1).max(4096).refine(value => !/[\x00-\x1f:]/.test(value) && value.replaceAll('\\','/').split('/').every(part => part && part !== '.' && part !== '..'), 'Unsafe evidence path');
 const when = z.iso.datetime();
-const operation = z.object({ id:text,kind:z.enum(['import','post-deploy']),status:z.enum(['intent','reported-success','verified','unknown']),commandSha256:hash,startedAt:when,endedAt:when.optional(),platformJobId:z.string().max(200).optional() }).strict();
+const operation = z.object({ id:text,kind:z.enum(['import','post-deploy']),status:z.enum(['intent','reported-success','verified','unknown']),commandSha256:hash,startedAt:when,endedAt:when.optional(),platformJobId:z.string().max(200).optional(),trackedImport:trackedImportSchema.optional() }).strict();
 const release = z.object({id:identity,repoId:repo,head:commit,environmentUrl:https,plan:releasePlanSchema,planHash:hash,createdAt:when,approvedAt:when.optional(),approvedBy:text.optional(),
   architectureReview:architectureReviewSchema.extend({reviewer:text,reviewedAt:when}).optional(),
   skillLock:z.array(z.object({id:text,sha256:hash,version:z.string().max(200).optional(),file:z.string().min(1).max(4096)}).strict()).max(1000).optional(),
 }).strict();
 const run = z.object({id:identity,repoId:repo,head:z.string().min(1).max(128),environmentUrl:https,phase:z.enum(['disabled','waiting','building','testing','deploying','verifying','reviewing','complete','blocked']),
+  firstSlice:firstSliceResultSchema.optional(),
+  qualityEvidence:qualityResultSchema.optional(),qualityReview:qualityReviewSchema.optional(),
   currentAttemptId:z.uuid().optional(),
   startedAt:when,endedAt:when.optional(),error:z.string().max(4000).optional(),solution:z.string().max(200).optional(),version:z.string().max(200).optional(),
   appUrls:z.array(https).max(100),evidence:z.array(relative).max(10000),log:z.array(z.string().max(8000)).max(10000),
   releaseId:identity.optional(),previousRunId:identity.optional(),checkpoint:z.enum(['prepared','import-started','imported','post-started','deployed']).optional(),recoveryRequired:z.boolean().optional(),evidenceHash:hash.optional(),
+  nativeLeaseSha256:hash.optional(),
   operations:z.array(operation).max(1000).optional(),
   acceptance:z.object({profile:z.enum(['production','functional-development']),limitations:z.array(z.string().max(4000)).max(100)}).strict().optional(),
   visualReview:z.object({reviewer:text,reviewedAt:when,scores:z.array(z.number().int().min(4).max(5)).max(5),notes:z.string().min(40).max(4000),evidenceHash:hash}).strict().optional(),
@@ -56,6 +64,12 @@ export function validateDeliveryState(input: unknown): DeliveryStoredState {
     if (new Set(item.evidence).size !== item.evidence.length) throw new Error('Duplicate delivery evidence');
     const contract=state.releases.find(release=>release.id===item.releaseId);
     if (item.releaseId && (!contract || contract.repoId!==item.repoId || contract.head!==item.head || contract.environmentUrl!==item.environmentUrl)) throw new Error('Run differs from its pinned release');
+    if(item.qualityEvidence&&(!contract?.plan.qualityEvidence||item.qualityEvidence.contractHash!==qualityContractHash(contract.plan)||!item.evidence.includes('quality-evidence.json')||new Set(item.qualityEvidence.checks.map(c=>c.checkId)).size!==item.qualityEvidence.checks.length||contract.plan.qualityEvidence.checks.length!==item.qualityEvidence.checks.length||contract.plan.qualityEvidence.checks.some(c=>!item.qualityEvidence!.checks.some(r=>r.checkId===c.checkId&&r.kind===c.kind))))throw new Error('Quality results differ from the pinned release');
+    if(contract?.plan.qualityEvidence&&['reviewing','complete'].includes(item.phase)&&!item.qualityEvidence)throw new Error('Release lacks runner-owned QA/documentation evidence');
+    if(item.qualityReview){if(!contract||!item.qualityEvidence||item.qualityReview.reviewer!==contract.plan.qaOwner||item.qualityReview.contractHash!==item.qualityEvidence.contractHash||item.qualityReview.evidenceHash!==item.evidenceHash)throw new Error('Quality review differs from independent release evidence');assertQualityDecisions(item.qualityEvidence.checks,item.qualityReview.decisions);}
+    if(contract?.plan.qualityEvidence&&item.phase==='complete'&&!item.qualityReview)throw new Error('Completed release lacks independent per-check quality approval');
+    if(item.firstSlice&&(!contract?.plan.firstSlice||item.firstSlice.contractHash!==firstSliceContractHash(contract.plan)||!item.evidence.includes(item.firstSlice.evidenceFile)))throw new Error('First-slice result differs from its pinned release');
+    if(contract?.plan.firstSlice&&['reviewing','complete'].includes(item.phase)&&!item.firstSlice)throw new Error('First-slice delivery lacks runner-owned execution evidence');
     if (item.previousRunId) {
       const prior=state.runs.find(run=>run.id===item.previousRunId);
       if (!prior || prior===item || prior.repoId!==item.repoId || prior.environmentUrl!==item.environmentUrl) throw new Error('Previous run is missing or outside this target');

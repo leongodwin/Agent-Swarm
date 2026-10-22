@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+import {it,expect} from 'vitest';
+import {bindGovernanceCriteria} from './governanceCriteria.ts';
+import type {DeliveryRecordContent} from '../shared/deliveryRecord.ts';
+const input=():DeliveryRecordContent=>JSON.parse(fs.readFileSync(new URL('./fixtures/cloudasset-approval-content.json',import.meta.url),'utf8'));
+const hash=(value:unknown)=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+it('independent QA: explicit criteria cannot promote unresolved observations, assumptions, source pins or authoring tasks',()=>{const original=input(),before=hash(original),next=bindGovernanceCriteria(original);expect(hash(original)).toBe(before);for(const key of ['findings','sourceCommit','environmentUrl','owner','qaOwner','governanceProfile','contracts','tasks'] as const)expect(next[key]).toEqual(original[key]);expect(next.applicationSpec!.decisions).toEqual(original.applicationSpec!.decisions);expect(next.applicationSpec!.assumptions).toEqual(original.applicationSpec!.assumptions);expect(next.taskPlan!.tasks).toEqual(original.taskPlan!.tasks);expect(next.taskPlan!.integrationQa!.map(q=>q.owner)).toEqual(original.taskPlan!.integrationQa!.map(q=>q.owner));});
+
+it('independent QA: conflicting native evidence and criterion bindings reject atomically without modifying input',()=>{for(const kind of ['check','case'] as const){const value=bindGovernanceCriteria(input());if(kind==='check')value.applicationSpec!.checks.find(c=>c.id==='govern-standard-entitlements')!.expectedEvidence='A predetermined static pass is sufficient';else value.taskPlan!.integrationQa![1].cases.find(c=>c.checkId==='govern-independent-delivery')!.criterion='Assume release approval';const before=hash(value);expect(()=>bindGovernanceCriteria(value)).toThrow('conflicts');expect(hash(value)).toBe(before);}});
+
+it('independent QA: every generated test uses the actual requirement text and phase, with no reused test name',()=>{const value=input();value.requirements.find(r=>r.id==='standard-entitlements')!.acceptance='Independent changed requirement: prove exact user and connector operation rights';const next=bindGovernanceCriteria(value),names:string[]=[];for(const qa of next.taskPlan!.integrationQa!){for(const requirement of ['standard-entitlements','independent-delivery']){const generated=qa.cases.filter(c=>c.checkId==='govern-'+requirement);expect(generated).toHaveLength(3);for(const row of generated){expect(row.criterion).toBe(value.requirements.find(r=>r.id===requirement)!.acceptance);expect(row.testName).toContain('-'+qa.purpose+'-');names.push(row.testName);}}}expect(new Set(names).size).toBe(names.length);expect(names).toHaveLength(12);});

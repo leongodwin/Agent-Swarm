@@ -1,6 +1,6 @@
 # Contributing
 
-How to run cubefarm from source, test it and publish it. Agent sessions working on this repo also follow [CLAUDE.md](CLAUDE.md).
+How to run Agent Swarm from source, test it and publish it. Agent sessions working on this repo also follow [CLAUDE.md](CLAUDE.md).
 
 ## Current delivery and runtime guidance
 

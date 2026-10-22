@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import syncFs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {z} from 'zod';
@@ -10,6 +11,22 @@ import {HttpError} from './httpError.ts';
 const pointerSchema=z.strictObject({schemaVersion:z.literal(1),docId:hldResultSchema.shape.docId,sha256:z.string().regex(/^[a-f0-9]{64}$/)});
 const writers=new Map<string,{writer:SerialWriter;active:number}>();
 const digest=(repoId:string|null,input:HldArtifact['input'],result:HldArtifact['result'])=>crypto.createHash('sha256').update(JSON.stringify({repoId,input,result})).digest('hex');
+/** Negative observations must still be absent when their record is published.
+ * Unreadable/linked paths are never accepted as evidence of absence. */
+export function hldAbsenceGuard(repoPath:string,guard:()=>void){
+  const root=syncFs.realpathSync(repoPath),identity=syncFs.statSync(root,{bigint:true});
+  const check=()=>{
+    guard();const currentRoot=syncFs.lstatSync(repoPath,{bigint:true});
+    if(currentRoot.isSymbolicLink()||!currentRoot.isDirectory()||currentRoot.ino!==identity.ino||currentRoot.dev!==identity.dev||syncFs.realpathSync(repoPath)!==root)throw new HttpError(409,'Architecture checkout changed during missing-input review');
+    let current=root;
+    for(const segment of ['docs','architecture','drafts','current.json']){
+      current=path.join(current,segment);
+      let stat;try{stat=syncFs.lstatSync(current);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
+      if(stat.isSymbolicLink()||segment!=='current.json'&&!stat.isDirectory())throw new HttpError(409,'Architecture absence path is linked or unreadable');
+      if(segment==='current.json')throw new HttpError(409,'Architecture appeared during missing-input review; reload its exact version');
+    }
+  };check();return check;
+}
 function contained(root:string,target:string){const relative=path.relative(root,target);if(relative.startsWith('..')||path.isAbsolute(relative))throw new HttpError(400,'Architecture artifact must stay inside the repository');return target;}
 async function directory(root:string,create:boolean,guard:()=>void){
   let current=root;

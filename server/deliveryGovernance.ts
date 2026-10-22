@@ -15,6 +15,7 @@ import {connectorCatalogueObservation,type ConnectorCatalogueObserver} from './c
 import type {ManualGovernance} from './manualGovernance.ts';
 import type {PackageInventory} from './packageInventory.ts';
 import fs from 'node:fs/promises';
+import {verifyEmptySolution} from './pinnedPreparation.ts';
 
 /** Declaration-level standard checks may deny, but cannot authorize a release.
  * A full provider must also independently extract package resources and evaluate
@@ -33,7 +34,9 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
       inventory=await inspectSolutionPackage(await containedFile(request.checkout,manifest.solutionZip),request.signal);
       // This route admits only independently inspected references to existing
       // tables, with no metadata payload, roles or executable subcomponents.
-      manualTables=!!manual&&manifest.manualDevelopmentGovernance===true&&request.acceptanceProfile==='functional-development'&&inventory.tables.length>0&&inventory.tables.every(table=>table.referenceOnly)&&inventory.components.every(component=>component.type===1&&component.behavior==='2')&&!inventory.relationships.length&&!inventory.resources.length&&!inventory.connections.length&&inventory.files.every(file=>file.path.toLowerCase().endsWith('.xml'))&&!inventory.issues.length;
+      const emptyPackage=manifest.recovery.scope==='empty-solution-only'&&!!manifest.preparation;
+      if(emptyPackage)await verifyEmptySolution(await containedFile(request.checkout,manifest.solutionZip),manifest.solutionUniqueName);
+      manualTables=!!manual&&manifest.manualDevelopmentGovernance===true&&request.acceptanceProfile==='functional-development'&&(emptyPackage||inventory.tables.length>0&&inventory.tables.every(table=>table.referenceOnly))&&inventory.components.every(component=>component.type===1&&component.behavior==='2')&&!inventory.relationships.length&&!inventory.resources.length&&!inventory.connections.length&&inventory.files.every(file=>file.path.toLowerCase().endsWith('.xml'))&&!inventory.issues.length;
       if(request.evidenceDirectory){const content=JSON.stringify(inventory,null,2);packageInventoryFile=`package-inventory-${inventory.packageSha256||request.packageSha256}.json`;await atomicWrite(path.join(request.evidenceDirectory,packageInventoryFile),content);packageInventorySha256=crypto.createHash('sha256').update(content).digest('hex');}
       const base={...unavailableGovernance(request),artifactSha256:inventory.packageSha256||request.packageSha256,packageInventoryFile,packageInventorySha256};
       if(!inventory.archiveComplete||inventory.packageSha256!==request.packageSha256)return {...base,reasons:['Package integrity or the independently bound package digest could not be verified']};
@@ -50,7 +53,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
       resources=inventory.resources.map(resource=>({id:resource.id,complete:resource.complete,connectors:resource.connectors}));
       if(!inventory.resourceInventoryComplete)packageIssues.push(...inventory.issues.slice(0,15).map(issue=>issue.slice(0,1000)));
       if(!resources.length&&!manualTables)return {...base,reasons:['No fully inspectable app/flow resource connector inventory is available',...packageIssues]};
-      if(manualTables)resources=inventory.tables.map(table=>({id:`table:${table.name}`,complete:true,connectors:[]}));
+      if(manualTables)resources=emptyPackage?[{id:'empty-solution-package',complete:true,connectors:[]}]:inventory.tables.map(table=>({id:`table:${table.name}`,complete:true,connectors:[]}));
       for(const reference of inventory.connections)if(!manifest.postDeployActions.some(action=>action.type==='connection-reference-check'&&manifest.targetComponents.some(component=>component.key===action.component&&component.logicalName.toLowerCase()===reference.name)&&action.connectorId.replace(/^\/providers\/Microsoft.PowerApps\/apis\//i,'').toLowerCase()===reference.connector))return {...base,status:'blocked',reasons:[`Package connection reference ${reference.name} lacks its exact approved connector/binding declaration`]};
     }
     const unavailable=(reasons:string[])=>({...unavailableGovernance(request,reasons),artifactSha256:request.packageSha256,packageInventoryFile,packageInventorySha256});
@@ -101,7 +104,7 @@ export function createDeliveryGovernance(source:{observation(identity:{tenantId:
       await atomicWrite(path.join(directory,policyFile),policyContent);
       const schemaFacts={identity:schemaValue.identity,binding:schemaValue.binding,tables:schemaValue.tables,observations:schemaValue.observations};
       const schemaSha256=crypto.createHash('sha256').update(JSON.stringify(schemaFacts)).digest('hex');
-      const applicability={scope:'reference-only-table-package',connectorResources:0,schemaPayloads:0,roles:0,executables:0,policyObservation:standard.status,advancedObservation:advancedValue?.status??'unavailable',limitation:'Policy observations do not certify tenant-wide enforcement. Independent QA must decide applicability to this unchanged-metadata reference package.'};
+      const applicability={scope:manifest.recovery.scope==='empty-solution-only'?'empty-solution-package':'reference-only-table-package',connectorResources:0,schemaPayloads:0,roles:0,executables:0,policyObservation:standard.status,advancedObservation:advancedValue?.status??'unavailable',limitation:'Policy observations do not certify tenant-wide enforcement. Independent QA must decide applicability to this exact bounded package; solution metadata changes remain tenant mutations.'};
       const applicabilityFile=`manual-applicability-${crypto.createHash('sha256').update(JSON.stringify(applicability)).digest('hex')}.json`;await atomicWrite(path.join(directory,applicabilityFile),JSON.stringify(applicability,null,2));
       const files=[path.join(directory,packageInventoryFile!),path.join(directory,declaredSchemaFile),...(advancedPolicyFile?[path.join(directory,advancedPolicyFile)]:[]),path.join(directory,policyFile),path.join(directory,applicabilityFile),await containedFile(request.checkout,manifest.solutionZip)];
       const evidence=await Promise.all(files.map(async file=>({file,sha256:crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex')})));

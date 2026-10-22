@@ -1,0 +1,74 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {afterEach,expect,it} from 'vitest';
+import {NativeTranscriptUsage} from './nativeTranscriptUsage.ts';
+const roots:string[]=[];afterEach(()=>{for(const root of roots.splice(0))fs.rmSync(root,{recursive:true,force:true,maxRetries:5});});
+function fixture(runtime:'codex'|'gemini',json=false){
+ const cwd=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'native-usage-'));roots.push(cwd);const session=crypto.randomUUID(),turn=crypto.randomUUID(),file=path.join(cwd,json?'session.json':'session.jsonl');
+ const meta=runtime==='codex'?{type:'session_meta',payload:{id:session,session_id:session,cwd,source:'cli'}}:{sessionId:session,projectHash:crypto.createHash('sha256').update(cwd).digest('hex'),kind:'main'};
+ const rows:any[]=[meta];const write=()=>fs.writeFileSync(file,json?JSON.stringify({...meta,messages:rows.slice(1)}):rows.map(row=>JSON.stringify(row)).join('\n')+'\n');write();
+ const collector=new NativeTranscriptUsage(runtime,cwd),body={cwd,session_id:session,transcript_path:file,turn_id:turn};
+ const record=(id='response-1',turnId:string=turn):any=>runtime==='codex'?{type:'token_usage_record',payload:{thread_id:session,session_id:session,turn_id:turnId,root_turn_id:turnId,response_id:id,usage:{input_tokens:100,cached_input_tokens:30,cache_write_input_tokens:0,output_tokens:20,reasoning_output_tokens:5,total_tokens:120}}}:{id,type:'gemini',tokens:{input:100,output:20,cached:30,thoughts:5,tool:7,total:132}};
+ return {cwd,session,turn,file,rows,write,collector,body,record};
+}
+it.each(['codex','gemini'] as const)('counts %s native responses once and leaves provider USD unknown',runtime=>{
+ const f=fixture(runtime);f.collector.prompt(f.body);const row=f.record();f.rows.push(row,row,f.record('response-2'));f.write();expect(f.collector.completed(f.body)).toBe(true);
+ expect(f.collector.snapshot(f.session,true)).toMatchObject({inputTokens:runtime==='codex'?200:214,outputTokens:runtime==='codex'?40:50,costUsd:null,usageCoverage:'complete'});
+ expect(f.collector.snapshot(f.session,true)).toEqual(f.collector.snapshot(f.session,true));
+});
+it.each(['codex','gemini'] as const)('excludes resumed %s history and never attributes a busy adopted process',runtime=>{
+ const f=fixture(runtime);const old=f.record('old','old-turn');f.rows.push(old);f.write();f.collector.prompt(f.body);f.rows.push(f.record());f.write();expect(f.collector.snapshot(f.session,true)).toMatchObject({inputTokens:runtime==='codex'?100:107,usageCoverage:'complete'});
+ const adopted=new NativeTranscriptUsage(runtime,f.cwd,false);adopted.prompt(f.body);expect(adopted.snapshot(f.session,true)).toMatchObject({inputTokens:null,usageCoverage:'unknown'});
+});
+it('accepts Gemini legacy JSON and ordinary JSONL metadata updates without adding historical tokens',()=>{
+ for(const json of [true,false]){const f=fixture('gemini',json);f.collector.prompt(f.body);if(!json)f.rows.push({$set:{sessionId:f.session,lastUpdated:new Date().toISOString()}});f.rows.push(f.record());f.write();expect(f.collector.snapshot(f.session,true)).toMatchObject({inputTokens:107,outputTokens:25,usageCoverage:'complete'});}
+});
+it('collects multiple explicit Codex turns while refusing stale turn completion and cumulative counters',()=>{
+ const f=fixture('codex');f.collector.prompt(f.body);f.rows.push(f.record());f.write();const next={...f.body,turn_id:'second-turn'};f.collector.prompt(next);expect(f.collector.completed(f.body)).toBe(false);expect(f.collector.completed(next)).toBe(true);f.rows.push(f.record('second','second-turn'),{type:'event_msg',payload:{type:'token_count',info:{total_token_usage:{input_tokens:999999}}}});f.write();expect(f.collector.snapshot(f.session,true)).toMatchObject({inputTokens:200,outputTokens:40});
+});
+it.each(['codex','gemini'] as const)('withholds %s evidence without a terminal boundary, owning session or valid baseline',runtime=>{
+ const f=fixture(runtime);expect(f.collector.snapshot(f.session,true).inputTokens).toBeNull();f.collector.prompt(f.body);f.rows.push(f.record());f.write();expect(f.collector.snapshot(f.session,false).inputTokens).toBeNull();expect(f.collector.snapshot('foreign',true).inputTokens).toBeNull();f.collector.incomplete();expect(f.collector.snapshot(f.session,true).inputTokens).toBeNull();
+});
+it.each(['codex','gemini'] as const)('returns unknown for a missing transcript instead of searching native history: %s',runtime=>{
+ const f=fixture(runtime);fs.unlinkSync(f.file);f.collector.prompt(f.body);expect(f.collector.snapshot(f.session,true)).toMatchObject({usageCoverage:'unknown',inputTokens:null});
+});
+it('does not turn cumulative-only Codex usage into measured work',()=>{const f=fixture('codex');f.collector.prompt(f.body);f.rows.push({type:'event_msg',payload:{type:'token_count',info:{total_token_usage:{input_tokens:100,output_tokens:20}}}});f.write();expect(f.collector.snapshot(f.session,true).inputTokens).toBeNull();});
+
+it.each(['negative','unsafe','cache','reasoning','total','missing','conflict','unknown-turn','session','thread','overflow'] as const)('withholds invalid Codex native %s receipts',mode=>{
+ const f=fixture('codex');f.collector.prompt(f.body);const row=f.record(),u=row.payload!.usage;
+ if(mode==='negative')u.input_tokens=-1;if(mode==='unsafe')u.input_tokens=Number.MAX_SAFE_INTEGER+1;if(mode==='cache')u.cached_input_tokens=101;if(mode==='reasoning')u.reasoning_output_tokens=21;if(mode==='total')u.total_tokens=119;if(mode==='missing')delete (u as any).output_tokens;
+ if(mode==='unknown-turn')row.payload!.turn_id='unhooked';if(mode==='session')row.payload!.session_id='foreign';if(mode==='thread')row.payload!.thread_id='foreign';
+ f.rows.push(row);if(mode==='conflict')f.rows.push({...row,payload:{...row.payload,response_id:'response-1',usage:{...u,input_tokens:101,total_tokens:121}}});
+ if(mode==='overflow'){u.input_tokens=Number.MAX_SAFE_INTEGER-20;u.total_tokens=Number.MAX_SAFE_INTEGER;f.rows.push(f.record('overflow'));}
+ f.write();expect(f.collector.snapshot(f.session,true)).toMatchObject({inputTokens:null,costUsd:null,usageCoverage:'partial'});
+});
+it.each(['negative','unsafe','cache','total','missing','new-error','missing-tokens','kind','project','control','overflow'] as const)('withholds invalid Gemini native %s receipts',mode=>{
+ const f=fixture('gemini');f.collector.prompt(f.body);const row=f.record(),t=row.tokens!;
+ if(mode==='negative')t.thoughts=-1;if(mode==='unsafe')t.input=Number.MAX_SAFE_INTEGER+1;if(mode==='cache')t.cached=101;if(mode==='total')t.total=120;if(mode==='missing')delete (t as any).input;if(mode==='missing-tokens')delete (row as any).tokens;
+ if(mode==='kind')f.rows[0].kind='subagent';if(mode==='project')f.rows[0].projectHash='foreign';
+ f.rows.push(row);if(mode==='new-error')f.rows.push({id:'provider-error',type:'error'});if(mode==='control')f.rows.push({$rewindTo:'response-1'});
+ if(mode==='overflow'){t.input=Number.MAX_SAFE_INTEGER-32;t.total=Number.MAX_SAFE_INTEGER;f.rows.push(f.record('overflow'));}
+ f.write();expect(f.collector.snapshot(f.session,true)).toMatchObject({inputTokens:null,costUsd:null,usageCoverage:'partial'});
+});
+it.each(['codex','gemini'] as const)('pins %s hook path/session/cwd and rejects noncurrent prompt identity',runtime=>{
+ for(const change of ['cwd','path','session']){const f=fixture(runtime);f.collector.prompt(f.body);const body={...f.body};if(change==='cwd')body.cwd=path.dirname(f.cwd);if(change==='path')body.transcript_path=f.file+'.other';if(change==='session')body.session_id=crypto.randomUUID();f.collector.prompt(body);f.rows.push(f.record());f.write();expect(f.collector.snapshot(f.session,true).inputTokens).toBeNull();}
+});
+it('refuses preexisting Codex turns and non-root native transcripts',()=>{
+ for(const mode of ['history','subagent','wrong-meta','json']){const f=fixture('codex',mode==='json');if(mode==='history')f.rows.push(f.record());if(mode==='subagent')f.rows[0].payload.source={subagent:{parent_thread_id:'parent'}};if(mode==='wrong-meta')f.rows[0].payload.id='foreign';f.write();f.collector.prompt(f.body);f.rows.push(f.record('new'));f.write();expect(f.collector.snapshot(f.session,true).inputTokens).toBeNull();}
+});
+it('requires new Gemini usage for each prompt and counts a complete follow-up exactly once',()=>{
+ const f=fixture('gemini',true);f.collector.prompt(f.body);f.rows.push(f.record());f.write();f.collector.prompt(f.body);f.rows.push(f.record('followup'));f.write();expect(f.collector.snapshot(f.session,true)).toMatchObject({inputTokens:214,outputTokens:50,usageCoverage:'complete'});
+});
+it('refuses oversized native history and excessive unique native responses without deleting either',()=>{
+ const f=fixture('codex');f.collector.prompt(f.body);for(let i=0;i<1001;i++)f.rows.push(f.record(String(i)));f.write();expect(f.collector.snapshot(f.session,true).inputTokens).toBeNull();
+ fs.writeFileSync(f.file,Buffer.alloc(16*1024*1024+1));expect(f.collector.snapshot(f.session,true).inputTokens).toBeNull();expect(fs.statSync(f.file).size).toBe(16*1024*1024+1);
+});
+
+it('accepts native content-only resume patches while preserving historical billing and new-response attribution',()=>{
+ const f=fixture('gemini');f.rows.push({id:'old-user',type:'user',content:'Old synthetic prompt'},f.record('old-response'));f.write();f.collector.prompt(f.body);f.rows.push({$patch:{updates:[{id:'old-user',content:'Native resumed display'}]}},f.record());f.write();expect(f.collector.snapshot(f.session,true)).toMatchObject({inputTokens:107,outputTokens:25,usageCoverage:'complete'});
+});
+it.each(['tokens','unknown-id','remove','order','shape'])('rejects unsupported Gemini resume patch %s without accepting lost billing',mode=>{
+ const f=fixture('gemini');f.rows.push({id:'old-user',type:'user',content:'Old synthetic prompt'});f.write();f.collector.prompt(f.body);const patch:any={updates:[{id:'old-user',content:'display'}]};if(mode==='tokens')patch.updates[0].tokens={input:0};if(mode==='unknown-id')patch.updates[0].id='foreign';if(mode==='remove')patch.removeIds=['old-user'];if(mode==='order')patch.orderIds=['old-user'];if(mode==='shape')patch.updates={id:'old-user',content:'display'};f.rows.push({$patch:patch},f.record());f.write();expect(f.collector.snapshot(f.session,true).inputTokens).toBeNull();
+});

@@ -234,6 +234,8 @@ export interface PrDetails {
   url: string;
   headRefName: string;
   headSha: string;
+  mergeCommitSha?: string | null;
+  baseRefName?: string;
   isCrossRepository: boolean;
   closesIssues: number[];
   state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -249,12 +251,14 @@ export async function prDetails(fullName: string, number: number): Promise<PrDet
     url: string;
     headRefName: string;
     headRefOid: string;
+    mergeCommit: {oid:string} | null;
+    baseRefName: string;
     isCrossRepository: boolean;
     closingIssuesReferences: { number: number }[] | null;
     state: PrDetails['state'];
     mergeable: string;
     mergeStateStatus: string;
-  }>(['pr', 'view', String(number), '-R', fullName, '--json', 'number,title,body,url,headRefName,headRefOid,isCrossRepository,closingIssuesReferences,state,mergeable,mergeStateStatus']);
+  }>(['pr', 'view', String(number), '-R', fullName, '--json', 'number,title,body,url,headRefName,headRefOid,isCrossRepository,closingIssuesReferences,state,mergeable,mergeStateStatus,mergeCommit,baseRefName']);
   return {
     number: raw.number,
     title: raw.title,
@@ -262,6 +266,8 @@ export async function prDetails(fullName: string, number: number): Promise<PrDet
     url: raw.url,
     headRefName: raw.headRefName,
     headSha: raw.headRefOid,
+    mergeCommitSha: raw.mergeCommit?.oid ?? null,
+    baseRefName: raw.baseRefName,
     isCrossRepository: raw.isCrossRepository,
     closesIssues: (raw.closingIssuesReferences ?? []).map((r) => r.number),
     state: raw.state,
@@ -313,11 +319,11 @@ async function provisionEvidenceBranch(fullName: string) {
   }catch{throw new Error('GitHub evidence branch could not be inspected; no branch creation was attempted');}
   if(!exists){
     const readme =
-      '# QA evidence\n\nScreenshots attached to pull request QA reports by cubefarm QA agents.\nThis branch has no shared history with the code and is never merged.\n';
+      '# QA evidence\n\nScreenshots attached to pull request QA reports by Agent Swarm QA agents.\nThis branch has no shared history with the code and is never merged.\n';
     const newTree = z.object({sha}).parse(await ghApiJson<unknown>('POST', `repos/${fullName}/git/trees`, {
       tree: [{ path: 'README.md', mode: '100644', type: 'blob', content: readme }],
     }));
-    const commit = z.object({sha}).parse(await ghApiJson<unknown>('POST', `repos/${fullName}/git/commits`, { message: 'QA evidence branch (cubefarm)', tree: newTree.sha, parents: [] }));
+    const commit = z.object({sha}).parse(await ghApiJson<unknown>('POST', `repos/${fullName}/git/commits`, { message: 'QA evidence branch (Agent Swarm)', tree: newTree.sha, parents: [] }));
     const created=z.object({ref:z.literal(`refs/heads/${EVIDENCE_BRANCH}`),object:z.object({type:z.literal('commit'),sha})}).parse(await ghApiJson<unknown>('POST', `repos/${fullName}/git/refs`, { ref: `refs/heads/${EVIDENCE_BRANCH}`, sha: commit.sha }));
     if(created.object.sha.toLowerCase()!==commit.sha.toLowerCase())throw new Error('Evidence branch creation receipt differs from the requested commit');
   }

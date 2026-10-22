@@ -13,7 +13,7 @@ it.each(['dev','built'])('reloads an owned native %s launcher without a source c
   for(const dir of ['scripts','server','shared','bin','node_modules','node_modules/vite/bin','home'])await fs.mkdir(path.join(root,dir),{recursive:true});
   for(const name of ['zod','tsx'])await fs.symlink(path.resolve('node_modules',name),path.join(root,'node_modules',name),process.platform==='win32'?'junction':'dir');
   await fs.writeFile(path.join(root,'package.json'),' {"type":"module","private":true}');
-  for(const file of ['scripts/office.mjs','scripts/officeSteps.mjs','server/policyReaderHost.mjs','server/officeReload.mjs'])await fs.copyFile(path.resolve(file),path.join(root,file));
+  for(const file of ['scripts/office.mjs','scripts/officeSteps.mjs','scripts/officeRecovery.mjs','server/policyReaderHost.mjs','server/officeReload.mjs'])await fs.copyFile(path.resolve(file),path.join(root,file));
   await fs.writeFile(path.join(root,'node_modules/vite/bin/vite.js'),'setInterval(()=>{},1000);');
   await fs.writeFile(path.join(home,'maintenance.json'),JSON.stringify({version:1,draining:true}));
   const module=(name:string)=>new URL(name,import.meta.url).href;

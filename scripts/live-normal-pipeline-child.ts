@@ -1,0 +1,54 @@
+/** Normal DeliveryService APIs, real native providers and independent QA file
+ * decisions. No release/run/job state is inserted, patched or backdated. */
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {DeliveryService,deliveryCommands} from '../server/delivery.ts';
+import {ManualGovernance} from '../server/manualGovernance.ts';
+import {createDeliveryGovernance} from '../server/deliveryGovernance.ts';
+import {createDeclaredSchemaObserver} from '../server/declaredSchema.ts';
+import {verifyDataverseIdentity} from '../server/dataverseIdentity.ts';
+import {journalNativeCommand} from '../server/nativeCommandJournal.ts';
+import {runNativeTree} from '../server/nativeTree.ts';
+import {resolveTenancyCommand} from '../server/tenancy.ts';
+import {atomicWrite} from '../server/atomicFile.ts';
+import {parseUnambiguousJson} from '../server/unambiguousJson.ts';
+import {digest} from '../server/pinnedPreparation.ts';
+import type {RepoView} from '../shared/types.ts';
+import type {LifecycleRequest} from '../server/lifecycleGovernance.ts';
+const root=path.resolve(process.argv[2]),setup=JSON.parse(await fs.readFile(path.join(root,'setup.json'),'utf8'));
+if(root!==setup.root||setup.target.environmentUrl!=='https://org68dad46d.crm4.dynamics.com'||setup.manifest.solutionUniqueName!=='CubeFarmResumeProbe')throw new Error('Unapproved live scope');
+const controller=new AbortController();
+const service=new DeliveryService(root,false,{...deliveryCommands});await service.init();await service.configure(setup.target.environmentUrl,true);
+const native=async(executable:string,args:string[],signal=controller.signal)=>{
+ const lease=await fs.readFile(path.join(root,'delivery.lock')),leaseSha=digest(lease),state=await fs.readFile(path.join(root,'delivery.json'),'utf8').then(JSON.parse),runId=state.runs[0]?.id;
+ const assertOwned=async()=>{if(digest(await fs.readFile(path.join(root,'delivery.lock')))!==leaseSha)throw new Error('Live ownership changed');};
+ const resolved=resolveTenancyCommand(executable);return journalNativeCommand(root,leaseSha,{executable,args},setup.source,runId,assertOwned,async context=>{const output=await runNativeTree(resolved.file,[...resolved.args,...args],setup.source,{},signal,{...context,errorOutput:path.join(root,context.id+'.provider-error.json')});if(executable==='dataverse'&&args[0]==='api'&&args.includes('GET')||executable==='pac'&&args[0]==='solution'&&args[1]==='list')await atomicWrite(path.join(root,context.id+'.provider-read.json'),JSON.stringify({scope:'owned-live-read-only-provider-diagnostic',executable,args,output}));return output;});
+};
+const verifyIdentity=async(signal=controller.signal)=>verifyDataverseIdentity((exe,args)=>native(exe,args,signal),async(method,resource)=>{if(method!=='GET')throw new Error('Read-only preflight');return parseUnambiguousJson(await native('dataverse',['api','request','--target','dataverse','--environment',setup.target.environmentUrl,'--method','GET','--path','/api/data/v9.2/'+resource],signal));},setup.target.environmentUrl,setup.target.binding,setup.target.identity);
+service.checkCapabilities=async()=>{const receipt=await verifyIdentity();await atomicWrite(path.join(root,'live-capability-identity.json'),JSON.stringify(receipt));return {status:'ready',configHash:digest(JSON.stringify(setup.target)),checks:[{id:'provider-authentication',category:'authentication',passed:true,remedy:''},{id:'target-environment',category:'environment',passed:true,remedy:''}]};};
+const repo={id:'leongodwin/Expnese-App2',fullName:'leongodwin/Expnese-App2',checkoutPath:setup.source,defaultBranch:'main',cloneStatus:'ready'} as RepoView;
+const implementationFiles=['server/delivery.ts','server/pinnedPreparation.ts','server/pinnedPreparationContracts.ts','server/nativeCommandJournal.ts','server/deliveryHandoff.ts','server/deliveryGovernance.ts','server/declaredSchema.ts','server/nativeTree.ts','server/trackedImport.ts','scripts/live-normal-pipeline-child.ts'];
+const implementationEvidence=await Promise.all(implementationFiles.map(async file=>{const bytes=await fs.readFile(file),snapshot=path.join(root,'reviewed-implementation',file);await fs.mkdir(path.dirname(snapshot),{recursive:true});await fs.writeFile(snapshot,bytes,{flag:'wx'});return {file:snapshot,sha256:digest(bytes)};}));
+const implementation={sha256:digest(JSON.stringify(implementationEvidence)),evidence:implementationEvidence};
+const manual=new ManualGovernance(root,id=>service.view().releases.find(item=>item.id===id),()=>{},implementation);await manual.init();
+const waitFile=async(file:string,timeout:number,signal?:AbortSignal)=>{const until=Date.now()+timeout;while(Date.now()<until){signal?.throwIfAborted();try{return JSON.parse(await fs.readFile(file,'utf8'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}await new Promise(resolve=>setTimeout(resolve,200));}throw new Error('Independent QA decision did not arrive before the deadline');};
+const manualObserver:Pick<ManualGovernance,'observe'>={observe:async(request,facts,files)=>{
+ const prior=await manual.observe(request,facts,files);if(prior)return prior;
+ const row=manual.view(repo.id).findLast(row=>row.phase===request.phase)!;
+ await atomicWrite(path.join(root,'pending-'+request.phase+'.json'),JSON.stringify(row,null,2));
+ const decision=await waitFile(path.join(root,'qa-phase-'+row.id+'.json'),35000,request.signal);
+ if(decision.assessmentId!==row.id||decision.bindingSha256!==row.bindingSha256)throw new Error('Independent phase decision differs from its exact evidence');
+ await manual.review(repo.id,row.id,'qa-pinned',decision.review);
+ return manual.observe(request,facts,files);
+}};
+const schema=createDeclaredSchemaObserver({run:(command,_cwd,_env,signal)=>native(command.executable,command.args,signal)});
+const governance=createDeliveryGovernance({observation:()=>({status:'unavailable',scope:'not-observed',reason:'Tenant-wide policy is not certified by this empty-package infrastructure test'})},schema,undefined,undefined,manualObserver);
+service.checkGovernance=async(request:LifecycleRequest)=>governance(request);
+const release=await service.createRelease(repo,setup.plan);await atomicWrite(path.join(root,'release-candidate.json'),JSON.stringify(release,null,2));
+const review=await waitFile(path.join(root,'qa-release.json'),180000);
+if(review.releaseId!==release.id||review.planHash!==release.planHash)throw new Error('Release review differs from exact API-created candidate');
+await service.reviewArchitecture(release.id,'qa-pinned',release.planHash,review.architectureReview);await service.approveRelease(release.id,'qa-pinned',release.planHash);
+await atomicWrite(path.join(root,'pipeline-approved.json'),JSON.stringify({scope:'independently-reviewed-empty-probe-only',releaseId:release.id,planHash:release.planHash}));
+await service.start(repo,false,release.id);await service.waitForIdle();
+await atomicWrite(path.join(root,'pipeline-ended.json'),JSON.stringify(service.view(),null,2));
+await manual.close();await service.close();

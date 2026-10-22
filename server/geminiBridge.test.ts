@@ -30,8 +30,8 @@ it('admits a verified native request and preserves paused MCP operations',async(
  expect(await invoke(target.url,{hook_event_name:'BeforeTool',tool_name:'mcp_office_copilot_studio_publish',tool_input:{}})).toMatchObject({code:2,json:{decision:'deny'}});
 });
 it('maps turn completion and leaves observational failures nonblocking',async()=>{
- const target=await endpoint(()=>({}));const body={hook_event_name:'AfterAgent',session_id:'synthetic-session',prompt_response:'Synthetic response'};
- expect(await invoke(target.url,body,'AfterAgent')).toEqual({code:0,json:{}});expect(target.bodies[0]).toMatchObject({hook_event_name:'TurnComplete',session_id:body.session_id,last_assistant_message:body.prompt_response});
+ const target=await endpoint(()=>({}));const body={hook_event_name:'AfterAgent',session_id:'synthetic-session',prompt_response:'Synthetic response',transcript_path:'C:/synthetic/session.jsonl',cwd:'C:/synthetic'};
+ expect(await invoke(target.url,body,'AfterAgent')).toEqual({code:0,json:{}});expect(target.bodies[0]).toMatchObject({hook_event_name:'TurnComplete',session_id:body.session_id,last_assistant_message:body.prompt_response,transcript_path:body.transcript_path,cwd:body.cwd});
  expect(await invoke('https://example.test',body,'AfterAgent')).toEqual({code:0,json:{}});
 });
 it('generates required settings with native event identity and scoped MCP endpoints',()=>{

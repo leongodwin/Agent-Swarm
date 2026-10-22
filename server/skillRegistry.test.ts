@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, expect, it } from 'vitest';
-import { discoverSkills, selectSkills, type SkillRegistryOptions } from './skillRegistry.ts';
+import { afterEach, expect, it, vi } from 'vitest';
+import { discoverSkills, selectSkills, skillDiscovery,readInstalledSkill,type SkillRegistryOptions } from './skillRegistry.ts';
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => {vi.unstubAllEnvs(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-skills-')); roots.push(root);
   const options: SkillRegistryOptions = { roots: [path.join(root, 'shared')], pluginRoots: [path.join(root, 'cache')], enabledPlugins: ['dataverse@official'] };
@@ -44,6 +44,18 @@ it('prefers versioned plugin instructions over a shared alias for the same workf
   write(path.join(options.roots[0], 'dataverse-dv-solution', 'SKILL.md'), '---\nname: dv-solution\ndescription: Solutions\n---\nOld alias');
   expect(selectSkills(discoverSkills(options), 'Dataverse solution')).toHaveLength(1);
   expect(selectSkills(discoverSkills(options), 'Dataverse solution')[0].source).toBe('plugin');
+});
+it.each(['delivery manifest solution packaging','deploy application','review permissions'])('selects Dataverse guidance for %s',task=>{
+  const {options,plugin}=fixture();plugin('1.0.0');
+  expect(selectSkills(discoverSkills(options),task).map(skill=>skill.id)).toContain('dataverse:dv-solution');
+});
+it('returns exact installed guidance, rejects stale hashes and explicitly reports unmatched discovery',()=>{
+  const {options,write}=fixture();const file=path.join(options.roots[0],'dataverse-phase-zero-fixture','SKILL.md');
+  write(file,'Synthetic read-only instructions');vi.stubEnv('SWARM_SKILL_ROOTS',options.roots[0]);
+  const skill=skillDiscovery().skills.find(row=>row.id==='dataverse-phase-zero-fixture')!;
+  expect(readInstalledSkill(skill.id,skill.sha256)).toMatchObject({content:'Synthetic read-only instructions',toolStatus:'unverified'});
+  write(file,'Changed instructions');expect(()=>readInstalledSkill(skill.id,skill.sha256)).toThrow('missing or changed');
+  expect(skillDiscovery('unrelated bookkeeping')).toMatchObject({selection:'unresolved',skills:[],remedy:expect.stringContaining('without task')});
 });
 it('distinguishes cached instructions from configured plugins and honors explicit disablement', () => {
   const { options, plugin, write } = fixture(); plugin('1.0.0'); plugin('3.1.0', 'canvas-apps');

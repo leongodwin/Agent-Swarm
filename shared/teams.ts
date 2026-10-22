@@ -81,7 +81,7 @@ export function formatAdaptiveCardJson(card: TeamsAdaptiveCard): Record<string, 
             ? [
                 {
                   type: 'Action.OpenUrl',
-                  title: 'Open in Cubefarm Office',
+                  title: 'Open in Agent Swarm Office',
                   url: card.actionUrl,
                 },
               ]

@@ -14,7 +14,7 @@ async function temp() { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cub
 describe('Review regressions', () => {
   it('stops paused platform work before readiness checks or workspace preparation', async () => {
     const agent = { issueTitle: 'Copilot expense topics', status: 'preparing', lastError: '' };
-    const preflight = vi.fn(); const fake = {taskGeneration: () => 0, taskPaused: () => true, capabilityPreflight: preflight, emitAgent: vi.fn(), save: vi.fn() };
+    const preflight = vi.fn(); const fake = {trackExecution:vi.fn(),taskGeneration: () => 0, taskPaused: () => true, capabilityPreflight: preflight, emitAgent: vi.fn(), save: vi.fn() };
     const check = (Swarm.prototype as unknown as { checkTaskCapabilities(a: unknown, repo: unknown): Promise<boolean> }).checkTaskCapabilities;
     expect(await check.call(fake, agent, {})).toBe(false);
     expect(agent.status).toBe('stopped'); expect(agent.lastError).toContain('paused'); expect(preflight).not.toHaveBeenCalled();
@@ -35,7 +35,7 @@ describe('Review regressions', () => {
   });
   it('blocks an unavailable DLP scan without merging', async () => {
     const mergePull = vi.fn(); const mergeNote = vi.fn((_rec: unknown, _note: string) => false);
-    const fake = { backend: { prFiles: vi.fn(async () => { throw new Error('offline'); }), mergePull }, mergeNote };
+    const fake = { taskQaCurrent:()=>true, backend: { prFiles: vi.fn(async () => { throw new Error('offline'); }), mergePull }, mergeNote };
     const advance = (Swarm.prototype as unknown as { advanceMerge(...args: unknown[]): Promise<boolean> }).advanceMerge;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try { await advance.call(fake, { fullName: 'test/repo' }, {}, { number: 1, headSha: 'abc' }); }
@@ -46,7 +46,7 @@ describe('Review regressions', () => {
     vi.useFakeTimers();
     const mergePull = vi.fn(); const setQa = vi.fn(); const prDetails = vi.fn(async () => ({ headSha: 'concurrent-new-commit' }));
     const record = {status: 'passed', passedSha: 'abc', round: 1, retests: 0, mergeFixes: 0};
-    const fake = {state: {qa: [record]}, backend: { prFiles: async () => [], updateBranch: vi.fn(async () => {}), mergePull, prDetails }, setQa, mergeNote: vi.fn(), schedule: vi.fn(), later: (callback: () => void, delay: number) => setTimeout(callback, delay) };
+    const fake = {taskQaCurrent:()=>true, state: {qa: [record]}, backend: { prFiles: async () => [], updateBranch: vi.fn(async () => {}), mergePull, prDetails }, setQa, mergeNote: vi.fn(), schedule: vi.fn(), later: (callback: () => void, delay: number) => setTimeout(callback, delay) };
     const advance = (Swarm.prototype as unknown as { advanceMerge(...args: unknown[]): Promise<boolean> }).advanceMerge;
     try {
       await advance.call(fake, { fullName: 'test/repo', defaultBranch: 'main' }, record,

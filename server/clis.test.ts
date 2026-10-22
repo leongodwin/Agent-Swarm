@@ -91,6 +91,10 @@ describe('launchArgs', () => {
     browser: null,
     ...patch,
   });
+  it.each([undefined,'retained-session'])('disables inherited Playwright in coordinator mode for new/resumed Codex %s',resumeId=>{
+    const args=launchArgs('codex',ctx({coordinatorBrowser:true,resumeId,systemAppend:'Own preflight remains required. Browser execution uses browser_handoff.'})).args;
+    expect(args.join(' ')).toContain('mcp_servers.playwright=');expect(args.join(' ')).toContain('enabled=false');expect(args.join(' ')).toContain('browser_handoff');expect(args.join(' ')).not.toContain('playwright.js');
+  });
 
 
 
@@ -114,7 +118,7 @@ describe('launchArgs', () => {
     const context = ctx({ role: 'ceo', officeUrl, browser: { command: 'node', args: ['playwright.js'] } });
     for (const resumeId of [undefined, 'existing-thread']) {
       const args = launchArgs('codex', { ...context, resumeId }).args;
-      expect(args).toContain(`mcp_servers.office={url=${JSON.stringify(officeUrl)}}`);
+      expect(args).toContain(`mcp_servers.office={url=${JSON.stringify(officeUrl)},enabled=true,required=true,startup_timeout_sec=30,tool_timeout_sec=120}`);
       expect(args.some((arg) => arg.startsWith('mcp_servers.playwright='))).toBe(true);
     }
     const config = JSON.parse(launchArgs('opencode', context).env.OPENCODE_CONFIG_CONTENT);
@@ -130,6 +134,15 @@ describe('launchArgs', () => {
     expect(hooks.map((h) => h.slice(6, h.indexOf('=')))).toEqual(CODEX_HOOK_EVENTS);
     expect(hooks[0]).toContain('type="command"');
     expect(env.CUBEFARM_HOOK_URL).toBe('http://127.0.0.1:1/api/hooks/t');
+  });
+
+  it.each([undefined,'existing-thread'])('requires reviewed native MCP servers before first turn or resume: %s',resumeId=>{
+    const {args}=launchArgs('codex',ctx({resumeId,officeUrl:'http://127.0.0.1:1/api/mcp/test',browser:{command:'node',args:['browser.js']},platformServers:{canvas_authoring:{command:'dotnet',args:['native-canvas']},flowagent:{command:'node',args:['native-flow'],env:{PA_DEFAULT_ENVIRONMENT:'Default-11111111-1111-4111-8111-111111111111'}}}}));
+    for(const name of ['office','canvas_authoring','flowagent']){const config=args.find(a=>a.startsWith(`mcp_servers.${name}=`))!;expect(config).toContain('enabled=true,required=true,startup_timeout_sec=');}
+    expect(args.find(a=>a.startsWith('mcp_servers.playwright='))).toContain('enabled=true,startup_timeout_sec=60');
+    expect(args.find(a=>a.startsWith('mcp_servers.playwright='))).not.toContain('required=true');
+    for(const alias of ['canvas-authoring','swarm-flowagent','swarm_flowagent']){const config=args.find(a=>a.startsWith(`mcp_servers.${alias}=`))!;expect(config).toContain('enabled=false');expect(config).not.toContain('required=true');}
+    expect(args.find(a=>a.startsWith('mcp_servers.flowagent='))).toContain('PA_DEFAULT_ENVIRONMENT');
   });
 
   it('runs the hook program with a command that never starts with a quote on Windows', () => {
@@ -207,4 +220,11 @@ describe('newScreenshots', () => {
     expect(newScreenshots(path.join(dir, 'missing'), seen, later)).toEqual([]);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+});
+
+it('recognizes only Gemini native cancellation notices rather than quoted task text',()=>{
+ expect(interruptions('ℹ User cancelled the request.\nType your message','gemini')).toBe(1);
+ expect(interruptions('User cancelled the request.\nUser cancelled the request.','gemini')).toBe(2);
+ expect(interruptions('ℹ Request cancelled.','gemini')).toBe(1);
+ for(const screen of ['Please print User cancelled the request.','"User cancelled the request."','The model was interrupted','Error: User cancelled the request.'])expect(interruptions(screen,'gemini')).toBe(0);
 });

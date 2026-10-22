@@ -1,0 +1,18 @@
+import {z} from 'zod';
+import {nativeDeniedCheckSchema,nativeTargetSchema} from './nativeQa.ts';
+const id=z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/);
+const contract=z.strictObject({adapter:z.literal('native-rejected-request-v1'),operation:z.literal('create-request'),assertions:z.tuple([z.literal('authenticated-403'),z.literal('retained-bounded-observations')]),observationMode:z.literal('pre-and-post'),observationWindowMs:z.number().int().min(1000).max(60000)});
+export function functionalTransportCheck(raw:unknown){
+ const value=raw as {contract:{observationWindowMs:number}};
+ // Legacy adapter configuration only. Its private poll field does not assert
+ // a cadence in this separate pre/post-only functional verification contract.
+ return nativeDeniedCheckSchema.parse({...value,contract:{adapter:'native-denied-create-v1',operation:'create-request',assertions:['authenticated-403','no-correlated-write','no-correlated-dispatch'],observationWindowMs:value.contract.observationWindowMs,pollIntervalMs:Math.min(1000,value.contract.observationWindowMs)}});
+}
+export const functionalRejectedCheckSchema=z.strictObject({...nativeDeniedCheckSchema.shape,contract}).superRefine((v,c)=>{try{functionalTransportCheck(v);if(!v.authorizationBoundary)throw Error();}catch{c.addIssue({code:'custom',message:'Functional rejection requires the explicit same-user/distinct selected-app boundary'});}});
+export const functionalShowcaseSchema=z.strictObject({schemaVersion:z.literal(1),assurance:z.literal('single-user-functional-showcase'),rejection:functionalRejectedCheckSchema,
+ duplicate:z.strictObject({beforeTestName:z.string().min(1).max(200),testName:z.string().min(1).max(200),action:id,label:z.literal('CF-PROBE-DUPLICATE'),triggerOutput:z.strictObject(Object.fromEntries(['itemId','version','correlation','status','attempt','flowRunId','receiptCorrelation'].map(key=>[key,z.array(z.string().min(1).max(200).refine(v=>!['__proto__','constructor','prototype'].includes(v))).min(1).max(20)])) as Record<'itemId'|'version'|'correlation'|'status'|'attempt'|'flowRunId'|'receiptCorrelation',z.ZodArray<z.ZodString>>)}),
+ recovery:z.strictObject({target:nativeTargetSchema,flowComponent:id,triggerName:id,failureTestName:z.string().min(1).max(200),recoveryTestName:z.string().min(1).max(200),failureAction:id,controlledFailureAction:id,recoveryAction:id,correlationParameter:z.literal('qaRunId'),failureLabel:z.literal('CF-PROBE-FAIL-ONCE'),output:z.strictObject({itemId:z.array(z.string()).min(1).max(10),correlation:z.array(z.string()).min(1).max(10),status:z.array(z.string()).min(1).max(10),attempt:z.array(z.string()).min(1).max(10),flowRunId:z.array(z.string()).min(1).max(10),errorDetail:z.array(z.string()).min(1).max(10)})})});
+export type FunctionalShowcase=z.infer<typeof functionalShowcaseSchema>;
+export const functionalRequestFieldsSchema=z.object({Title:z.string(),RequestLabel:z.string(),RequestCorrelation:z.string(),ProbeStatus:z.enum(['New','Failed','Processed']),AttemptCount:z.number().int().min(0).max(2),FlowRunId:z.string().nullish().transform(v=>v??''),ReceiptCorrelation:z.string().nullish().transform(v=>v??''),ErrorDetail:z.string().max(2000).nullish().transform(v=>v??'')});
+export const functionalRequestSnapshotSchema=z.strictObject({id:z.string().regex(/^[1-9][0-9]*$/),version:z.string().min(1),fields:functionalRequestFieldsSchema});
+export const functionalLimits=['Single-user functional showcase only; no employee isolation or production readiness certification.','Bounded observations do not prove complete historical absence of writes or dispatches.','Failed-request recovery does not establish solution rollback, crash adoption or disaster recovery.'];

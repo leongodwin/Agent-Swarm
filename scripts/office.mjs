@@ -13,6 +13,7 @@ import { execFile, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import {LauncherCrashRecovery} from './officeRecovery.mjs';
 import {PolicyReaderHost} from '../server/policyReaderHost.mjs';
 import {LauncherReloadController} from '../server/officeReload.mjs';
 import { clientPort, isUpdateCommand, parseOfficeArgs, parseSymref, refusal, rollbackPlan, stepsFor, swarmHome } from './officeSteps.mjs';
@@ -96,6 +97,8 @@ const reloadController=new LauncherReloadController({
   },
 });
 
+const crashRecovery=new LauncherCrashRecovery({current:()=>children.server?.proc,busy:()=>!!updating||shuttingDown,restart:peer=>startServer(peer.pid),report:warn,exhausted:()=>{void shutdown(1);}});
+
 function spawnChild(name, args, { ipc = false, env = process.env } = {}) {
   const proc = spawn(process.execPath, args, {
     cwd: root,
@@ -113,12 +116,12 @@ function spawnChild(name, args, { ipc = false, env = process.env } = {}) {
   return child;
 }
 
-function startServer() {
+function startServer(crashedOwnerPid) {
   const demo = opts.demo ? ['--demo'] : [];
   const args = opts.dev
     ? ['--import', 'tsx', path.join('server', 'index.ts'), ...demo]
     : [path.join('bin', 'cubefarm.js'), ...demo, ...(opts.open && firstStart ? [] : ['--no-open'])];
-  const child = spawnChild('server', args, { ipc: true, env: { ...process.env, SWARM_LAUNCHER: '1',SWARM_POLICY_READER_HOST:opts.demo?'0':'1' } });
+  const child = spawnChild('server', args, { ipc: true, env: { ...process.env, SWARM_LAUNCHER: '1',SWARM_POLICY_READER_HOST:opts.demo?'0':'1',SWARM_CRASHED_DELIVERY_OWNER:Number.isSafeInteger(crashedOwnerPid)&&crashedOwnerPid>0?String(crashedOwnerPid):'' } });
   child.proc.on('message', (msg) => {
     if(reloadController.handle(child.proc,msg))return;
     if(!opts.demo&&policyReaderHost.handle(child.proc,msg))return;
@@ -149,12 +152,14 @@ function startChildren() {
 }
 
 function onExit(child, how) {
+  const owned=children[child.name]===child;
   if(child.name==='server'){
     policyReaderHost.disconnect(child.proc,!shuttingDown&&!updating&&(opts.dev||reloadController.owns(child.proc)));
     reloadController.exited(child.proc,how);
   }
   if (children[child.name] === child) children[child.name] = null;
   if (child.stopped || shuttingDown) return;
+  if(child.name==='server'&&owned&&!updating&&crashRecovery.exited(child.proc,how))return;
   if (child.name === 'server' && opts.dev) {
     warn(`Server exited (${how}); waiting for a file change to restart`);
     return;
@@ -252,6 +257,7 @@ function update(trigger) {
 }
 
 async function runUpdate(trigger) {
+  crashRecovery.cancel();
   log(`Updating the office (${trigger}): stopping it first`);
   await stopChildren('update');
   policyReaderHost.clear();
@@ -391,7 +397,7 @@ let shuttingDown = false;
 async function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
-  reloadController.close();
+  reloadController.close();crashRecovery.close();
   log('Stopping the office');
   policyReaderHost.clear();
   await stopChildren('stop');

@@ -107,3 +107,28 @@ it.each(['throw','reject'] as const)('does not redeliver a planning result when 
   await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());run.proc.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{}'}})+'\n');run.proc.emit('close',0);
   await vi.waitFor(()=>expect(report).toHaveBeenCalledOnce());expect(run.callback).toHaveBeenCalledOnce();expect(run.callback.mock.calls[0][0].ok).toBe(true);expect(JSON.stringify(report.mock.calls)).not.toContain('private callback diagnostic');
 });
+
+it('cancels during preparation without launching a native process',async()=>{
+ const run=fixture();run.handle.stop();expect(await run.result).toMatchObject({ok:false,errors:['Cancelled before launch']});expect(native.spawn).not.toHaveBeenCalled();
+});
+it.each([{type:'error',message:'Synthetic native error'},{type:'turn.failed',error:{message:'Synthetic turn error'}},{type:'turn.failed'}])('retains native failure precedence over a later structured draft: %#',async event=>{
+ const run=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
+ run.proc.stdout.write(JSON.stringify(event)+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{}'}})+'\n');run.proc.emit('close',0);
+ expect(await run.result).toMatchObject({ok:false,structured:undefined,turns:0,errors:[event.message??event.error?.message??'Codex planning failed']});expect(run.callback).toHaveBeenCalledOnce();
+});
+it.each(['stderr','exit-code','spawn-error','stdin-error','invalid-final','overflow'] as const)('fails planning without publishing a draft after %s',async mode=>{
+ const run=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
+ if(mode==='stderr')run.proc.stderr.write('Synthetic stderr diagnostic');
+ if(mode==='spawn-error')run.proc.emit('error',new Error('Synthetic spawn error'));
+ if(mode==='stdin-error')run.proc.stdin.emit('error',new Error('Synthetic stdin error'));
+ if(mode==='invalid-final')run.proc.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:17}})+'\n');
+ if(mode==='overflow')run.proc.stdout.emit('data',Buffer.alloc(3*1024*1024+1));
+ run.proc.emit('close',mode==='stderr'||mode==='exit-code'?9:0);
+ const result=await run.result;expect(result.ok).toBe(false);expect(result.structured).toBeUndefined();expect(result.errors.length).toBeGreaterThan(0);expect(run.callback).toHaveBeenCalledOnce();
+ if(mode==='stderr')expect(result.errors).toEqual(['Synthetic stderr diagnostic']);if(mode==='exit-code')expect(result.errors).toEqual(['Codex exited 9']);
+});
+it('reports progress for composing and completed turns without granting completion before process close',async()=>{
+ const run=fixture();await vi.waitFor(()=>expect(native.spawn).toHaveBeenCalledOnce());
+ run.proc.stdout.write(JSON.stringify({type:'item.started',item:{type:'agent_message'}})+'\n'+JSON.stringify({type:'turn.completed'})+'\n'+JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{}'}})+'\n');
+ expect(run.log.mock.calls.flatMap(([entries])=>entries).map(entry=>entry.text)).toContain('Composing structured architecture draft');expect(run.callback).not.toHaveBeenCalled();run.proc.emit('close',0);expect(await run.result).toMatchObject({ok:true});
+});

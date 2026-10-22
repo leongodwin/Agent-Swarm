@@ -1,4 +1,4 @@
-# How cubefarm works
+# How Agent Swarm works
 
 The details behind the office: how an issue becomes a merged pull request, who does what, and what agents are allowed to do on your machine. For getting started, see the [README](../README.md).
 

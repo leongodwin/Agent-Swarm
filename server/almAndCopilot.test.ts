@@ -42,9 +42,9 @@ describe('Application Lifecycle Management (ALM) Multi-Environment Pipeline', ()
       capturedNotification = card;
     });
 
-    const approved = almManager.approveRelease('Leon van Zyl');
+    const approved = almManager.approveRelease('Leon Godwin');
     expect(approved.approvalStatus).toBe('deployed');
-    expect(approved.approvedBy).toBe('Leon van Zyl');
+    expect(approved.approvedBy).toBe('Leon Godwin');
     expect(approved.currentProdVersion).toBe('1.3.0.4');
     expect(approved.targetVersion).toBe('1.3.0.5');
 

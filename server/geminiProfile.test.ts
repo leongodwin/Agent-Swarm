@@ -4,12 +4,12 @@ import path from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
 vi.mock('./exec.ts',()=>({run:vi.fn(async()=>'{"secure":true}')}));
 import {run} from './exec.ts';
-import {GEMINI_HOOK_SOURCE,geminiSettings,verifyGeminiProfile} from './geminiBridge.ts';
+import {GEMINI_HOOK_SOURCE,geminiSettings,geminiHookCommand,verifyGeminiProfile} from './geminiBridge.ts';
 const roots:string[]=[];
 afterEach(async()=>{vi.clearAllMocks();for(const root of roots.splice(0))await fs.rm(root,{recursive:true,force:true});});
 async function fixture(){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-gemini-profile-'));roots.push(root);const profile=path.join(root,'settings.json'),hook=path.join(root,'gemini-hook.cjs'),entry=path.join(root,'gemini.js');
- const config=geminiSettings(`"${process.execPath}" "${hook}"`,{office:{httpUrl:'${CUBEFARM_OFFICE_URL}'}});await fs.writeFile(profile,JSON.stringify(config));await fs.writeFile(hook,GEMINI_HOOK_SOURCE);await fs.writeFile(path.join(root,'chunk-native.js'),'export {isFileAndDirectorySecureSync};');
+ const config=geminiSettings(geminiHookCommand(process.execPath,hook),{office:{httpUrl:'${CUBEFARM_OFFICE_URL}'}});await fs.writeFile(profile,JSON.stringify(config));await fs.writeFile(hook,GEMINI_HOOK_SOURCE);await fs.writeFile(path.join(root,'chunk-native.js'),'export {isFileAndDirectorySecureSync};');
  return {root,profile,hook,entry,config,command:{file:process.execPath,args:[entry]}};
 }
 it('rejects missing protected configuration before native validation',async()=>{

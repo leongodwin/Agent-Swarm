@@ -24,11 +24,11 @@ it('requires a connected connector for the intended account and connection ID', 
   expect(connectedAccount('approvals-id  Standard approvals  /providers/Microsoft.PowerApps/apis/shared_approvals Connected', 'shared_approvals', undefined, 'approvals-id')).toBe(true);
   expect(connectedAccount(output, 'shared_office365users')).toBe(false);
 });
-it('does not obtain or send Azure tokens to arbitrary destinations or for a different account', async () => {
+it('does not send Azure tokens to arbitrary destinations or for a different account', async () => {
   expect(azureResource('https://graph.microsoft.com.evil.test/me')).toBeUndefined();
   expect(azureResource('http://graph.microsoft.com/me')).toBeUndefined();
   expect(azureResource('https://graph.microsoft.com/v1.0/me')).toBe('https://graph.microsoft.com/');
-  const run = vi.spyOn(deliveryCommands, 'run').mockResolvedValue(JSON.stringify({ tenantId: '5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c', user: { name: 'other@example.com' } }));
+  const run = vi.spyOn(deliveryCommands, 'run').mockResolvedValue(JSON.stringify({tenant:'5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c',accessToken:'header.'+Buffer.from(JSON.stringify({tid:'5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c',upn:'other@example.com'})).toString('base64url')+'.sig'}));
   const check = { id: 'auth', category: 'authentication' as const, remedy: 'Sign in as the project owner', probe: { kind: 'http' as const, url: 'https://graph.microsoft.com/v1.0/me', pointer: ['userPrincipalName'], equals: 'maker@example.com', azureCli: { tenantId: '5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c', username: 'maker@example.com' } } };
   await expect(runCapabilityProbe(check, process.cwd(), AbortSignal.timeout(1000))).rejects.toThrow('identity');
   expect(run).toHaveBeenCalledTimes(1);
@@ -240,3 +240,13 @@ await server.connect(new StdioServerTransport());`);
   await runCapabilityProbe(check, root, AbortSignal.timeout(10000));
   await expect(runCapabilityProbe({ ...check, probe: { ...check.probe, tools: ['missing_tool'] } }, root, AbortSignal.timeout(10000))).rejects.toThrow('Required MCP tools');
 }, 30000);
+
+it('shares cancellation only within one configured group and gives separate checks independent ownership',async()=>{
+ const {root,service,probe}=await fixture();await service.configure('owner-a',config);await service.configure('owner-b',config);
+ const firstCwd=path.join(root,'a'),secondCwd=path.join(root,'b');await Promise.all([service.check('owner-a',firstCwd,target),service.check('owner-b',secondCwd,target)]);
+ const batch=(cwd:string)=>probe.mock.calls.filter(([check,at])=>at===cwd&&config.checks.some(row=>row.id===check.id)).map(call=>call[2]);
+ const first=batch(firstCwd),second=batch(secondCwd);expect(first).toHaveLength(config.checks.length);expect(second).toHaveLength(config.checks.length);expect(new Set(first).size).toBe(2);expect(new Set(second).size).toBe(2);expect(first.every(signal=>!second.includes(signal))).toBe(true);
+ for(const cwd of [firstCwd,secondCwd]){const calls=probe.mock.calls.filter(([,at])=>at===cwd);const cloud=calls.filter(([check])=>check.probe.kind==='http');expect(new Set(cloud.map(call=>call[2])).size).toBe(1);const runtime=calls.filter(([check])=>config.checks.some(row=>row.id===check.id)&&['mcp','cli'].includes(check.probe.kind));expect(new Set(runtime.map(call=>call[2])).size).toBe(1);expect(cloud[0][2]).not.toBe(runtime[0][2]);}
+ for(const cwd of [firstCwd,secondCwd]){const own=batch(cwd)[0];for(const [check,at,signal] of probe.mock.calls)if(at===cwd&&['github-auth','worker-cli'].includes(check.id))expect(signal).not.toBe(own);}
+ await service.close();
+});

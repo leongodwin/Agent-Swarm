@@ -82,10 +82,11 @@ it('rejects an unsupported cloud-flow state before creating mutation intent', as
 });
 it('requires release-correlated action output instead of unrelated successful activity', async () => {
   const run = state(); const check = { component: 'flow', action: 'Audit', correlationPointer: ['body', 'releaseId'], assertions: [{ pointer: ['body', 'saved'], equals: true }] };
-  const call = vi.fn<FlowAdapter['call']>(async (tool, args) => tool === 'get_run_history' ? [{ name: 'unrelated', status: 'Succeeded', startTime: new Date().toISOString() }, { name: 'ours', status: 'Succeeded', startTime: new Date().toISOString() }] : { content: { body: { releaseId: args.run === 'ours' ? run.id : 'other', saved: true } } });
+  const startTime=new Date(Date.now()-500).toISOString(),endTime=new Date().toISOString();
+  const call = vi.fn<FlowAdapter['call']>(async (tool, args) => tool === 'get_run_history' ? [{ name: 'unrelated', status: 'Succeeded', startTime }, { name: 'ours', status: 'Succeeded', startTime }] : tool === 'get_run_details' ? {name:args.run,id:`/providers/Microsoft.ProcessSimple/environments/${id}/flows/${id}/runs/${args.run}`,properties:{status:'Succeeded',startTime,endTime}} : { action:'Audit',which:'outputs',content: { body: { releaseId: args.run === 'ours' ? run.id : 'other', saved: true } } });
   const result = await verifyCloudFlowRun({ call, close: owned }, id, id, run.id, run.startedAt, check);
   expect(result.runId).toBe('ours');
-  call.mockImplementation(async (tool) => tool === 'get_run_history' ? [{ name: 'unrelated', status: 'Succeeded', startTime: new Date().toISOString() }] : { content: { body: { releaseId: 'other', saved: true } } });
+  call.mockImplementation(async (tool,args) => tool === 'get_run_history' ? [{ name: 'unrelated', status: 'Succeeded', startTime }] : tool==='get_run_details' ? {name:args.run,id:`/providers/Microsoft.ProcessSimple/environments/${id}/flows/${id}/runs/${args.run}`,properties:{status:'Succeeded',startTime,endTime}} : { action:'Audit',which:'outputs',content: { body: { releaseId: 'other', saved: true } } });
   await expect(verifyCloudFlowRun({ call, close: owned }, id, id, run.id, run.startedAt, check)).rejects.toThrow('No fresh');
 });
 it('observes fresh Copilot publication and recovers a lost response without republishing', async () => {

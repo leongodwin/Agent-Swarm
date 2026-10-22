@@ -2,6 +2,8 @@
 
 ## Reading this evidence — updated 15 October 2026
 
+The [full launcher recovery follow-up](FULL-LAUNCHER-RECOVERY-QA.md) distinguishes verified server replacement and explicit local update/rollback from blocked authenticated forced-crash task adoption. An interrupted deployment lease still requires reconciliation.
+
 This file combines reliability contracts and dated implementation/validation checkpoints. Historical PIDs, runtime availability, test/coverage counts and “current” observations are not current operating state. Use [current status](PRODUCTION-GOAL-STATUS.md), [roadmap](AGENT-SWARM-IMPLEMENTATION-PLAN.md) and [delivery contract](DELIVERY.md) for present scope. The [accepted backend pilot](BACKEND-PILOT-COMPLETION.md) demonstrates only reference-only development delivery and owned-record recovery; it does not close full-app, production, sustained reliability or whole-backend coverage gaps. Codex, Gemini and OpenCode are the permitted runtimes; historical Claude/Copilot execution guidance is superseded.
 
 ## Live policy-reader warm reuse, 13 October

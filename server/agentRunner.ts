@@ -10,6 +10,12 @@ import { type SessionAuthorization } from './toolGovernance.ts';
 // The CEO runs through here too, with the office tools instead of a shell.
 
 export interface SessionOptions {
+  /** Require reviewed, task-local skill and MCP observations before supported worker mutations. */
+  workerPreflight?: boolean;
+  workerPreflightMode?: 'authoring' | 'discovery' | 'design';
+  taskEvidenceKey?: string;
+  repoId?: string;
+  coordinatorAttemptId?:string;
   /** Explicit identity for a new SDK session; used to correlate planning runtime recovery. */
   sessionId?:string;
   /** Structured planning jobs: no built-in tools, inherited MCP servers or project hooks. */
@@ -51,6 +57,8 @@ export interface LogEntry {
 }
 
 export interface SessionResult {
+  sessionEvidenceId?: string;
+  failureCategory?: 'preflight' | 'governance' | 'runtime' | 'audit';
   /** False means process-family termination is unverified even if the launcher closed. */
   cleanupVerified?:boolean;
   ok: boolean;
@@ -71,7 +79,8 @@ export interface SessionCallbacks {
   log(entries: LogEntry[]): void;
   tool(name: string | null): void;
   /** The session to resume next time; null: there's none to resume (the next session starts a new one). */
-  sessionId(id: string | null): void;
+  /** Native startup may await the durable identity checkpoint before sending task work. */
+  sessionId(id: string | null): void | Promise<void>;
   browserUrl(url: string): void;
   screenshot(data: Buffer, mime: string): void;
   /** The final text of each turn: the reply to the prompt and to every message sent while it ran. */

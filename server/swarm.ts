@@ -1,3 +1,6 @@
+import {taskReconciliationReviewPrompt,type TaskReconciliationReviewRequest} from './taskReconciliationReview.ts';
+import type {ExecutionLedger,AttemptContext} from './executionLedger.ts';
+import {evidenceHash} from './sessionEvidence.ts';
 import {runtimeModelError} from '../shared/runtimePolicy.ts';
 import {nextPreflightRetry,preflightDeferred,preflightRetrySchema} from './deliveryRetry.ts';
 import type {DeliveryPreflightRetry} from '../shared/delivery.ts';
@@ -58,6 +61,9 @@ import { fixDeskBranch } from './workspace.ts';
 import { atomicWrite, SerialWriter } from './atomicFile.ts';
 import { readOfficeState } from './officeState.ts';
 import { QA_SCHEMA, parseQaReport, type QaReport } from './qaReport.ts';
+import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
+import {assertOriginalTaskQa} from './taskReconciliation.ts';
+import {mergedTaskEvidence} from './taskExecution.ts';
 
 // ---------- persisted shape ----------
 
@@ -122,11 +128,13 @@ interface PersistedAgent {
   lastError: string | null;
   modelBlock?:{fingerprint:string;reason:string};
   preflightRetry?:DeliveryPreflightRetry;
+  launchedTaskScope?:{issue:number;hash:string};
   logTail: LogLine[];
 }
 
 /** A pull request's trip through QA. */
 interface QaRecord extends QaView {
+  taskAuthorityHash?:string;
   issueNumber: number | null;
   devSessionId: string | null; // the dev's Claude Code session, resumed to fix QA findings
   devSessionCli: AgentCli | null; // belongs to this checkpoint, not the agent's later sessions
@@ -155,6 +163,7 @@ function developerCheckpoint(dev: Pick<PersistedAgent, 'id' | 'sessionId' | 'ses
 }
 
 interface CeoState {
+  recoveryHold?:boolean;
   queue: CeoJob[];
   job: CeoJob | null; // the job the CEO is on right now
   lastReviewAt: number | null;
@@ -305,6 +314,7 @@ const ICON = { pass: '✅', fail: '❌', skip: '⏭️' } as const;
 export { HttpError };
 
 export class Swarm {
+  browserTaskHold:(repoId:string,actor:string,issue:number,since:number)=>Promise<boolean>=async()=>false;
   runtimeCleanup:()=>import('./runtimeCleanup.ts').CleanupView=()=>({records:[]});
   runtimeCleanupChanged(){if(this.closed)return;this.emitSessionUsage();this.later(()=>this.schedule(),0);}
   private sessionCapacityBlocker:string|undefined;
@@ -349,6 +359,33 @@ export class Swarm {
   deliveryWorkGate: (repoId:string,issue:number) => void = () => {};
   deliveryTaskStage: (repoId:string,issue:number) => string|undefined = () => undefined;
   deliveryTaskFingerprint: (repoId:string,issue:number) => string = () => '';
+  deliveryTaskContract:(repoId:string,issue:number)=>{owner:string;qaOwner:string;components:string[];resources:string[]}|null=()=>null;
+  deliveryTaskComplete:(repoId:string,issue:number,evidence:{prNumber:number;headSha:string;reviewer:string;taskAuthorityHash:string;evidenceHash:string})=>Promise<void>=async()=>{};
+  deliveryTaskContext:(repoId:string,issue:number)=>string=()=>'';
+  deliveryTaskInputs:(repoId:string,issue:number)=>string[]=()=>[];
+  verifyTaskInputs:(cwd:string,commits:string[])=>Promise<void>=async()=>{};
+  executionLedger?:ExecutionLedger;
+  private executionAttempts=new Map<string,{id:string;generation:number}>();
+  private automaticAgents=new Set<string>();
+  private automaticTasks=new Map<string,number>();
+  private executionDenials=new Map<string,number>();
+  private executionContext(a:PersistedAgent,repo:PersistedRepo,issue=a.issueNumber):AttemptContext{
+    return {repoId:repo.id,agentId:a.id,role:a.task==='qa'?'qa':'dev',runtime:(a.sessionId&&a.sessionCli||a.cli||this.state.settings.defaultCli) as 'codex'|'gemini'|'opencode',task:a.task==='qa'?a.prNumber===null?'review':'qa':a.task==='fix'?'fix':'issue',issue:issue&&issue>0?issue:null,scopeHash:evidenceHash(this.deliveryTaskFingerprint(repo.id,issue??0)),admissionHash:evidenceHash([this.workerAdmissionContext([repo.id,...repo.links]),a.cli,this.modelFor(a,a.cli||this.state.settings.defaultCli),a.effort||this.state.settings.defaultEffort,a.role,this.state.settings.runtime,a.cli||this.state.settings.defaultCli])};
+  }
+  private trackExecution(a:PersistedAgent,repo:PersistedRepo){
+    if(!this.executionLedger||this.backend.demo||a.role==='ceo')return;
+    const prior=this.executionAttempts.get(a.id),generation=this.taskGeneration(a);if(prior?.generation===generation)return;
+    if(this.executionDenials.get(a.id)===generation)throw new HttpError(409,'Execution reservation was denied');
+    let id:string;try{id=this.executionLedger.reserve(this.executionContext(a,repo),this.automaticTasks.get(a.id)===generation);}catch(error){this.executionDenials.set(a.id,generation);throw error;}this.executionAttempts.set(a.id,{id,generation});
+  }
+  private endExecution(a:PersistedAgent,outcome:'reported-success'|'failure'|'blocked'|'interrupted',sessionEvidenceId?:string){
+    const current=this.executionAttempts.get(a.id);if(!current)return;try{this.executionLedger?.finish(current.id,outcome,sessionEvidenceId);}catch{/* Evidence failure is exposed by availability; it never creates acceptance. */}
+  }
+  private executionHeld(a:PersistedAgent,repo:PersistedRepo,issue:number){try{return !!this.executionLedger?.blocked({...this.executionContext(a,repo,issue),role:'dev'});}catch{return true;}}
+  private qaExecutionHeld(a:PersistedAgent,repo:PersistedRepo,issue:number){try{return !!this.executionLedger?.blocked({...this.executionContext(a,repo,issue),role:'qa'});}catch{return true;}}
+  private taskClaims=new Map<string,{generation:number;repoId:string;issue:number;components:string[];resources:string[]}>();
+  private taskAcceptancePending=new Set<QaRecord>();
+  private manualQaRetries=new WeakSet<QaRecord>();
   deliveryRecordContext: (repoId:string) => string = () => '';
   engineeringTools: (authorize?: SessionAuthorization, agentId?:string, repoId?:string) => OfficeTools | undefined = () => undefined;
   deliveryQaTools: (agentId: string, repoId: string, authorize?: SessionAuthorization) => OfficeTools | undefined = () => undefined;
@@ -421,10 +458,11 @@ export class Swarm {
     return ()=>{this.requireOpen();if(agent.status!=='working'||!this.ownsTask(agent,generation))throw new HttpError(403,'Planning session changed or stopped; stale record updates are denied');};
   }
   private reserveTask(a: PersistedAgent) {
+    this.endExecution(a,'interrupted');
     this.taskStops.get(a.id)?.abort();
     this.taskStops.set(a.id, new AbortController());
     this.workerAdmissions.delete(a.id);
-    const generation = this.taskGeneration(a) + 1; this.taskGenerations.set(a.id, generation); return generation;
+    const generation = this.taskGeneration(a) + 1; this.taskGenerations.set(a.id, generation); if(this.automaticAgents.has(a.id))this.automaticTasks.set(a.id,generation); return generation;
   }
   private ownsTask(a: PersistedAgent, generation: number) {
     return !this.closed && this.state.agents.includes(a) && this.taskGeneration(a) === generation;
@@ -507,6 +545,7 @@ export class Swarm {
           cli: isCli(a.cli) ? a.cli : '',
           sessionCli: isCli(a.sessionCli) ? a.sessionCli : null,
           modelBlock:a.modelBlock===undefined?undefined:z.object({fingerprint:z.string().regex(/^[a-f0-9]{64}$/),reason:z.string().min(1).max(1000)}).strict().parse(a.modelBlock),
+          launchedTaskScope:a.launchedTaskScope===undefined?undefined:z.strictObject({issue:z.number().int().positive(),hash:z.string().min(1).max(128)}).parse(a.launchedTaskScope),
           preflightRetry:a.preflightRetry===undefined?undefined:preflightRetrySchema.parse(a.preflightRetry),
         })),
         qa: (loaded.qa ?? []).map((q) => ({
@@ -584,6 +623,7 @@ export class Swarm {
         carryOn.push(a);
         continue;
       }
+      if(!this.backend.demo&&a.role==='ceo'&&this.state.ceo.job){this.holdRetainedCeo(a,this.state.ceo.job,'Retained native runtime is missing; reconcile its submitted outcome before retrying');continue;}
       a.status = 'stopped';
       a.lastError = 'The swarm server restarted while this agent was working.';
       interrupted.push(a);
@@ -659,9 +699,10 @@ export class Swarm {
         continue;
       }
       if (this.slotsFull()) continue; // stays 'stopped'; the manager can resume it later
-      void this.message(a.id, 'The office server restarted while you were working. Check the state of your worktree and continue where you left off.').catch((err) =>
+      const repo=this.state.repos.find(r=>r.id===a.repoId);if(repo&&this.executionHeld(a,repo,a.issueNumber??0))continue;
+      this.automaticAgents.add(a.id);try{void this.message(a.id, 'The office server restarted while you were working. Check the state of your worktree and continue where you left off.').catch((err) =>
         console.warn(`could not resume ${a.name}`, err),
-      );
+      );}finally{this.automaticAgents.delete(a.id);}
     }
   }
 
@@ -817,6 +858,7 @@ export class Swarm {
   }
 
   private emitAgent(a: PersistedAgent) {
+    if(!BUSY.includes(a.status))this.endExecution(a,a.status==='done'?'reported-success':a.status==='stopped'?'interrupted':a.status==='error'?'blocked':'interrupted');
     // A session can finish after its agent was let go (their floor disconnected mid-task); they're gone, so say nothing.
     if (!this.agentRt.has(a.id)) return;
     const { log: _log, ...rest } = this.agentView(a, false);
@@ -1123,6 +1165,7 @@ export class Swarm {
   /** One step toward merging a QA-passed PR. Returns true when it merged. */
   private async advanceMerge(repo: PersistedRepo, rec: QaRecord, pr: PullInfo, preferredMethod?: 'squash' | 'merge' | 'rebase'): Promise<boolean> {
     if (this.closed) return false;
+    if(!this.taskQaCurrent(repo,rec))return false;
     let dlpViolations: DlpPolicyViolation[] = [];
     try {
       const files = await this.backend.prFiles(repo.fullName, pr.number, pr.headSha);
@@ -1169,6 +1212,7 @@ export class Swarm {
       }
       return step.note === undefined ? false : this.mergeNote(rec, step.note);
     }
+    if(!this.taskQaCurrent(repo,rec))return false;
     if (step.do === 'update-branch') {
       if (preferredMethod) return this.mergeNote(rec, 'Branch is behind the base; update it and obtain fresh QA approval before merging');
       // The repo only merges up-to-date branches. GitHub merges the base in cleanly (or refuses); CI checks the result.
@@ -1184,6 +1228,7 @@ export class Swarm {
     let error = '';
     for (const method of preferredMethod ? [preferredMethod] : ['squash', 'merge', 'rebase'] as const) {
       if (this.closed) return false;
+      if(!this.taskQaCurrent(repo,rec))return false;
       try {
         await this.backend.mergePull(repo.fullName, pr.number, method, rec.passedSha!);
         error = '';
@@ -1203,7 +1248,25 @@ export class Swarm {
       return this.mergeNote(rec, `merge blocked: ${error}`);
     }
     this.toast('success', `🔀 Merged PR #${pr.number} into ${repo.defaultBranch}: ${pr.title}`);
+    await this.acceptMergedTask(repo,rec,pr);
     return true;
+  }
+  private taskQaCurrent(repo:PersistedRepo,rec:QaRecord){
+    if(this.backend.demo)return true;
+    try{
+      const issue=rec.issueNumber??0,contract=this.deliveryTaskContract(repo.id,issue);if(!contract)return true;
+      this.deliveryWorkGate(repo.id,issue);
+      if(rec.qaAgentId===contract.qaOwner&&rec.taskAuthorityHash===this.deliveryTaskFingerprint(repo.id,issue))return true;
+    }catch{/* Missing current scope cannot authorize an old QA pass. */}
+    this.setQa(rec,{status:'queued',passedSha:null,testedSha:null,mergeNote:'Task scope or authority changed; fresh independent QA required'});return false;
+  }
+  private async acceptMergedTask(repo:PersistedRepo,rec:QaRecord,pr:Pick<PullInfo,'number'|'headSha'>){
+    const issue=rec.issueNumber??0;if(this.backend.demo||!this.deliveryTaskContract(repo.id,issue))return true;
+    try{
+      if(!rec.passedSha||rec.passedSha!==pr.headSha||!rec.qaAgentId||!rec.taskAuthorityHash)throw new Error('Exact scoped QA evidence is missing');
+      await this.deliveryTaskComplete(repo.id,issue,{prNumber:pr.number,headSha:pr.headSha,reviewer:rec.qaAgentId,taskAuthorityHash:rec.taskAuthorityHash,evidenceHash:crypto.createHash('sha256').update(JSON.stringify({pr:pr.number,head:rec.passedSha,reviewer:rec.qaAgentId,summary:rec.summary,checks:rec.checks,commentUrl:rec.commentUrl})).digest('hex')});
+      return true;
+    }catch{this.mergeNote(rec,'Merged task acceptance is blocked; reconcile scoped QA evidence before dependent work');return false;}
   }
 
   /** Show where auto-merge stands on a PR's card. Doesn't count as a change to the record. */
@@ -1278,6 +1341,7 @@ export class Swarm {
    */
   shutdown(restart = false): Promise<void> {
     if (this.shutdownWork) return this.shutdownWork;
+    for(const agent of this.state.agents)this.endExecution(agent,'interrupted');
     this.closed = true;
     this.lifecycleStop.abort();
     for (const timer of this.lifecycleTimers) clearTimeout(timer);
@@ -1374,6 +1438,16 @@ export class Swarm {
     for (const q of this.state.qa.filter((x) => x.repoId === repo.id)) {
       const pr = pulls.find((p) => p.number === q.prNumber);
       if (pr && pr.state !== 'OPEN' && q.status !== 'testing' && q.status !== 'fixing') {
+        if(pr.state==='MERGED'&&this.deliveryTaskContract(repo.id,q.issueNumber??0)){
+          if(!this.taskAcceptancePending.has(q)){
+            this.taskAcceptancePending.add(q);
+            void this.acceptMergedTask(repo,q,pr).then(accepted=>{
+              if(!accepted||this.closed||!this.state.qa.includes(q))return;
+              this.state.qa=this.state.qa.filter(row=>row!==q);this.broadcast({type:'qaRemoved',repoId:repo.id,prNumber:q.prNumber});this.save();
+            }).finally(()=>this.taskAcceptancePending.delete(q));
+          }
+          continue;
+        }
         this.state.qa = this.state.qa.filter((x) => x !== q);
         this.broadcast({ type: 'qaRemoved', repoId: repo.id, prNumber: q.prNumber });
       }
@@ -1422,6 +1496,21 @@ export class Swarm {
     } finally { rt.merging = false; }
     await this.syncRepo(repo.id);
     this.later(() => this.schedule(), 200);
+  }
+
+  /** Recheck the original office QA record and live GitHub merge before an
+   * independent reviewer can reconcile that acceptance to refreshed evidence. */
+  async verifyAcceptedTask(repoId:string,issue:number,source:DeliveryRecord,receipt:NonNullable<DeliveryRecord['taskAcceptances']>[number],originalQa?:import('./taskReconciliation.ts').OriginalTaskQa) {
+    this.requireOpen();if(this.backend.demo)throw new HttpError(409,'Demo cannot reconcile accepted live work');
+    const repo=this.repo(repoId),qa=this.state.qa.find(q=>q.repoId===repoId&&q.prNumber===receipt.prNumber);
+    const proof=qa??originalQa;
+    assertOriginalTaskQa(source,receipt,issue,proof);
+    const fingerprint=JSON.stringify(qa);
+    const pr=await this.backend.prDetails(repo.fullName,receipt.prNumber);this.requireOpen();
+    if(this.state.qa.find(q=>q.repoId===repoId&&q.prNumber===receipt.prNumber)!==qa||JSON.stringify(qa)!==fingerprint)throw new HttpError(409,'Original QA evidence changed during verification');
+    if(mergedTaskEvidence(pr,issue,receipt.headSha,repo.defaultBranch).mergeCommitSha!==receipt.mergeCommitSha)throw new HttpError(409,'Original merged source no longer matches');
+    const {prNumber,status,issueNumber,passedSha,qaAgentId,commentUrl,summary,checks,taskAuthorityHash}=proof!;
+    return structuredClone({prNumber,status,issueNumber,passedSha,qaAgentId,commentUrl,summary,checks,taskAuthorityHash});
   }
 
   async closePull(repoId: string, number: number) {
@@ -1602,8 +1691,12 @@ export class Swarm {
   stopAgent(id: string) {
     this.requireOpen();
     const a = this.agent(id);
-    if (!BUSY.includes(a.status)) return;
+    if (!BUSY.includes(a.status)&&!(a.role==='ceo'&&this.state.ceo.recoveryHold)) return;
     const stoppedSession = this.agentRt.get(id)?.session;
+    if(a.role==='ceo'&&this.state.ceo.recoveryHold){
+      this.agentRt.get(id)?.terminal?.releaseIdle?.();
+      a.sessionId=null;a.sessionCli=null;
+    }
     if (a.role !== 'ceo') {
       const repo = this.state.repos.find(r => r.id === a.repoId);
       const slug = this.agentSlug(a);
@@ -1620,7 +1713,7 @@ export class Swarm {
     a.endedAt = Date.now();
     a.lastError = 'Stopped by manager';
     if (a.role === 'ceo') {
-      Object.assign(this.state.ceo, {job: null, blockedReason: null, retryAt: null});
+      Object.assign(this.state.ceo, {job: null, blockedReason: null, retryAt: null,recoveryHold:false});
       this.emitCeo();
     }
     this.appendLog(a, [{ kind: 'manager', text: '■ Manager stopped this session.' }]);
@@ -1635,7 +1728,7 @@ export class Swarm {
       const job=this.state.ceo.job;
       if(!job||!held.resumeId||held.agentId!==a.id||held.cli!==this.ceoCli(a)||held.cli!==a.sessionCli||held.resumeId!==a.sessionId){
         this.agentRt.get(a.id)?.terminal?.releaseIdle?.();
-        if(job)this.deferCeoJob(a,job,'Retained CEO runtime ownership differs; verify the preserved checkpoint before retrying');
+        if(job)this.holdRetainedCeo(a,job,'Retained CEO runtime ownership differs; reconcile the submitted outcome before retrying');
         else {a.status='error';a.endedAt=Date.now();a.lastError='Retained CEO lacks its owned job; execution denied';this.emitAgent(a);this.save();}
         return;
       }
@@ -1651,7 +1744,9 @@ export class Swarm {
       a.sessionId = held.resumeId; a.sessionCli = held.cli;
       a.status = 'preparing';
       if (paused) blocker = 'This platform is paused by the manager';
-      else blocker = await this.sessionReadiness(a, repo, held.resumeId ?? undefined, held.cli);
+      else {blocker = await this.sessionReadiness(a, repo, held.resumeId ?? undefined, held.cli);
+        if(!blocker)try{await this.verifyTaskInputs(this.backend.deskDir(repo.fullName,this.agentSlug(a)),this.deliveryTaskInputs(repo.id,a.issueNumber??0));}catch(error){blocker=error instanceof Error?error.message:'Prerequisite checkout could not be verified';}
+      }
     }
     if (this.closed) return;
     if (!this.ownsTask(a, generation)) {rt?.terminal?.releaseIdle?.(); return;}
@@ -1718,6 +1813,7 @@ export class Swarm {
     const issue = this.repoRt.get(repo.id)?.issues.find((i) => i.number === issueNumber);
     if (!issue) throw new HttpError(404, `Issue #${issueNumber} is not open on ${repo.fullName}`);
     if(!this.backend.demo)this.deliveryWorkGate(repo.id,issueNumber);
+    this.assertTaskAccess(a,repo,issueNumber,false);
     if (this.taskPaused?.(issue.title)) throw new HttpError(409, 'This platform is paused by the manager');
     const holder = this.state.agents.find((x) => x.id !== a.id && x.repoId === repo.id && x.issueNumber === issueNumber && BUSY.includes(x.status));
     if (holder) throw new HttpError(409, `${holder.name} is already working on #${issueNumber}`);
@@ -1728,6 +1824,17 @@ export class Swarm {
   private port(a: PersistedAgent) {
     return 5200 + (parseInt(a.id.slice(0, 4), 16) % 700);
   }
+  private assertTaskAccess(a:PersistedAgent,repo:PersistedRepo,issue:number,qa:boolean){
+    if(this.backend.demo)return;
+    const contract=this.deliveryTaskContract(repo.id,issue);if(!contract)return;
+    if(a.id!==(qa?contract.qaOwner:contract.owner))throw new HttpError(409,`Issue #${issue} is owned by ${qa?contract.qaOwner:contract.owner}; preserve task ownership`);
+    if(qa)return;
+    for(const other of this.state.agents.filter(other=>other.id!==a.id&&BUSY.includes(other.status)&&other.task!=='qa'&&other.issueNumber)){
+      const claim=this.taskClaims.get(other.id),held=claim?.generation===this.taskGeneration(other)?claim:this.deliveryTaskContract(other.repoId,other.issueNumber!);
+      if(held&&(other.repoId===repo.id&&held.components.some(key=>contract.components.includes(key))||held.resources.some(key=>contract.resources.includes(key))))throw new HttpError(409,`Issue #${issue} conflicts with ${other.name}'s active component/resource claim; wait for its task to stop or complete`);
+    }
+  }
+  private canAccessTask(a:PersistedAgent,repo:PersistedRepo,issue:number,qa=false){try{this.assertTaskAccess(a,repo,issue,qa);return true;}catch{return false;}}
 
   private linkedRepos(repo: PersistedRepo) {
     return repo.links.map((id) => this.state.repos.find((r) => r.id === id)).filter((r): r is PersistedRepo => !!r);
@@ -1835,11 +1942,13 @@ export class Swarm {
     const linked = this.linkedRepos(repo).map((r) => `- ${r.fullName}: read-only reference clone at ${this.backend.mainDir(r.fullName)}`);
     const push = fixing ? `git push origin HEAD:${fixing.headRef}` : `git push -u origin ${branch}`;
     const stage=a.issueNumber?this.deliveryTaskStage(repo.id,a.issueNumber):undefined;
+    const readOnly=stage==='discovery'||stage==='design';
     return [
-      `You are ${a.name}, ${a.title ? `the team's ${a.title},` : 'a software engineer'} on an autonomous agent team ("cubefarm"). Several teammates work in parallel on other issues of the same repository, each in their own git worktree. Nobody is watching live to answer questions, so make sensible decisions yourself and record assumptions in the PR description. The manager may occasionally send you messages; follow their instructions.`,
+      `You are ${a.name}, ${a.title ? `the team's ${a.title},` : 'a software engineer'} on an autonomous agent team ("Agent Swarm"). Several teammates work in parallel on other issues of the same repository, each in their own git worktree. Nobody is watching live to answer questions, so make sensible decisions yourself and record assumptions in the PR description. The manager may occasionally send you messages; follow their instructions.`,
       `Every pull request is reviewed and tested by a QA teammate. ${repo.autoMerge ? "Once they sign off and GitHub's checks pass, the office merges it by itself" : 'Once they sign off, the manager merges it'}. If they find problems, or checks fail, or it conflicts with the default branch, you will get the details; fix them on the same branch.`,
-      DELIVERY_ENGINEERING,
+      readOnly?'Read the shared delivery_record and applicable installed guidance. Collect only read-only observations; record sources, hashes, freshness, unresolved facts and owners. Installation does not prove tool or tenant readiness. Independent review is required before any implementation. Do not resume paused platforms.':DELIVERY_ENGINEERING,
       this.deliveryRecordContext(repo.id),
+      this.deliveryTaskContext(repo.id,a.issueNumber??0),
       deliveryCapabilitiesPrompt([a.brief, repo.summary, repo.mission].filter(Boolean).join('\n')),
       a.brief ? `\nYour job description:\n${a.brief}` : '',
       '',
@@ -1859,25 +1968,27 @@ export class Swarm {
           ].join('\n')
         : '',
       `Your worktree: ${cwd}`,
-      fixing
+      readOnly&&fixing
+        ? `You are reviewing findings for legacy PR #${fixing.pr} in read-only context. Record remaining evidence/design issues through delivery_record; do not push fixes or modify the branch.`
+        : fixing
         ? `You are fixing pull request #${fixing.pr}. Its code is checked out on local branch ${branch}; push fixes with: ${push}. Do not open a new pull request.`
         : `Your branch: ${branch} (already checked out, created from origin/${repo.defaultBranch})`,
       linked.length ? `Related repositories you may read for context (do not modify them):\n${linked.join('\n')}` : '',
       '',
       'Workflow:',
       '1. Read the issue and explore the relevant code before changing anything.',
-      stage==='discovery'||stage==='design' ? `2. This is a ${stage} task. Gather read-only evidence and document findings/design; do not implement application code, author platform components or deploy. Use delivery_record for observations and design synthesis. Commit supporting evidence/design documentation in your worktree and open a documentation PR. Never commit credentials or sign-in state. Do not describe assumptions as observed facts.` : '2. Implement the change with focused commits and clear messages.',
-      "3. Run the project's existing tests, linters and build (if any) and fix what you broke. Install dependencies first if needed.",
-      repo.browserTesting
+      readOnly ? `2. This is a ${stage} task. Gather read-only evidence and document findings/design through delivery_record and its office-owned evidence/design operations; do not implement application code, run shell commands, author platform components or deploy. Report remaining decisions and blockers for independent review. No PR is required for record-only discovery. Never include credentials or sign-in state. Do not describe assumptions as observed facts.` : '2. Implement the change with focused commits and clear messages.',
+      readOnly?'3. Use scoped office discovery and approved read tools. If a required read is unavailable, record the blocker and owner rather than attempting a shell workaround.':"3. Run the project's existing tests, linters and build (if any) and fix what you broke. Install dependencies first if needed.",
+      readOnly?'4. Finish with the recorded findings, unanswered questions and evidence references. Discovery completion grants no implementation or release approval.':repo.browserTesting
         ? `4. If the project has a web UI, start its dev server in the background on port ${this.port(a)} (reserved for you, so you don't collide with teammates), then check your change with the Playwright browser tools (mcp__playwright__browser_navigate, browser_snapshot, browser_click, browser_take_screenshot). Stop the dev server when you're done.`
         : '4. Verify the behaviour you changed as directly as you can.',
-      `5. Push: ${push}`,
-      fixing
+      readOnly?'':`5. Push: ${push}`,
+      readOnly?'':fixing
         ? '6. Reply with a short summary of what you fixed.'
         : `6. Open a pull request with the GitHub CLI: gh pr create --base ${repo.defaultBranch} --head ${branch} --title "<concise title>" --body "<what changed, how you verified it, assumptions>". The body must contain "Closes #<issue number>".`,
-      fixing ? '' : '7. End your final message with the pull request URL on its own line.',
+      readOnly||fixing ? '' : '7. End your final message with the pull request URL on its own line.',
       '',
-      'Rules: never push to the default branch, never force-push, never merge pull requests yourself (the office merges them once QA and the checks pass), and never edit files outside your worktree. If you cannot finish, open a draft PR (gh pr create --draft) explaining what is left and why.',
+      readOnly?'Rules: preserve source, credentials and tenant state. Use office-owned evidence/design operations only; do not commit, push, create PRs or run project commands. Independent review and issue disposition remain required.':'Rules: never push to the default branch, never force-push, never merge pull requests yourself (the office merges them once QA and the checks pass), and never edit files outside your worktree. If you cannot finish, open a draft PR (gh pr create --draft) explaining what is left and why.',
     ]
       .filter((l) => l !== '')
       .join('\n');
@@ -1895,6 +2006,10 @@ export class Swarm {
       lastError: null,
       ...patch,
     });
+    try{const repo=this.state.repos.find(r=>r.id===a.repoId);if(repo)this.trackExecution(a,repo);}catch(error){a.status='error';a.lastError=error instanceof Error?error.message:'Execution telemetry unavailable';}
+    if(!this.backend.demo&&a.task!=='qa'&&a.issueNumber){
+      try{const contract=this.deliveryTaskContract(a.repoId,a.issueNumber);if(contract)this.taskClaims.set(a.id,{generation,repoId:a.repoId,issue:a.issueNumber,components:[...contract.components],resources:[...contract.resources]});}catch{/* Readiness denies unavailable contracts before launch. */}
+    }
     rt.screenshot = null;
     rt.browserUrl = null;
     rt.shots = [];
@@ -1920,6 +2035,8 @@ export class Swarm {
       await this.backend.releaseDesk(repo.fullName, slug, this.port(a));
       if (!active()) return null;
       const cwd = await this.backend.prepareDesk(repo.fullName, { defaultBranch: repo.defaultBranch, pr: base.pr }, slug, branch);
+      if(!active())return null;
+      await this.verifyTaskInputs(cwd,this.deliveryTaskInputs(repo.id,a.issueNumber??0));
       return active() ? cwd : null;
     } catch (err) {
       if (!active()) return null;
@@ -1944,6 +2061,7 @@ export class Swarm {
       this.state.settings.runtime, this.state.settings.defaultCli, this.state.settings.defaultModel, this.state.settings.defaultEffort,
       this.backend.terminals, resume, retainedCli, this.taskPaused(a.issueTitle ?? ''),
       this.workerAdmissionContext([repo.id, ...repo.links]),
+      a.issueNumber ? this.deliveryTaskFingerprint(repo.id,a.issueNumber) : null,
     ]);
     } catch { return null; }
   }
@@ -1965,6 +2083,10 @@ export class Swarm {
   }
 
   private async sessionReadiness(a: PersistedAgent, repo: PersistedRepo, resume?: string, retainedCli?: AgentCli): Promise<string | null> {
+    try{this.trackExecution(a,repo);}catch(error){return error instanceof Error?error.message:'Execution telemetry unavailable';}
+    try{if(a.issueNumber){this.deliveryWorkGate(repo.id,a.issueNumber);this.assertTaskAccess(a,repo,a.issueNumber,a.task==='qa');}}catch(error){return error instanceof Error?error.message:'Task authority is unavailable';}
+    if((resume||retainedCli)&&a.issueNumber&&this.deliveryTaskContract(repo.id,a.issueNumber)&&
+      (a.launchedTaskScope?.issue!==a.issueNumber||a.launchedTaskScope.hash!==this.deliveryTaskFingerprint(repo.id,a.issueNumber)))return 'Retained task instructions differ from current approved scope; reset and assign a fresh task session';
     const generation = this.taskGeneration(a);
     const context = this.workerContext(a, repo, resume, retainedCli);
     if (context === null) return 'Execution context is unavailable; restore configuration before retrying';
@@ -1990,13 +2112,16 @@ export class Swarm {
 
   private async checkTaskCapabilities(a: PersistedAgent, repo: PersistedRepo, resume?: string, generation = this.taskGeneration(a)) {
     if (this.closed) return false;
+    try{this.trackExecution(a,repo);}catch(error){a.status='error';a.lastError=error instanceof Error?error.message:'Execution telemetry unavailable';this.emitAgent(a);this.save();return false;}
     if (this.taskPaused?.(a.issueTitle ?? '')) {
       a.status = 'stopped'; a.lastError = 'This platform is paused by the manager';
       this.emitAgent(a); this.save(); return false;
     }
     const cli=(resume&&a.sessionCli?a.sessionCli:a.cli||this.state.settings.defaultCli) as AgentCli;
     const context=this.workerPreflightContext(a,repo,cli);
-    const blocker = await this.sessionReadiness(a, repo, resume);
+    let blocker:string|null;
+    try{this.assertTaskAccess(a,repo,a.issueNumber??0,a.task==='qa');blocker=await this.sessionReadiness(a, repo, resume);if(!blocker)this.assertTaskAccess(a,repo,a.issueNumber??0,a.task==='qa');}
+    catch(error){blocker=error instanceof Error?error.message:'Task ownership could not be verified';}
     if (!this.ownsTask(a, generation) || a.status !== 'preparing') return false;
     if (blocker === null){delete a.preflightRetry;return true;}
     if(!a.modelBlock){a.preflightRetry=nextPreflightRetry(a.preflightRetry,context);}
@@ -2055,10 +2180,15 @@ export class Swarm {
     const authority = () => {
       if (!live() || a.status !== 'working') return 'This task no longer owns the session; execution denied';
       try{if(!this.backend.demo&&deliveryIssue!==null)this.deliveryWorkGate(repo.id,deliveryIssue);}catch(error){return error instanceof Error?error.message:'Delivery stage could not be verified';}
+      try{if(deliveryIssue!==null)this.assertTaskAccess(a,repo,deliveryIssue,a.task==='qa');}catch(error){return error instanceof Error?error.message:'Task ownership changed';}
       if(deliveryIssue!==null&&deliveryFingerprint!==this.deliveryTaskFingerprint(repo.id,deliveryIssue))return 'Delivery scope or reviewed record changed; stop and retry with current task context';
       return admission.context === this.workerContext(a, repo, admission.resume, admission.retainedCli, checkpointCli)
         ? null : 'Execution configuration changed; stop and retry with fresh readiness';
     };
+    if(deliveryIssue&&this.deliveryTaskContract(repo.id,deliveryIssue)){
+      if((resumeSessionId||mode)&& (a.launchedTaskScope?.issue!==deliveryIssue||a.launchedTaskScope.hash!==deliveryFingerprint)){a.status='error';a.lastError='Retained task instructions differ from current approved scope; reset and assign a fresh task session';this.emitAgent(a);this.save();return false;}
+      a.launchedTaskScope={issue:deliveryIssue,hash:deliveryFingerprint};
+    }
     a.status = 'working';
     const how = this.sessionRuntime(a, resumeSessionId, mode === 'reattach' ? a.sessionCli ?? undefined : undefined);
     const projects = [repo, ...this.linkedRepos(repo)];
@@ -2072,11 +2202,18 @@ export class Swarm {
     };
     this.emitAgent(a);
     const launchedModel=this.modelFor(a,how.cli);
+    const measured=this.executionAttempts.get(a.id);
+    try{if(measured)this.executionLedger?.launch(measured.id);}catch(error){a.status='error';a.lastError=error instanceof Error?error.message:'Execution telemetry unavailable';this.emitAgent(a);this.save();return false;}
     const handle = this.backend.startSession(
       {
         cwd,
         prompt,
         systemAppend,
+        workerPreflight: !this.backend.demo,
+        repoId: repo.id,
+        workerPreflightMode: a.task==='qa'?'authoring':['discovery','design'].includes(this.deliveryTaskStage(repo.id,a.issueNumber??0)??'')?this.deliveryTaskStage(repo.id,a.issueNumber??0) as 'discovery'|'design':'authoring',
+        coordinatorAttemptId:measured?.id,
+        taskEvidenceKey: `${repo.id}:${a.task}:${a.task==='qa'?a.prNumber??'release':a.issueNumber??'unassigned'}`,
         model: launchedModel,
         effort: a.effort || this.state.settings.defaultEffort,
         browserTesting: repo.browserTesting,
@@ -2102,8 +2239,11 @@ export class Swarm {
         },
         sessionId: (id) => {
           if (!live()) return;
-          a.sessionId = id;
-          a.sessionCli = id ? (how.cli ?? 'codex') : null;
+          const cli=id ? (how.cli ?? 'codex') : null;
+          if(a.sessionId===id&&a.sessionCli===cli)return;
+          a.sessionId = id; a.sessionCli = cli;
+          this.emitAgent(a);
+          return this.writeState();
         },
         browserUrl: (url) => {
           if (!live()) return;
@@ -2140,6 +2280,7 @@ export class Swarm {
   private async onFinished(a: PersistedAgent, repo: PersistedRepo, result: SessionResult, generation = this.taskGeneration(a),sessionCli?:AgentCli,fallbackAuthorized=false,launchedModel?:string) {
     const rt = this.agentRt.get(a.id);
     if (!rt || !this.ownsTask(a, generation)) return;
+    this.endExecution(a,result.interrupted?'interrupted':result.ok?'reported-success':'failure',result.sessionEvidenceId);
     if (this.officeUpdate.handedOver) return; // stopped for the office's update: recovered like after a restart
     rt.session = null;
     rt.currentTool = null;
@@ -2260,6 +2401,13 @@ export class Swarm {
       return this.fail(a, result, `#${a.issueNumber}`);
     }
     this.issueFailures.delete(`${repo.id}#${a.issueNumber}`);
+    if(!a.prNumber&&a.issueNumber&&await this.browserTaskHold(repo.id,a.id,a.issueNumber,a.startedAt??Date.now())){
+      if(!this.ownsTask(a,generation))return;
+      a.status='stopped';a.lastError=null;
+      this.appendLog(a,[{kind:'system',text:'Waiting for coordinator browser work. Task, branch and CLI session retained; resume explicitly after inspecting the result.'}]);
+      return;
+    }
+    if(!this.ownsTask(a,generation))return;
     a.status = 'done';
     this.appendLog(a, [{ kind: 'done', text: `✔ Finished in ${this.minutes(a)}m · ${a.turns} turns${a.prNumber ? ` · PR #${a.prNumber}` : ' · no PR found'}` }]);
     if (a.prNumber) {
@@ -2267,6 +2415,12 @@ export class Swarm {
       this.appendLog(a, [{ kind: 'system', text: `📨 Handed PR #${a.prNumber} to QA.` }]);
       this.toast('success', `${a.name} opened PR #${a.prNumber} for #${a.issueNumber}; it's off to QA`);
     } else {
+      const stage=this.deliveryTaskStage(repo.id,a.issueNumber??0);
+      if(stage==='discovery'||stage==='design'){
+        this.appendLog(a,[{kind:'system',text:`Read-only ${stage} reported through the shared record; independent review and issue disposition remain required. No implementation readiness was granted.`}]);
+        this.postMessage('office',`${a.name} reported ${stage} for #${a.issueNumber}. Review the shared record and decide whether further evidence or issue closure is appropriate.`);
+        return;
+      }
       this.noPullRequest(a, repo);
     }
   }
@@ -2280,10 +2434,11 @@ export class Swarm {
     if (this.nudged.has(key)) return this.releaseIssue(a, repo);
     this.nudged.add(key);
     // message() reserves the developer before its first await, so the scheduler cannot assign them during readiness checks.
-    void this.message(
+    if(this.executionHeld(a,repo,a.issueNumber??0))return this.releaseIssue(a,repo);
+    this.automaticAgents.add(a.id);try{void this.message(
       a.id,
       `You finished without opening a pull request for #${a.issueNumber}. Finish the remaining steps now: commit, push your branch and open the PR with "Closes #${a.issueNumber}". If the issue can't be done, open a draft PR that explains why.`,
-    ).catch(() => this.releaseIssue(a, repo));
+    ).catch(() => this.releaseIssue(a, repo));}finally{this.automaticAgents.delete(a.id);}
   }
 
   private releaseIssue(a: PersistedAgent, repo: PersistedRepo) {
@@ -2346,14 +2501,40 @@ export class Swarm {
     }
     const dev = this.state.agents.find((a) => a.repoId === repo.id && a.role === 'dev' && a.task !== 'qa' && (a.prNumber === prNumber || a.branch === pr.headRefName));
     this.queueQa(repo, prNumber, dev ?? null, pr.closesIssues[0] ?? null);
+    const queued=this.state.qa.find(q=>q.repoId===repo.id&&q.prNumber===prNumber);if(queued)this.manualQaRetries.add(queued);
     this.toast('info', `PR #${prNumber} is queued for QA`);
+  }
+
+  /** Explicit manager recovery after repairing a failed PR's local prerequisites. */
+  async retryPrFix(repoId: string, prNumber: number) {
+    this.requireOpen();
+    const repo = this.repo(repoId);
+    const rec = this.state.qa.find(q => q.repoId === repo.id && q.prNumber === prNumber);
+    const pull = this.repoRt.get(repo.id)?.pulls.find(p => p.number === prNumber && p.state === 'OPEN');
+    if (!rec || rec.status !== 'failed' || !pull) throw new HttpError(409, 'Only an open PR with a failed QA repair can be retried');
+    const dev = this.state.agents.find(a => a.id === rec.devAgentId && a.repoId === repo.id && a.role === 'dev');
+    if (!dev || !FREE.includes(dev.status) && dev.status !== 'error') throw new HttpError(409, 'The original PR author is unavailable');
+    // A repair must retain the same issue identity that runFix will launch.
+    // Do not infer one from a later PR body: that would admit one task and
+    // reserve/verify another when the retained QA record has no issue.
+    const issue = rec.issueNumber;
+    if (!issue || issue < 1) throw new HttpError(409, 'PR repair requires its retained issue binding');
+    if (this.taskPaused(pull.title)) throw new HttpError(409, 'This platform is paused by the manager');
+    if (!this.backend.demo) this.deliveryWorkGate(repo.id, issue);
+    this.assertTaskAccess(dev, repo, issue, false);
+    this.ensureSlot();
+    // runFix owns checkout, current capability admission, task-input verification,
+    // durable attempt reservation and the ordinary post-fix QA transition.
+    // A manual retry does not clear automatic retry history or acceptance gates.
+    await this.runFix(dev, repo, rec);
   }
 
   private buildQaSystemAppend(a: PersistedAgent, repo: PersistedRepo, cwd: string, branch: string, pr: PrDetails) {
     return [
       DELIVERY_ENGINEERING,
       deliveryCapabilitiesPrompt([a.brief, repo.summary, repo.mission, repo.qaBrief, pr.title].filter(Boolean).join('\n')),
-      `You are ${a.name}, ${a.title ? `the team's ${a.title},` : 'a QA engineer'} on an autonomous agent team ("cubefarm"). Developers open pull requests; you review and independently verify each one before it is merged. Your sign-off is the review: ${repo.autoMerge ? "on this floor a PR you pass merges by itself as soon as GitHub's checks are green, so nobody else reads the code after you. " : ''}Be thorough and skeptical, but fair: fail a PR only for real problems (broken behaviour, failing tests or build, the issue's requirements not met, obvious regressions), not for style preferences.`,
+      this.deliveryTaskContext(repo.id,a.issueNumber??0),
+      `You are ${a.name}, ${a.title ? `the team's ${a.title},` : 'a QA engineer'} on an autonomous agent team ("Agent Swarm"). Developers open pull requests; you review and independently verify each one before it is merged. Your sign-off is the review: ${repo.autoMerge ? "on this floor a PR you pass merges by itself as soon as GitHub's checks are green, so nobody else reads the code after you. " : ''}Be thorough and skeptical, but fair: fail a PR only for real problems (broken behaviour, failing tests or build, the issue's requirements not met, obvious regressions), not for style preferences.`,
       ...(a.brief ? ['', `Your job description:\n${a.brief}`] : []),
       ...(a.role === 'dev' ? ['', "You're a developer covering for the QA lab while its testers are busy. You didn't write this pull request: test it as an independent QA engineer would."] : []),
       '',
@@ -2382,6 +2563,7 @@ export class Swarm {
         : '4. Exercise the changed behaviour directly (run the program, call the API, write a quick script).',
       '5. You may write throwaway scripts to probe behaviour, but do not commit them.',
       'Report pass only when every reported acceptance check passed. An unverified or skipped required criterion must be reported as a failure with actionable remediation. Never invent a screenshot caption: include one per captured image (at most the last 12 retained images).',
+      'A pass report cannot contain any skip or fail check. Keep unrelated future tasks and unavailable out-of-scope browser checks in the summary as explicit limits, not in checks. Never omit or relabel an unverified criterion required by this PR to obtain a pass.',
       '',
       'Rules: do not modify the code under test, do not commit, push, comment on, review or merge anything on GitHub. The office posts your report on the pull request. Finish with the structured QA report: verdict, summary, the checks you performed, the commands you ran and one caption per screenshot.',
     ].join('\n');
@@ -2397,6 +2579,7 @@ export class Swarm {
       `Checking out PR #${rec.prNumber}…`,
     );
 
+    if(a.status!=='preparing'){if(this.ownsTask(a,generation))this.setQa(rec,{status:'queued',qaAgentId:null,testedSha:null,passedSha:null});return;}
     let pr: PrDetails;
     let issue: { title: string; body: string } | null = null;
     try {
@@ -2406,6 +2589,7 @@ export class Swarm {
       if (!this.ownsTask(a, generation) || a.status !== 'preparing') return;
       Object.assign(a, { issueTitle: pr.title, prUrl: pr.url });
       rec.testedSha = pr.headSha;
+      rec.taskAuthorityHash=this.deliveryTaskContract(repo.id,rec.issueNumber??0)?this.deliveryTaskFingerprint(repo.id,rec.issueNumber??0):undefined;
       this.emitAgent(a);
     } catch (err) {
       if (!this.ownsTask(a, generation)) return;
@@ -2462,6 +2646,7 @@ export class Swarm {
     if (this.closed) return;
     const rec = this.state.qa.find((q) => q.repoId === repo.id && q.prNumber === a.prNumber);
     if (!rec) return this.fail(a, {...result, errors: ['QA record unavailable; report was not accepted']}, `QA of PR #${a.prNumber}`);
+    if(this.deliveryTaskContract(repo.id,rec.issueNumber??0)&&!this.taskQaCurrent(repo,rec)){a.status='done';return;}
     const rt = this.agentRt.get(a.id)!;
     const parsed = parseQaReport(result);
     const report = parsed && parsed.screenshots.length === rt.shots.length && (parsed.verdict !== 'pass' || !!rec?.testedSha) ? parsed : null;
@@ -2491,13 +2676,21 @@ export class Swarm {
         this.appendLog(a, [{ kind: 'system', text: '📎 Uploading evidence and posting the QA report on the PR…' }]);
         const body = await this.renderQaComment(a, repo, rec, report, rt.shots, generation);
         if (!this.ownsTask(a, generation)) return;
-        commentUrl = (await this.backend.commentPull(repo.fullName, rec.prNumber, body)) || null;
+        commentUrl = (await this.backend.commentPull(repo.fullName, rec.prNumber, body))?.trim() || null;
+        if(!commentUrl)throw new HttpError(503,'QA report publication returned no receipt');
         this.appendLog(a, [{ kind: 'system', text: `  ⎿ ${commentUrl ?? 'comment posted'}` }]);
       } catch (err) {
         if (!this.ownsTask(a, generation)) return;
-        this.appendLog(a, [{ kind: 'error', text: `  ⎿ Could not post the QA report: ${(err as Error).message}` }]);
+        if(!this.state.qa.includes(rec)||rec.status!=='testing'||rec.qaAgentId!==a.id)return;
+        if(!this.taskQaCurrent(repo,rec)){a.status='done';return;}
+        const reason='QA evidence publication is unavailable; restore artifact/comment access and independently reconcile the retained report before approval';
+        a.status='error';a.lastError=reason;
+        this.appendLog(a,[{kind:'error',text:`  ⎿ ${reason}`}]);
+        this.setQa(rec,{status:'needs-human',summary:report.summary,checks:report.checks,fixInstructions:report.fixInstructions??null,passedSha:null,commentUrl:null,mergeNote:reason});
+        return;
       }
       if (!this.ownsTask(a, generation) || !this.state.qa.includes(rec) || rec.status !== 'testing' || rec.qaAgentId !== a.id) return;
+      if(!this.taskQaCurrent(repo,rec)){a.status='done';this.emitAgent(a);return;}
       a.status = 'done';
       const qaRounds = rec.round - rec.retests; // rounds QA itself asked for
       const nextStatus = pass ? 'passed' : qaRounds >= MAX_QA_ROUNDS ? 'needs-human' : 'failed';
@@ -2538,18 +2731,19 @@ export class Swarm {
       const ext = MIME_EXT[shot.mime] ?? 'png';
       const file = `${folder}/${String(n).padStart(2, '0')}.${ext}`;
       try {
-        const url = await this.backend.uploadEvidence(repo.fullName, file, shot.data);
+        const url = (await this.backend.uploadEvidence(repo.fullName, file, shot.data))?.trim();
+        if(!url)throw new HttpError(503,'QA screenshot publication returned no receipt');
         const caption = report.screenshots[n - 1] ?? `Screenshot ${n}`;
         images.push(`**${n}. ${caption}**${shot.url ? ` · \`${shot.url}\`` : ''}\n\n<img src="${url}" alt="${caption.replace(/"/g, "'")}" width="760">`);
       } catch (err) {
         if (!this.ownsTask(a, generation)) throw new HttpError(409, 'QA evidence upload cancelled');
-        this.appendLog(a, [{ kind: 'error', text: `  ⎿ screenshot ${n} upload failed: ${(err as Error).message.slice(0, 120)}` }]);
+        throw new HttpError(503,`Required QA screenshot ${n} could not be published; preserve local evidence before recovery`);
       }
     }
     const dev = rec.devAgentId ? this.state.agents.find((x) => x.id === rec.devAgentId) : null;
     const lines = [
       `## 🔍 QA report: ${pass ? '✅ Passed' : '❌ Failed'}`,
-      `**Tester:** ${a.name} (cubefarm QA agent) · **Round:** ${rec.round}${dev ? ` · **Author:** ${dev.name}` : ''}`,
+      `**Tester:** ${a.name} (Agent Swarm QA agent) · **Round:** ${rec.round}${dev ? ` · **Author:** ${dev.name}` : ''}`,
       '',
       report.summary,
       '',
@@ -2564,7 +2758,7 @@ export class Swarm {
     if (images.length) lines.push('', '### 📸 Evidence', '', ...images.flatMap((img) => [img, '']));
     else lines.push('', '_No browser screenshots were taken in this round._');
     const merge = repo.autoMerge ? "merges automatically once GitHub's checks pass" : 'ready for the manager to merge';
-    lines.push('', `<sub>Posted by cubefarm · ${pass ? merge : rec.round - rec.retests >= MAX_QA_ROUNDS ? 'needs a human decision' : 'sent back to the developer for fixes'}</sub>`);
+    lines.push('', `<sub>Posted by Agent Swarm · ${pass ? merge : rec.round - rec.retests >= MAX_QA_ROUNDS ? 'needs a human decision' : 'sent back to the developer for fixes'}</sub>`);
     return lines.join('\n');
   }
 
@@ -2692,6 +2886,8 @@ export class Swarm {
       const blocker = await this.sessionReadiness(a, repo, a.sessionId ?? undefined);
       if (this.closed || rt.session !== session) throw new HttpError(409, 'Session changed during readiness verification; retry the follow-up');
       if (blocker) throw new HttpError(409, blocker);
+      await this.verifyTaskInputs(this.backend.deskDir(repo.fullName,this.agentSlug(a)),this.deliveryTaskInputs(repo.id,a.issueNumber??0));
+      if(this.closed||rt.session!==session||!this.validWorkerAdmission(a,repo))throw new HttpError(409,'Session readiness changed during input verification');
       this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${text}` }]);
       if (!typed) rt.session.send(text);
       return;
@@ -2710,6 +2906,9 @@ export class Swarm {
     if (!this.ownsTask(a, generation) || a.status !== 'preparing') throw new HttpError(409, 'Session stopped while waiting for its worktree');
     this.appendLog(a, [{ kind: 'manager', text: `▶ Manager: ${text}` }]);
     const cwd = this.backend.deskDir(repo.fullName, this.agentSlug(a));
+    try{await this.verifyTaskInputs(cwd,this.deliveryTaskInputs(repo.id,a.issueNumber??0));}
+    catch(error){if(this.ownsTask(a,generation)){a.status='error';a.lastError=error instanceof Error?error.message:'Prerequisite checkout unavailable';this.emitAgent(a);this.save();}throw error;}
+    if(!this.ownsTask(a,generation)||!this.validWorkerAdmission(a,repo))throw new HttpError(409,'Session readiness changed during input verification');
     a.lastError = null;
     a.startedAt = Date.now();
     if (a.task === null) a.task = 'issue';
@@ -2837,22 +3036,24 @@ export class Swarm {
     }).sort((x,y)=>x.updatedAt-y.updatedAt);
     for (const rec of waiting('queued')) {
       const tester =
-        testers[0] ??
+        testers.find(a=>this.canAccessTask(a,repo,rec.issueNumber??0,true)&&(this.manualQaRetries.has(rec)||!this.qaExecutionHeld(a,repo,rec.issueNumber??0))) ??
         this.pickDev(
           repo,
-          devs.filter((a) => a.id !== rec.devAgentId),
+          devs.filter((a) => a.id !== rec.devAgentId&&this.canAccessTask(a,repo,rec.issueNumber??0,true)&&(this.manualQaRetries.has(rec)||!this.qaExecutionHeld(a,repo,rec.issueNumber??0))),
           (a) => /test|qa/i.test(a.specialty),
         );
       if (!tester) continue;
-      void this.runQa(tester, repo, rec);
+      const manual=this.manualQaRetries.delete(rec);
+      if(!manual)this.automaticAgents.add(tester.id);try{void this.runQa(tester, repo, rec);}finally{this.automaticAgents.delete(tester.id);}
       return true;
     }
     for (const rec of waiting('failed')) {
       const issue = this.repoRt.get(repo.id)!.issues.find((i) => i.number === rec.issueNumber);
       const want = issue ? issueSpecialty(issue.labels) : null;
-      const dev = devs.find((a) => a.id === rec.devAgentId) ?? this.pickDev(repo, devs, (a) => a.specialty.toLowerCase() === want);
+      const eligible=devs.filter(a=>this.canAccessTask(a,repo,rec.issueNumber??0)&&!this.executionHeld(a,repo,rec.issueNumber??0));
+      const dev = eligible.find((a) => a.id === rec.devAgentId) ?? this.pickDev(repo, eligible, (a) => a.specialty.toLowerCase() === want);
       if (!dev) break;
-      void this.runFix(dev, repo, rec);
+      this.automaticAgents.add(dev.id);try{void this.runFix(dev,repo,rec);}finally{this.automaticAgents.delete(dev.id);}
       return true;
     }
     return false;
@@ -2869,15 +3070,16 @@ export class Swarm {
     const free = this.available(repo, 'dev');
     const ready = free.length ? this.readyIssues(repo).filter((item) => {
       if(this.taskPaused?.(item.issue.title))return false;
+      if(!free.some(a=>this.canAccessTask(a,repo,item.issue.number)&&!this.executionHeld(a,repo,item.issue.number)))return false;
       try{if(!this.backend.demo)this.deliveryWorkGate(repo.id,item.issue.number);return true;}catch{return false;}
     }) : [];
     if (ready.length === 0) return false;
     const fits = (a: PersistedAgent, want: string) => a.specialty.toLowerCase() === want;
     // Of the issues holding up the most, take one a free specialist fits.
-    const pick = ready.find((r) => r.chain === ready[0].chain && free.some((a) => fits(a, r.want))) ?? ready[0];
-    const agent = this.pickDev(repo, free, (a) => fits(a, pick.want))!;
+    const pick = ready.find((r) => r.chain === ready[0].chain && free.some((a) => this.canAccessTask(a,repo,r.issue.number)&&fits(a, r.want))) ?? ready[0];
+    const agent = this.pickDev(repo, free.filter(a=>this.canAccessTask(a,repo,pick.issue.number)&&!this.executionHeld(a,repo,pick.issue.number)), (a) => fits(a, pick.want))!;
     // assign() flips the agent to 'preparing' synchronously, so the next pass sees it as busy.
-    void this.assign(agent.id, pick.issue.number).catch((err) => console.warn('auto-assign failed', err));
+    this.automaticAgents.add(agent.id);try{void this.assign(agent.id,pick.issue.number).catch(err=>console.warn('auto-assign failed',err));}finally{this.automaticAgents.delete(agent.id);}
     return agent.status === 'preparing';
   }
 
@@ -3161,7 +3363,7 @@ export class Swarm {
       a.lastError = null;
       this.appendLog(a, [{ kind: 'system', text: '↺ The office server restarted. Picking the job back up.' }]);
     }
-    if (this.state.ceo.job && !BUSY.includes(a.status)) {
+    if (this.state.ceo.job && !this.state.ceo.recoveryHold && !BUSY.includes(a.status)) {
       this.state.ceo.queue.unshift(this.state.ceo.job);
       this.state.ceo.job = null;
     }
@@ -3258,7 +3460,7 @@ export class Swarm {
     const generation = this.reserveTask(a);
     const ownsJob = () => this.ownsTask(a, generation) && this.state.ceo.job === job;
     const rt = this.agentRt.get(a.id)!;
-    const defer=(reason:string)=>{if(held)rt.terminal?.releaseIdle?.();this.deferCeoJob(a,job,reason);};
+    const defer=(reason:string)=>{if(held){this.holdRetainedCeo(a,job,reason);rt.terminal?.releaseIdle?.();}else this.deferCeoJob(a,job,reason);};
     const floor = this.ceoFloor(job.repoId);
     const label = jobLabel(job, floor);
     this.state.ceo.job = job;
@@ -3337,6 +3539,7 @@ export class Swarm {
         effort: a.effort || CEO_EFFORT,
         browserTesting: false,
         additionalDirectories: this.state.repos.filter((r) => scopeIds.includes(r.id) && this.repoRt.get(r.id)?.cloneStatus === 'ready').map((r) => this.backend.mainDir(r.fullName)),
+        agentId:a.id,
         role: 'ceo',
         ...(held?{reattach:true}:{}),
         office: this.officeTools(authorizeTool),
@@ -3353,8 +3556,11 @@ export class Swarm {
         },
         sessionId: (id) => {
           if (!live()) return;
-          a.sessionId = id;
-          a.sessionCli = id ? (how.cli ?? 'codex') : null;
+          const cli=id ? (how.cli ?? 'codex') : null;
+          if(a.sessionId===id&&a.sessionCli===cli)return;
+          a.sessionId = id; a.sessionCli = cli;
+          this.emitAgent(a);
+          return this.writeState();
         },
         browserUrl: () => undefined,
         screenshot: () => undefined,
@@ -3374,6 +3580,13 @@ export class Swarm {
     }
     this.emitCeo(); this.save();
     } catch { if (ownsJob()) defer('CEO session could not start; check CLI authentication and runtime configuration'); }
+  }
+
+  private holdRetainedCeo(a:PersistedAgent,job:CeoJob,reason:string){
+    if(this.closed)return;
+    Object.assign(this.state.ceo,{job,recoveryHold:true,blockedReason:`Native outcome reconciliation required: ${reason}`.slice(0,2000),retryAt:null});
+    Object.assign(a,{status:'error',endedAt:Date.now(),lastError:this.state.ceo.blockedReason});
+    this.appendLog(a,[{kind:'error',text:this.state.ceo.blockedReason!}]);this.emitAgent(a);this.emitCeo();this.save();
   }
 
   private deferCeoJob(a: PersistedAgent, job: CeoJob, reason: string) {
@@ -3462,7 +3675,7 @@ export class Swarm {
     this.enqueueCeo({ kind: 'chat', text: t, at: Date.now() });
   }
 
-  async reviewDeliveryRelease(agentId: string, repoId: string, releaseId: string, recordReview = false, closeSlice = false) {
+  async reviewDeliveryRelease(agentId: string, repoId: string, releaseId: string, recordReview = false, closeSlice = false, schemaBootstrap = false, canvasPackaging = false, reconciliation?:TaskReconciliationReviewRequest) {
     this.requireOpen();
     const a = this.state.agents.find((a) => a.id === agentId && a.repoId === repoId && a.role === 'qa');
     if (!a || BUSY.includes(a.status) || this.agentRt.get(a.id)?.session || this.slotsFull()) throw new HttpError(409, 'Assigned QA reviewer or session slot is busy; request the release review when available');
@@ -3477,9 +3690,12 @@ export class Swarm {
     await this.deskWriters.get(a.id)?.drain().catch(() => undefined);
     if (!this.ownsTask(a, generation) || a.status !== 'preparing') throw new HttpError(409, 'Reviewer stopped while waiting for workspace cleanup');
     const started = this.startAgentSession(a, repo, this.backend.mainDir(repo.fullName),
-      closeSlice ? `Independently close the already accepted delivery slice for release ${releaseId} in ${repoId}. Read docs/DELIVERY.md, call delivery_record action read and delivery_status. Inspect the completed run, exact release/head/target, saved independent backend or visual decision and current evidence hash. Recompute the signed filename-and-bytes hash. Assess the signed recovery summary and transport receipts; distinguish any additional raw files outside the signed set and report their limits. Do not silently claim unsigned files are hash-bound. Verify the declared slice criteria against actual run evidence. If adequate, call delivery_record action accept_slice with payload {reference:{id,revision,sha256},runId} using the current exact reference, then read back the saved receipt. If insufficient, withhold acceptance and report the specific owner/remedy. Do not repeat unchanged design, release or backend approvals. Do not change source, discovery findings, tenant data or deployments. Historical execution uses its captured implementation version; this closing task grants no new mutation authority.` :
-      recordReview ? `Independently review the discovery and proposed design for ${repoId}. Read docs/DELIVERY.md and call delivery_record action read. Inspect the exact architecture version, discovery evidence, source commit, requirements, alternatives including reuse, contracts, permissions, risks, experience and first vertical slice. Challenge reported observations; hashes prove identity, not correctness. Do not mutate findings or call inspect_repository during review: that invalidates the design snapshot. Read the architectureDraft.result returned by action read; local uncommitted drafts are not available from GitHub. If evidence cannot be accessed, reject with that limitation. Do not implement or deploy. Submit delivery_record action review with the current record revision and payload {reference:{id,revision,sha256},docId,artifactSha256,decision,notes}. Reject missing or unsubstantiated critical decisions. ${this.deliveryRecordContext(repoId)}` :
-      `Independently review release ${releaseId}. First call manual_governance. For a pending manual assessment on this release, inspect all referenced evidence bytes, exact package shape, policy applicability, schema/permissions, existing licence baseline and owned-data/recovery contracts. Approve or reject using review_governance with all five control IDs; this is development-only manual assurance and cannot override known conflicts. Never infer E5 features or require optional premium automation. When a pending assessment exists, this is a phase review: compare with prior decisions, rehash every referenced file, inspect changed facts and preserve all five controls. Save the phase decision and finish. Do not repeat an unchanged architecture or release approval; report any material inconsistency instead. Do not modify the record or source. If its API-only run is reviewing, inspect runner-owned transaction, persistence, rejected-write, recovery and explicit audit-retention evidence and call approve_backend with the exact evidence hash; employee isolation is excluded from functional-development scope. For production/browser verification retain all original denied-access and visual requirements. If its browser run is reviewing, inspect every captured desktop/mobile screenshot, accessibility report, usability results and recovery rehearsal evidence, then call approve_visual with the run ID, evidence hash, five visual scores and specific review notes. Otherwise review the plan and its pinned architecture. Call delivery_status, inspect the exact pinned commit with git show, read docs/DELIVERY.md, and inspect all acceptance scenarios. Do not modify source or approve weak/static assertions. Every required issue must be implemented in the pinned commit, each component packaged, and persistence must prove a write survives reload. Production and browser authorization must exercise denied access. The explicit functional-development API slice proves the pinned caller and runner-owned mutation boundaries; do not certify employee isolation or demand it as an undeclared acceptance criterion. Read docs/architecture/drafts/<architecture.docId>.json and .md from the exact pinned commit with git show. Assess requirements coverage, data and permission boundaries, tradeoffs, risks, implementation sequence and missing evidence. Call review_architecture with the release ID, plan hash, artifact hash, approved or rejected decision, and specific notes. A saved template does not prove model synthesis or governance compliance. If architecture and acceptance are adequate call approve_release with the exact plan hash. Otherwise explain the specific gaps without approving.`, `${DELIVERY_ENGINEERING}\n${deliveryCapabilitiesPrompt('delivery discovery architecture review')}`);
+      reconciliation ? taskReconciliationReviewPrompt(repoId,reconciliation) :
+      closeSlice ? `Independently close the already accepted delivery slice for release ${releaseId} in ${repoId}. Read docs/DELIVERY.md, call delivery_record action read and delivery_status. Inspect the completed run, exact release/head/target, saved independent backend or visual decision and current evidence hash. Recompute the hash over retained filenames and bytes. Assess the hash-bound recovery summary and transport receipts; distinguish any additional raw files outside the signed set and report their limits. Do not silently claim unsigned files are hash-bound. Verify the declared slice criteria against actual run evidence. For application specifications inspect first-slice-verification.json: component mappings and transitive dependencies, happy/denied/failure cases, actual independent results, record/head/plan/target/package binding, and receipt hash. Verify quality-evidence.json and the independently approved per-check decisions, including actual handover document content. The office rehashes retained evidence before acceptance; missing mappings or unsupported platform adapters are blockers. If adequate, call delivery_record action accept_slice with payload {reference:{id,revision,sha256},runId} using the current exact reference, then read back the saved receipt. If insufficient, withhold acceptance and report the specific owner/remedy. Do not repeat unchanged design, release or backend approvals. Do not change source, discovery findings, tenant data or deployments. Historical execution uses its captured implementation version; this closing task grants no new mutation authority.` :
+      canvasPackaging ? `Independently review ONLY same-app solution packaging for ${repoId}. First call delivery_record action canvas_packaging payload_json {"action":"inspect"}. If a blocked original journal exists, call {"action":"inspect-recovery"} and review the exact retained-same-app-packaging-recovery proposal and all hash-bound implementation sources. This is a NEW prospective approval for ONE non-forcing conversion against the SAME original marked solution and saved app, or verify/export only when conversion is already exactly mapped. Never create another solution. Original outcome/conflict cause remain unknown; current state is not historical no-effect or idempotence proof. Check original journal/review/lease attribution, dead original local process, exact app/env/publisher/solution, current mapping, durable linked handoff and new intent, no forced lock/clone, membership/export validation and stop after any second failure. No global architecture/task/release approval or app authoring is granted. Save exactly one {"action":"review-recovery","proposalSha256":"<exact hash>","decision":"approved or rejected","notes":"at least80characters concrete evidence and limits"}; read back inspect-recovery and stop. If there is no retained history, review prospective original proposal/three sources, exact app/environment/publisher/absent-solution checks, SDK single-attempt create, makeSolutionAware, same-ID membership and real export; save action review instead. No tenant changes, source edits, DLP, broad historical rereads or global approvals. ` :
+      schemaBootstrap ? `Independently review ONLY the fixed create-schema bootstrap architecture and task for ${repoId}. This is not global application design or release approval. First read pinned skills and run exact read-only session preflight probes. Then call delivery_record action schema_bootstrap with payload_json {"action":"inspect"}. That compact response supplies exact record/task/commit/plan/config/code hashes, the complete committed schema design, target/writer permission evidence, dedicated data boundary and durable recovery contract. Inspect those exact inputs and preserved existing resources. New list/column IDs are outputs of creation/readback, not prerequisites. Verify single same-plan lookup parent readback, schema-only Graph route, conflict/unknown-outcome retention with no retry/delete/adoption, owner/QA separation and expiring full-plan operator resource approval. If the exact proposal includes reconciliation, independently inspect its original pinned plan, byte-bound dispatched journal and lease, original ownership marker and payload, actual resource ID, revised text-facet-only plan, fresh metadata and old-process quiescence. Verify that the handoff preserves the old marker, requires two fresh exact readbacks and dead original owner, archives original bytes in fsynced pending lineage, transfers the lease under its reaping guard with no gap, and blocks every interrupted handoff. Approve only its explicit reconcile-owned-schema plus create-schema operations; no general adoption or remote updates/deletion. If the proposal includes continuation, approve only the explicit continue-applied-schema plus create-schema scope after reviewing the exact applied original receipt, current journal/lease bytes and hashes, unchanged plan and parent ID/marker, absence of child dispatch, stopped prior owner, two fresh readbacks and durable continuation WAL under the retained guard. Its fresh review authorizes the explicitly bound retained execution identity; the original lineage is immutable. All post-WAL interruption stays blocked; no generic replay or guard clearing. Do not demand future Canvas/flow runtime completion before this schema-only risk decision. Do not clear future blockers or implement DLP. Static tests prove code behavior, not live schema success or denied identity. If any scoped precondition is missing, reject with the concrete evidence and owner/remedy. Persist exactly one decision through delivery_record action schema_bootstrap payload_json {"action":"review","proposalSha256":"<exact inspected hash>","decision":"approved or rejected","notes":"at least80characters specific evidence and limitations"}. Read back the saved review using inspect and finish. No tenant changes, source changes, generic task approval, global architecture approval, or deployment. Do not exhaustively read unrelated historical receipts. ` :
+      recordReview ? `Independently review the discovery and proposed design for ${repoId}. Read docs/DELIVERY.md and call delivery_record action read. Inspect the exact architecture version, discovery evidence, source commit, requirements, alternatives including reuse, contracts, permissions, risks, experience and first vertical slice. Use delivery_record action evidence_index for bounded receipt hashes and the current record reference; later pages require that reference. Read cited discovery receipts with read_delivery_source kind discovery-evidence, current record reference, findingId and expectedSha256; follow nextCharacter until null. Expired receipts are historical and cannot prove current readiness. Challenge reported observations; hashes prove identity, not correctness. Do not mutate findings or call inspect_repository during review: that invalidates the design snapshot. Read the architectureDraft.result returned by action read; local uncommitted drafts are not available from GitHub. If architectureDraft is null or this application record lacks taskPlan, use delivery_record action reject_inputs with current expected_revision and payload {reference:{id,revision,sha256},missingInputs:["architecture","task-contracts"],notes}, including only inputs actually missing. This negative-only decision needs no invented artifact IDs and grants no approval. If an artifact exists but its evidence cannot be accessed, reject its exact version with that limitation. Do not implement or deploy. Submit delivery_record action review with the current record revision and payload {reference:{id,revision,sha256},docId,artifactSha256,decision,notes}. Reject missing or unsubstantiated critical decisions. If taskPlan is present, require version 2 with independent integrationQa contracts and reject circular downstream checks on prerequisite author tasks. Verify recorded QA ownership, scoped merge prerequisites, exact executable scenario/criterion bindings, budgets and stop conditions; a planned contract does not prove a live adapter or successful test. Inspect each taskScopes entry and its owner, components, prerequisites, inputs, outputs, checks, resources and stop conditions. After design approval call review_task separately for each adequate contract with payload {reference:{id,revision,sha256},issue,taskHash,decision,notes}; withhold task approval where dependencies or checks are inadequate. ${this.deliveryRecordContext(repoId)}` :
+      `Independently review release ${releaseId}. First call manual_governance. For a pending manual assessment on this release, inspect all referenced evidence bytes, exact package shape, policy applicability, schema/permissions, existing licence baseline and owned-data/recovery contracts. Approve or reject using review_governance with all five control IDs; this is development-only manual assurance and cannot override known conflicts. Never infer E5 features or require optional premium automation. When a pending assessment exists, this is a phase review: compare with prior decisions, rehash every referenced file, inspect changed facts and preserve all five controls. Save the phase decision and finish. Do not repeat an unchanged architecture or release approval; report any material inconsistency instead. Do not modify the record or source. If its API-only run is reviewing, inspect runner-owned transaction, persistence, rejected-write, recovery and explicit audit-retention evidence and call approve_backend with the exact evidence hash; employee isolation is excluded from functional-development scope. For production/browser verification retain all original denied-access and visual requirements. If its browser run is reviewing, inspect every captured desktop/mobile screenshot, accessibility report, usability results and recovery rehearsal evidence, then read docs/QUALITY-EVIDENCE.md and quality-evidence.json when present. Inspect each check artifact and the pinned user, administrator, operations and architecture documents; file presence, headings and command success alone are insufficient. Supply quality_decisions for every exact checkId/evidenceSha256 with approved/rejected decision and concrete notes. Withhold approval for missing, weak or rejected checks. Call approve_visual with the run ID, evidence hash, five visual scores, specific review notes and the per-check decisions. Otherwise review the plan and its pinned architecture. Call delivery_status, inspect the exact pinned commit with git show, read docs/DELIVERY.md, and inspect all acceptance scenarios. Do not modify source or approve weak/static assertions. Every required issue must be implemented in the pinned commit, each component packaged, and persistence must prove a write survives reload. Production and browser authorization must exercise denied access. The explicit functional-development API slice proves the pinned caller and runner-owned mutation boundaries; do not certify employee isolation or demand it as an undeclared acceptance criterion. Read docs/architecture/drafts/<architecture.docId>.json and .md from the exact pinned commit with git show. Assess requirements coverage, data and permission boundaries, tradeoffs, risks, implementation sequence and missing evidence. Call review_architecture with the release ID, plan hash, artifact hash, approved or rejected decision, and specific notes. A saved template does not prove model synthesis or governance compliance. If architecture and acceptance are adequate call approve_release with the exact plan hash. Otherwise explain the specific gaps without approving.`, `${DELIVERY_ENGINEERING}\n${deliveryCapabilitiesPrompt('delivery discovery architecture review')}`);
     if (!started) throw new HttpError(409, a.lastError || 'Release-review admission was cancelled');
     this.save(); return 'Assigned QA review started';
   }
@@ -3893,7 +4109,7 @@ export class Swarm {
     const title = String(x.title ?? '').trim().slice(0, 120);
     if (!title) throw new Error('An issue needs a title.');
     const slug = specialtySlug(x.specialty);
-    const body = `${String(x.body ?? '').trim()}\n\n---\n_Filed by ${this.ceo().name}, the cubefarm CEO._`;
+    const body = `${String(x.body ?? '').trim()}\n\n---\n_Filed by ${this.ceo().name}, the Agent Swarm CEO._`;
     const n = await this.backend.createIssue(repo.fullName, title, body, slug ? [specialtyLabel(slug)] : []);
     this.ceoIssues.record(repo.id);
     return `Filed #${n} on floor ${repo.floor}: ${title}${slug ? ` (routed to ${slug})` : ''}.`;

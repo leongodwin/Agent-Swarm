@@ -1,3 +1,4 @@
+import {ExecutionLedger} from './executionLedger.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
@@ -35,7 +36,7 @@ afterEach(async () => {
 afterAll(async () => fs.rm(HOME_DIR, { recursive: true, force: true }));
 const tenantId='11111111-1111-4111-8111-111111111111';
 const environment='https://synthetic.crm4.dynamics.com';
-async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload'],interruptedDelivery:boolean|'ambiguous-history'=false) {
+async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload'],interruptedDelivery:boolean|'ambiguous-history'=false,requestTaskReconciliationReview?:Parameters<typeof createOfficeHttpApp>[0]['requestTaskReconciliationReview']) {
   await fs.writeFile(STATE_FILE, JSON.stringify({ version: 2, settings: { runtime: 'sdk', ceoHeartbeatMin: 0, autoUpdate: false },
     repos: [{ id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,color:'#000',description:'',url:'',autoAssign:false,autoMerge:false,browserTesting:false,addedAt:1 }] }));
   const tenancy = {status:'connected', user:'synthetic@example.com', environments:[{name:'Synthetic',url:environment,active:true}], isReal:true};
@@ -66,7 +67,8 @@ async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliab
   const tenantDlp=new TenantDlpService(path.join(HOME_DIR,'governance'),reader);await tenantDlp.init();cleanup.push(()=>tenantDlp.close());
   const canvasOwnership=new CanvasOwnership(path.join(HOME_DIR,'leases'));cleanup.push(()=>canvasOwnership.close());
   const deliveryRecords=new DeliveryRecords(path.join(HOME_DIR,'planning'));await deliveryRecords.init();cleanup.push(()=>deliveryRecords.close());
-  const {app,closeAdmission}=createOfficeHttpApp({deliveryRecords,officeReload,backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,workflowReliability,changeDrain:(value,apply)=>maintenance.change(value,apply)});
+  const executionLedger=new ExecutionLedger(HOME_DIR);executionLedger.init();
+  const {app,closeAdmission}=createOfficeHttpApp({requestTaskReconciliationReview,executionLedger,executionReport:repo=>executionLedger.report(repo,()=>false),deliveryRecords,officeReload,backend:external as unknown as Backend,swarm,features,capabilities,delivery,toolGovernance,tenantDlp,canvasOwnership,homeDir:HOME_DIR,runtimeStartedAt:new Date().toISOString(),policyReaderMode:'launcher',requestHandoff,workflowReliability,changeDrain:(value,apply)=>maintenance.change(value,apply)});
   const server=http.createServer(app);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   cleanup.push(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
   const url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -74,6 +76,13 @@ async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliab
   const request=(resource:string,method='GET',body?:unknown,headers:Record<string,string>={})=>fetch(url+resource,{method,headers:{Cookie:cookie,...(body===undefined?{}:{'Content-Type':'application/json'}),...headers},body:body===undefined?undefined:JSON.stringify(body)});
   return {url,cookie,request,swarm,external,tenancy,delivery,features,capabilities,reader,closeAdmission,maintenance,deliveryRecords};
 }
+it('authenticates and dispatches explicit PR repair through the normal coordinator',async()=>{
+ const {url,request,swarm,cookie}=await office(),endpoint='/api/repos/synthetic%2Frepo/pulls/7/retry-fix';
+ const retry=vi.spyOn(swarm,'retryPrFix').mockResolvedValue();
+ expect((await fetch(url+endpoint,{method:'POST'})).status).toBe(401);
+ expect((await fetch(url+endpoint,{method:'POST',headers:{Cookie:cookie,Origin:'https://foreign.example'}})).status).toBe(403);
+ expect(retry).not.toHaveBeenCalled();expect((await request(endpoint,'POST',{})).status).toBe(200);expect(retry).toHaveBeenCalledExactlyOnceWith('synthetic/repo',7);
+});
 it('exposes shared planning only to authenticated connected projects and keeps missing records explicit',async()=>{
   const {url,request,swarm}=await office();
   const endpoint='/api/repos/synthetic%2Frepo/delivery-record';
@@ -363,6 +372,19 @@ it('keeps authenticated workspace diagnostics open while interrupted delivery an
   expect((await f.request('/api/delivery/recovery','POST',{snapshotSha256:recovery.snapshotSha256})).status).toBe(200);
   expect(f.delivery.available).toBe(true);expect(f.delivery.isDraining).toBe(true);expect(f.swarm.isDraining).toBe(true);expect(f.external.startSession).not.toHaveBeenCalled();
 });
+it.each(['/api/delivery/recovery/retained','/api/delivery/recovery/resume'])('requires authentication, strict input, maintenance and stable profile ownership for %s',async endpoint=>{
+ const f=await office(false,undefined,undefined,undefined,true),body={snapshotSha256:'a'.repeat(64),targets:[]};
+ expect((await fetch(f.url+endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).status).toBe(401);
+ expect((await f.request(endpoint,'POST',{...body,force:true})).status).toBe(400);
+ const inspect=vi.spyOn(f.delivery,'reconcileRetainedStartup').mockImplementation(async(_input,guard)=>{guard?.();return {scope:'test-observation-only'} as never;});
+ expect((await f.request(endpoint,'POST',body)).status).toBe(409);expect(inspect).not.toHaveBeenCalled();
+ await f.request('/api/office/drain','POST',{expectedPid:process.pid,draining:true});
+ f.external.tenancy.activity.mockReturnValue({profileMutation:{status:'clear'}} as never);
+ expect((await f.request(endpoint,'POST',body)).status).toBe(200);expect(inspect).toHaveBeenCalledWith(body,expect.any(Function),...(endpoint.endsWith('/resume')?[true]:[]));
+ inspect.mockImplementation(async(_input,guard)=>{f.external.tenancy.activity.mockReturnValue({profileMutation:{status:'unresolved'}} as never);guard?.();return {} as never;});
+ expect((await f.request(endpoint,'POST',body)).status).toBe(409);
+ expect(f.delivery.available).toBe(false);expect(f.external.startSession).not.toHaveBeenCalled();
+});
 it('keeps ambiguous recovery history unavailable through authenticated HTTP without archiving it',async()=>{
  const f=await office(false,undefined,undefined,undefined,'ambiguous-history'),file=path.join(HOME_DIR,'delivery.json'),marker=path.join(HOME_DIR,'delivery.lock'),before=await fs.readFile(file),owner=await fs.readFile(marker);
  expect((await f.request('/api/state')).status).toBe(200);expect(await (await f.request('/api/delivery')).json()).toMatchObject({availability:'unavailable',policy:null,running:false});
@@ -397,3 +419,11 @@ it('retains the large hook-body contract and still denies an unknown session',as
 it('keeps native JSON grammar validation after structural inspection',async()=>{
   const f=await office(),response=await fetch(f.url+'/api/hooks/missing-session',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"tool_input":invalid}'});expect(response.status).toBe(400);expect(await response.json()).toEqual({error:'Invalid request body'});
 });
+
+it('exposes bounded execution metadata only to authenticated connected repositories with no-store',async()=>{
+ const {url,request}=await office();const endpoint='/api/repos/synthetic%2Frepo/efficiency';expect((await fetch(url+endpoint)).status).toBe(401);expect((await request('/api/repos/other%2Frepo/efficiency')).status).toBe(404);
+ const response=await request(endpoint);expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('no-store');expect(await response.json()).toMatchObject({availability:'ready',counts:{reserved:0,acceptedCurrent:0},usage:{inputTokens:null,tokensPerAcceptedTask:null}});
+ const exported=await request(endpoint+'/export');expect(exported.headers.get('cache-control')).toBe('no-store');expect(await exported.json()).toMatchObject({scope:'retained-coordinator-attempts',events:[{kind:'collection'}]});
+});
+
+it('authenticates and validates focused reconciliation QA admission without accepting work',async()=>{const start=vi.fn(async()=> 'Synthetic independent session started'),f=await office(false,undefined,undefined,undefined,false,start),endpoint='/api/repos/synthetic%2Frepo/delivery-record/reconcile-review',body={reference:{id:crypto.randomUUID(),revision:2,sha256:'a'.repeat(64)},issue:5,sourceRecord:{id:crypto.randomUUID(),revision:1,sha256:'b'.repeat(64)},originalQa:{prNumber:9,status:'passed',issueNumber:5,passedSha:'c'.repeat(40),qaAgentId:'qa',summary:'Original independently accepted proof',checks:[{name:'Source',result:'pass',details:'Exact original source checked'}],commentUrl:'https://example.test/review',taskAuthorityHash:'d'.repeat(64)}};expect((await fetch(f.url+endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).status).toBe(401);expect((await f.request(endpoint,'POST',body,{Origin:'https://example.invalid'})).status).toBe(403);expect((await f.request(endpoint,'POST',{...body,issue:0})).status).toBe(400);expect(start).not.toHaveBeenCalled();expect((await f.request(endpoint,'POST',body)).status).toBe(200);expect(start).toHaveBeenCalledExactlyOnceWith('synthetic/repo',body);expect(f.deliveryRecords.current('synthetic/repo')).toBeNull();});

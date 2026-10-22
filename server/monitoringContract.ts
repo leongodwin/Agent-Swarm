@@ -1,8 +1,8 @@
 import type {ReleasePlan} from './releasePlan.ts';
 import {HttpError} from './httpError.ts';
-export interface MonitoringManifest {manualDevelopmentGovernance?:boolean;hasUi:boolean;targetComponents:{kind:string}[];postDeployActions:{type:string}[];postDeploy:unknown[]}
+export interface MonitoringManifest {manualDevelopmentGovernance?:boolean;preparation?:{kind:string};recovery?:{scope?:string};hasUi:boolean;targetComponents:{kind:string}[];postDeployActions:{type:string}[];postDeploy:unknown[]}
 export function backendAccessMonitoring(plan:ReleasePlan,manifest:MonitoringManifest){
- return plan.acceptanceProfile==='functional-development'&&!!plan.verification.api&&!plan.verification.cloudFlowChecks&&manifest.manualDevelopmentGovernance===true&&!manifest.hasUi&&manifest.targetComponents.length>0&&manifest.targetComponents.every(component=>component.kind==='dataverse-table')&&!manifest.postDeploy.length&&manifest.postDeployActions.every(action=>action.type==='schema-check');
+ return plan.acceptanceProfile==='functional-development'&&!!plan.verification.api&&!plan.verification.cloudFlowChecks&&manifest.manualDevelopmentGovernance===true&&!manifest.hasUi&&(manifest.targetComponents.length>0&&manifest.targetComponents.every(component=>component.kind==='dataverse-table')||manifest.preparation?.kind==='pinned-artifact-v1'&&manifest.recovery?.scope==='empty-solution-only'&&manifest.targetComponents.length===0&&!manifest.postDeployActions.length)&&!manifest.postDeploy.length&&manifest.postDeployActions.every(action=>action.type==='schema-check');
 }
 /** Backend access readiness is not a workflow-health or transaction pass.
  * Other releases retain fresh workflow probes, including API plans with flows. */

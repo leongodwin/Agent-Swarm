@@ -30,6 +30,68 @@ import {GEMINI_HOOK_SOURCE,verifyGeminiProfile} from './geminiBridge.ts';
 import {prepareCodexHooks} from './codexHookTrust.ts';
 import {CodexModelNotAdvertisedError} from './codexModelMetadata.ts';
 import crypto from 'node:crypto';
+import path from 'node:path';
+import {SessionEvidence} from './sessionEvidence.ts';
+
+it('preserves large skill evidence through generated OpenCode plugin hooks before allowing authoring',async()=>{
+  vi.useFakeTimers();setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic policy'}));
+  const cwd=await fs.mkdtemp(path.join(HOME_DIR,'large-skill-')),skills=path.join(cwd,'skills'),id='dataverse-large-qa-fixture';
+  await fs.mkdir(path.join(skills,id),{recursive:true});const content='Read the verified target before editing.\n'.repeat(1000),sha256=crypto.createHash('sha256').update(content).digest('hex');
+  await fs.writeFile(path.join(skills,id,'SKILL.md'),content);vi.stubEnv('SWARM_SKILL_ROOTS',skills);
+  await fs.mkdir(path.join(cwd,'.cubefarm'));await fs.writeFile(path.join(cwd,'.cubefarm','worker-preflight.json'),JSON.stringify({schemaVersion:1,scope:'Synthetic large guidance',maxAgeSeconds:60,skills:[{id,sha256}],probes:[{id:'identity',tool:'mcp__platform__inspect',nativeNames:{opencode:'platform_inspect'},readOnly:true,input:{},assertions:[{kind:'identity',pointer:['caller'],equals:'maker'},{kind:'target',pointer:['target'],equals:'dev'}]}]}));
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+  const handle=await startCliSession({cwd,prompt:'Synthetic',systemAppend:'',model:'openai/gpt-synthetic',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'opencode',terminal:term,workerPreflight:true,authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()});
+  const token=native.token;vi.stubEnv('CUBEFARM_NOTIFY_URL','http://127.0.0.1:1/api/hooks/fixture');
+  vi.stubGlobal('fetch',async(_url:unknown,options:RequestInit)=>new Response(JSON.stringify(await handleHook(token,JSON.parse(String(options.body)))),{status:200,headers:{'content-type':'application/json'}}));
+  const factory=new Function(`return (${OPENCODE_PLUGIN_SOURCE.replace('export default async function','async function')});`)();const plugin=await factory({});
+  await plugin['tool.execute.before']({tool:'office_read_skill',callID:'skill',sessionID:'root'},{args:{id,sha256}});
+  await plugin['tool.execute.after']({tool:'office_read_skill',callID:'skill',sessionID:'root'},{output:JSON.stringify({id,sha256,content})});
+  await plugin['tool.execute.before']({tool:'platform_inspect',callID:'identity',sessionID:'root'},{args:{}});
+  await plugin['tool.execute.after']({tool:'platform_inspect',callID:'identity',sessionID:'root'},{output:JSON.stringify({caller:'maker',target:'dev'})});
+  await expect(plugin['tool.execute.before']({tool:'edit',callID:'edit',sessionID:'root'},{args:{filePath:'app.ts',newString:'synthetic'}})).resolves.toBeUndefined();
+  handle.stop();
+});
+
+it('denies native launch when evidence persistence fails',async()=>{
+  vi.useFakeTimers();const record=vi.spyOn(SessionEvidence.prototype,'record').mockReturnValue(false);
+  try{
+    const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+    const finished=vi.fn(),previous=native.token;
+    const handle=await startCliSession({cwd:HOME_DIR,prompt:'No unrecorded work',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,authorizeTool:()=>null},
+      {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+    await vi.advanceTimersByTimeAsync(1);expect(native.token).toBe(previous);expect(term.bind).not.toHaveBeenCalled();
+    expect(finished).toHaveBeenCalledWith(expect.objectContaining({ok:false,failureCategory:'audit'}));handle.stop();
+  }finally{record.mockRestore();}
+});
+
+it('denies a worker launch before model usage when its reviewed preflight contract is missing',async()=>{
+  vi.useFakeTimers();const cwd=await fs.mkdtemp(path.join(HOME_DIR,'missing-preflight-'));
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+  const finished=vi.fn(),previous=native.token;
+  const handle=await startCliSession({cwd,prompt:'Do not launch',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,workerPreflight:true,authorizeTool:()=>null},
+    {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+  await vi.advanceTimersByTimeAsync(1);expect(native.token).toBe(previous);expect(term.bind).not.toHaveBeenCalled();
+  expect(finished).toHaveBeenCalledWith(expect.objectContaining({ok:false,errors:expect.arrayContaining([expect.stringContaining('preflight missing')])}));handle.stop();
+});
+
+it('enforces worker-session probes through actual CLI hooks and refuses stale readiness',async()=>{
+  vi.useFakeTimers();setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic policy'}));
+  const cwd=await fs.mkdtemp(path.join(HOME_DIR,'hook-preflight-'));await fs.mkdir(path.join(cwd,'.cubefarm'));
+  await fs.writeFile(path.join(cwd,'.cubefarm','worker-preflight.json'),JSON.stringify({schemaVersion:1,scope:'Synthetic development',maxAgeSeconds:30,skills:[],noSkillsReason:'Synthetic transport test has no platform authoring guidance',probes:[{id:'identity',tool:'mcp__platform__inspect',readOnly:true,input:{scope:'dev'},assertions:[{kind:'identity',pointer:['caller'],equals:'maker'},{kind:'target',pointer:['target'],equals:'development'}]}]}));
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
+  const finished=vi.fn();const handle=await startCliSession({cwd,prompt:'Synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'qa',cli:'codex',terminal:term,workerPreflight:true,typed:true,authorizeTool:()=>null},
+    {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+  const token=native.token;
+  const pre=(id:string,name:string,input:unknown)=>handleHook(token,{hook_event_name:'PreToolUse',tool_use_id:id,tool_name:name,tool_input:input});
+  expect((await pre('write','Edit',{})).hookSpecificOutput).toMatchObject({permissionDecision:'deny',permissionDecisionReason:expect.stringContaining('Reviewed preflight inputs')});
+  expect((await pre('probe','mcp__platform__inspect',{scope:'dev'})).hookSpecificOutput).toMatchObject({permissionDecision:'allow'});
+  await handleHook(token,{hook_event_name:'PostToolUse',tool_use_id:'probe',tool_name:'mcp__platform__inspect',tool_response:{caller:'maker',target:'development'}});
+  expect((await pre('approve','mcp__office__approve_release',{})).hookSpecificOutput).toMatchObject({permissionDecision:'allow'});
+  await vi.advanceTimersByTimeAsync(30000);
+  expect((await pre('stale','mcp__office__approve_release',{})).hookSpecificOutput).toMatchObject({permissionDecision:'deny'});
+  await handleHook(token,{hook_event_name:'Stop',last_assistant_message:'Claimed success'});await vi.advanceTimersByTimeAsync(4000);
+  expect(finished).toHaveBeenCalledWith(expect.objectContaining({ok:false}));handle.stop();
+});
 
 afterEach(async () => {native.exit?.(0);native.autoExit=true;await releaseClis(false); vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs(); setToolGovernanceGate(async()=>({status:'unavailable',reason:'Not initialized'})); });
 afterAll(async () => fs.rm(HOME_DIR,{recursive:true,force:true,maxRetries:10,retryDelay:100}));
@@ -64,8 +126,9 @@ it('does not turn a completed OpenCode response into a quota failure because of 
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=> 'Test text: Subscribe to OpenCode Go; Free limit reached'} as unknown as AgentTerminal;
   await startCliSession({cwd:HOME_DIR,prompt:'Synthetic',systemAppend:'',model:'openai/gpt-synthetic',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'opencode',terminal:term,authorizeTool:()=>null},callbacks);
   await handleHook(native.token,{hook_event_name:'OpenCodeSessionStart',session_id:'root'});
-  await handleHook(native.token,{hook_event_name:'TurnComplete',session_id:'root',failed:false,last_assistant_message:'Tests covering Free limit reached passed.'});native.exit?.(0);
+  await handleHook(native.token,{hook_event_name:'TurnComplete',session_id:'root',failed:false,last_assistant_message:'Tests covering Free limit reached passed.',usage:{schemaVersion:1,source:'opencode-message-v1',sampleId:'synthetic-prompt',inputTokens:20,outputTokens:5,costUsd:0.3}});native.exit?.(0);
   expect(callbacks.finished).toHaveBeenCalledWith(expect.objectContaining({ok:true,text:'Tests covering Free limit reached passed.'}));expect(callbacks.finished.mock.calls[0][0].opencodeLimit).not.toBe(true);
+  const evidence=JSON.parse((await fs.readFile(path.join(HOME_DIR,'session-evidence',callbacks.finished.mock.calls[0][0].sessionEvidenceId+'.jsonl'),'utf8')).trim().split('\n').at(-1)!);expect(evidence).toMatchObject({kind:'finish',inputTokens:20,outputTokens:5,costUsd:0.3,usageCoverage:'complete',usageScope:'attempt'});
 });
 it.each(['failed','quota','missing-outcome','empty'] as const)('fails closed on an owning OpenCode idle completion with %s evidence',async mode=>{
   vi.useFakeTimers();const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished:vi.fn()},term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;

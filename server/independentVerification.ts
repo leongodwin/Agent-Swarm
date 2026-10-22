@@ -1,3 +1,4 @@
+import {verificationNavigationUrl,verificationScenario,type BrowserVerificationContext} from './browserVerificationContext.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -6,6 +7,9 @@ import type { Browser, Page, Frame } from 'playwright';
 import type { ReleasePlan } from './releasePlan.ts';
 import AxeBuilder from '@axe-core/playwright';
 import { acceptanceScope } from './releasePlan.ts';
+import {verifyConnectedBrowser} from './bridgeVerification.ts';
+import {coordinatorBrowserEnabled} from './browserTools.ts';
+import {verifyCoordinatorBrowser} from './coordinatorBrowserVerification.ts';
 const require = createRequire(import.meta.url);
 
 /** No repository code executes here. The office interprets an immutable, QA-approved action plan. */
@@ -13,7 +17,8 @@ async function launchBrowser() {
   const playwright = createRequire(require.resolve('@playwright/mcp/package.json'))('playwright') as typeof import('playwright');
   return playwright.chromium.launch({ channel: 'chrome', headless: true });
 }
-export async function verifyIndependently(plan: ReleasePlan, root: string, evidence: string, signal: AbortSignal, launch: () => Promise<Browser> = launchBrowser) {
+export async function verifyIndependently(plan: ReleasePlan, root: string, evidence: string, signal: AbortSignal, launch: () => Promise<Browser> = launchBrowser, execution?:BrowserVerificationContext) {
+  if(plan.verification.browserSession)return coordinatorBrowserEnabled()?verifyCoordinatorBrowser(plan,root,evidence,signal,execution):verifyConnectedBrowser(plan,evidence,signal,undefined,execution);
   if (signal.aborted) throw new Error('Verification cancelled');
   const browser = await launch();
   const abort = () => { void browser.close(); }; signal.addEventListener('abort', abort, { once: true });
@@ -31,7 +36,7 @@ export async function verifyIndependently(plan: ReleasePlan, root: string, evide
         try {
           const page = await context.newPage(); const errors: string[] = [];
           page.on('pageerror', (error) => errors.push(error.message));
-          await page.goto(plan.verification.baseUrl);
+          await page.goto(verificationNavigationUrl(plan,execution));
           if (new URL(page.url()).origin !== new URL(plan.verification.baseUrl).origin) throw new Error(`QA identity ${identity.id} was redirected away from the application`);
           const target = async (): Promise<Page | Frame> => {
             if (new URL(page.url()).origin !== new URL(plan.verification.baseUrl).origin) throw new Error('Test left the approved application origin');
@@ -46,8 +51,11 @@ export async function verifyIndependently(plan: ReleasePlan, root: string, evide
             if (scenario.identity !== identity.id) continue;
             const uploads: { name: string; sha256: string; evidence: string }[] = [];
             const started = Date.now();
-            for (const step of scenario.steps) {
+            await execution?.scenarioStarted?.(scenario.name,viewport.width);
+            signal.throwIfAborted();
+            for (const step of verificationScenario(plan,execution,scenario).steps) {
               if (signal.aborted) throw new Error('Verification cancelled');
+              if(Date.now()-started>=plan.quality.maxTaskDurationMs)throw Error('Usability time limit exceeded before browser action');
               const surface = await target();
               if (step.action === 'goto') await page.goto(new URL(step.path, plan.verification.baseUrl).href);
               if (step.action === 'click') await surface.locator(step.selector).click();
@@ -83,6 +91,7 @@ export async function verifyIndependently(plan: ReleasePlan, root: string, evide
             if (accessibility.violations.some((v) => ['serious', 'critical'].includes(v.impact ?? ''))) throw new Error(`Accessibility gate failed for ${scenario.name}; see ${a11yFile}`);
             if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1) || await (await target()).evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error(`Horizontal overflow at ${viewport.width}px in ${scenario.name}`);
             const file = `${prefix}-${index}.png`; await page.screenshot({ path: path.join(evidence, file), fullPage: true }); files.push(file);
+            await execution?.scenarioCompleted?.(scenario.name,viewport.width);
             results.push({ name: scenario.name, category: scenario.category, criterion: scenario.criterion, states: scenario.states, durationMs, accessibility: a11yFile, identity: identity.id, expectedUser: identity.expectedUser, observedUser, method: plan.verification.frame ? 'browser-frame' : 'browser-dom', uploads, viewport, passed: true, screenshot: file });
           }
         } finally {

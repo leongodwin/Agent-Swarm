@@ -1,0 +1,15 @@
+import fs from 'node:fs/promises';import path from 'node:path';import {afterAll,expect,it,vi} from 'vitest';import type {AgentTerminal} from './terminal.ts';
+const native=vi.hoisted(()=>({meta:null as any,exit:null as ((code:number)=>void)|null}));
+vi.mock('./config.ts',async original=>{const real=await original<typeof import('./config.ts')>(),os=await import('node:os');return{...real,HOME_DIR:await fs.mkdtemp(path.join(os.tmpdir(),'codex-profile-lifecycle-'))};});
+vi.mock('./clis.ts',async original=>({...await original<typeof import('./clis.ts')>(),commandFor:()=>({file:'synthetic-cli',args:[]})}));
+vi.mock('./codexHookTrust.ts',()=>({prepareCodexHooks:vi.fn(async()=>({verified:5,hashes:[]}))}));
+vi.mock('./ptyClient.ts',()=>({terminalsAvailable:true,keeperHookUrl:()=>null,keeperPid:()=>0,keeperInstance:()=>null,hooksReady:vi.fn(),leaveKeeper:vi.fn(),discardPty:vi.fn(),adoptPty:vi.fn(),startKeeper:vi.fn(),spawnPty:(_file:string,_args:string[],_opts:any,meta:any)=>{native.meta=meta;let gone=false;return{pid:0,get verifiedExit(){return gone;},write:vi.fn(),resize:vi.fn(),setMeta:(m:any)=>native.meta=m,kill:()=>{gone=true;native.exit?.(0);},onData:vi.fn(),onExit:(cb:(code:number)=>void)=>native.exit=cb};}}));
+import {HOME_DIR} from './config.ts';import {startCliSession,releaseClis,runtimeCleanupView} from './cliRunner.ts';
+afterAll(async()=>{await releaseClis(false).catch(()=>{});vi.unstubAllEnvs();await fs.rm(HOME_DIR,{recursive:true,force:true,maxRetries:5});});
+it.runIf(process.platform==='win32')('retains required profile provenance in keeper metadata and contains corrupt-profile cleanup on the actual session end path',async()=>{
+ const home=path.join(HOME_DIR,'native-home');await fs.mkdir(home);vi.stubEnv('CODEX_HOME',home);const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal,finished=vi.fn();
+ const handle=startCliSession({cwd:HOME_DIR,prompt:'Synthetic task',systemAppend:'Preserve exact policy.\n'.repeat(1000),model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'dev',cli:'codex',terminal:term,agentId:'profile-test',authorizeTool:()=>null},{log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+ for(let i=0;i<100&&!native.meta;i++)await new Promise(r=>setTimeout(r,5));expect(native.meta.codexProfile.name).toMatch(/^cubefarm-instructions-/);expect(native.meta.codexProfile.sha256).toMatch(/^[a-f0-9]{64}$/);
+ const file=path.join(home,native.meta.codexProfile.name+'.config.toml');await fs.appendFile(file,'#changed');handle.stop();for(let i=0;i<100&&!runtimeCleanupView().records.some(r=>r.state==='unverified'&&r.pid===0);i++)await new Promise(r=>setTimeout(r,5));
+ expect(finished).toHaveBeenCalledOnce();expect(runtimeCleanupView().records).toEqual(expect.arrayContaining([expect.objectContaining({state:'unverified',pid:0,keeperInstance:null})]));expect(await fs.readFile(file,'utf8')).toContain('#changed');expect((await fs.stat(native.meta.dir)).isDirectory()).toBe(true);await expect(releaseClis(false)).rejects.toThrow('cleanup');
+});

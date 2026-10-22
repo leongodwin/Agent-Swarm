@@ -2,11 +2,14 @@ import crypto from 'node:crypto';
 import type {HldInput} from '../shared/hld.ts';
 import {synthesisOutputSchema} from '../shared/hldSynthesis.ts';
 import type {z} from 'zod';
-export interface SynthesisRequirement {id:string;kind:'brief'|'tenant-context'|'component'|'deliverable'|'delivery-requirement';text:string;sourceSha256:string}
+export interface SynthesisRequirement {id:string;kind:'brief'|'tenant-context'|'component'|'deliverable'|'delivery-requirement'|'application-specification';text:string;sourceSha256:string}
 export function synthesisRequirements(input:HldInput,record?:import('../shared/deliveryRecord.ts').DeliveryRecord):SynthesisRequirement[]{
   const rows:{id:string;kind:SynthesisRequirement['kind'];text:string}[]=[{id:'brief',kind:'brief',text:input.problemContext}];
   if(input.tenantName)rows.push({id:'tenant-context',kind:'tenant-context',text:input.tenantName});
   for(const requirement of record?.content.requirements??[])rows.push({id:`delivery-${requirement.id}`,kind:'delivery-requirement',text:JSON.stringify(requirement)});
+  if(record?.content.applicationSpec)for(const [section,items] of Object.entries(record.content.applicationSpec)){
+    if(Array.isArray(items))for(const item of items)rows.push({id:`application-${section}-${item.id}`,kind:'application-specification',text:JSON.stringify(item)});
+  }
   input.components.forEach((component,index)=>{const id=`component-${index+1}`;rows.push({id,kind:'component',text:JSON.stringify({title:component.title,role:component.role,badge:component.badge,details:component.details})});component.deliverables.forEach((text,position)=>rows.push({id:`${id}-deliverable-${position+1}`,kind:'deliverable',text}));});
   if(rows.length>1000)throw new Error('Synthesis traceability exceeds 1,000 declared requirements; split the brief before synthesis');
   return rows.map(row=>({...row,sourceSha256:crypto.createHash('sha256').update(JSON.stringify(row)).digest('hex')}));

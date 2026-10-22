@@ -9,15 +9,18 @@ const inside=(root:string,file:string)=>{const relative=path.relative(root,file)
  * enters the tool-free model. Captured bytes are data, never instructions. */
 export async function captureSynthesisEvidence(record:DeliveryRecord|undefined,roots:string[]):Promise<Capture[]>{
   if(!record)return [];
-  const approved=(await Promise.all(roots.map(root=>fs.realpath(root).catch(()=>null)))).filter((root):root is string=>!!root);
+  const approved=(await Promise.all(roots.map(async root=>{const resolved=path.resolve(root);return await fs.realpath(resolved)===resolved?resolved:null;}).map(work=>work.catch(()=>null)))).filter((root):root is string=>!!root);
   const refs=[...record.content.findings.flatMap(f=>f.evidence),...record.content.governanceProfile?.controls.flatMap(c=>c.evidence)??[]];
-  const unique=[...new Map(refs.map(ref=>[`${ref.reference}:${ref.sha256}`,ref])).values()];let bytes=0;
+  const now=Date.now(),fresh=(ref:typeof refs[number])=>Date.parse(ref.observedAt)<=now+60_000&&Date.parse(ref.expiresAt)>now;
+  // Current delivery receipts must not lose the bounded capture slots to old
+  // history. The full discovery record remains intact for independent review.
+  const unique=[...new Map(refs.map(ref=>[`${ref.reference}:${ref.sha256}`,ref])).values()].sort((a,b)=>Number(fresh(b))-Number(fresh(a))||Date.parse(b.observedAt)-Date.parse(a.observedAt));let bytes=0;
   const results:Capture[]=[];
   for(const ref of unique.slice(0,24)){
     const item:Capture={reference:ref.reference,sha256:ref.sha256,status:'unavailable'};
     try{
       if(!path.isAbsolute(ref.reference)||!/[.](json|md|txt|ts|py|xml)$/i.test(ref.reference))throw new Error('Not an approved local text reference');
-      const file=await fs.realpath(ref.reference);if(!approved.some(root=>inside(root,file)))throw new Error('Outside approved evidence roots');
+      const file=await fs.realpath(ref.reference);if(file!==path.resolve(ref.reference)||!approved.some(root=>inside(root,file)))throw new Error('Linked or outside approved evidence roots');
       const content=await readBoundedBytes(file,32*1024);if(!content||crypto.createHash('sha256').update(content).digest('hex')!==ref.sha256)throw new Error('Evidence missing, oversized or hash differs');
       if(bytes+content.length>96*1024)throw new Error('Planning text budget reached');
       item.text=new TextDecoder('utf-8',{fatal:true}).decode(content);bytes+=content.length;item.status='captured';
@@ -27,5 +30,5 @@ export async function captureSynthesisEvidence(record:DeliveryRecord|undefined,r
   return results;
 }
 export async function verifySynthesisEvidence(captured:Capture[]){
-  for(const item of captured.filter(item=>item.status==='captured')){const bytes=await readBoundedBytes(item.reference,32*1024);if(!bytes||crypto.createHash('sha256').update(bytes).digest('hex')!==item.sha256)throw new Error('Captured discovery evidence changed during synthesis; repeat with reviewed current bytes');}
+  for(const item of captured.filter(item=>item.status==='captured')){const bytes=await readBoundedBytes(item.reference,32*1024);if(!bytes||await fs.realpath(item.reference)!==path.resolve(item.reference)||crypto.createHash('sha256').update(bytes).digest('hex')!==item.sha256)throw new Error('Captured discovery evidence changed during synthesis; repeat with reviewed current bytes');}
 }

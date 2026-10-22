@@ -160,7 +160,7 @@ on:
       manager_approver:
         description: 'Authorized Manager Signoff'
         required: true
-        default: 'Leon van Zyl'
+        default: 'Leon Godwin'
 
 jobs:
   production-release:

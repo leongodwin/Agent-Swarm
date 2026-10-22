@@ -1,4 +1,4 @@
-# cubefarm
+# Agent Swarm
 
 A cartoon first-person 3D office (React Three Fiber) over a Node orchestrator running coding-agent CLI sessions for developers, QA and the CEO in separate Git worktrees. Codex is the default; Gemini and OpenCode are the other permitted runtimes. Claude, GitHub Copilot CLI and SDK execution are excluded by current policy. This filename is retained for project-instruction compatibility, not permission to launch Claude.
 

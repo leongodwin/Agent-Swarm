@@ -1,13 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {GEMINI_HOOK_SOURCE,geminiSettings} from '../server/geminiBridge.ts';
+import {GEMINI_HOOK_SOURCE,geminiSettings,geminiHookCommand} from '../server/geminiBridge.ts';
 import {playwrightMcp} from '../server/browserTools.ts';
 
 // Stages reviewable artifacts only. Administrator installation is a separate explicit operation.
 const stage=path.resolve('.swarm-reliability/gemini-governance-install');
 const target=path.join(process.env.ProgramFiles??'C:/Program Files','Agent Swarm','Gemini');
 const hook=path.join(target,'gemini-hook.cjs');
-const command=`"${process.execPath}" "${hook}"`;
+const command=geminiHookCommand(process.execPath,hook);
 const office={httpUrl:'${CUBEFARM_OFFICE_URL}'};
 const browser=playwrightMcp('${CUBEFARM_BROWSER_OUTPUT}');
 await fs.mkdir(stage,{recursive:true});
@@ -44,6 +44,6 @@ foreach($item in @($target,(Join-Path $target 'gemini-hook.cjs'),(Join-Path $tar
  $acl.SetOwner($adminSid)
  Set-Acl -LiteralPath $item -AclObject $acl
 }
-Write-Output 'Protected Gemini bridge installed. Restart only the Agent Swarm server, then verify native readiness before sending a task. Authentication is unchanged.'
+Write-Output 'Protected Gemini bridge installed. Verify native profile readiness before sending a task. Authentication is unchanged.'
 `);
 process.stdout.write(JSON.stringify({stage,target,scope:'Prepared only; no machine configuration or ACL changes applied'})+'\n');

@@ -1,8 +1,14 @@
+import {withSyntheticIntegration} from './testFixtures/taskIntegration.ts';
+import {qualityContract} from './testFixtures/quality.ts';
+import {qualityContractHash} from './qualityEvidence.ts';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {afterEach,expect,it,vi} from 'vitest';
+import {firstSliceContractHash} from './firstSlice.ts';
+import {taskScopeHash,taskAuthorityHash,workerTaskFingerprint} from './taskScope.ts';
+import {deliveryRecordContentSchema} from '../shared/deliveryRecord.ts';
 import {DeliveryRecords} from './deliveryRecords.ts';
 import {deliveryRecordHandler} from './deliveryRecordTools.ts';
 import {discoveryAreas,recordReference,discoveryBlockers,type DeliveryRecordContent} from '../shared/deliveryRecord.ts';
@@ -33,7 +39,45 @@ async function fixture(input=content()) {
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'delivery-record-test-'));roots.push(root);
   const records=new DeliveryRecords(root);await records.init();const record=await records.save('test/repo',0,input,'ceo');return {root,records,record};
 }
+it('keeps a read-only design session usable after persisting its own finding, without granting authoring',async()=>{
+  const {records,record,root}=await fixture();
+  const admitted=workerTaskFingerprint(record,2);
+  const assertOpen=()=>{if(workerTaskFingerprint(records.current('test/repo')!,2)!==admitted)throw new Error('Task instructions changed');};
+  const worker=deliveryRecordHandler(records,{repo:()=>({...context,checkoutPath:root}),agents:()=>[],delivery:()=>({}) as never,assertOpen},{id:'dev',role:'dev',repoId:'test/repo'});
+  await worker({repo_id:'test/repo',action:'finding',expected_revision:1,payload_json:JSON.stringify({finding:{id:'design-observation',area:'integrations',status:'assumed',conclusion:'unknown',critical:false,owner:'dev',statement:'A proposed recovery path still needs actual native contracts.',remedy:'Independent review and native verification before authoring.',evidence:[]}})});
+  const read=JSON.parse(await worker({repo_id:'test/repo',action:'read'}));
+  expect(read.record.revision).toBe(2);
+  expect(read.record.content.findings.some((f:{id:string})=>f.id==='design-observation')).toBe(true);
+  expect(read.record.designReview).toBeUndefined();
+  expect(()=>records.assertWork('test/repo',3,context)).toThrow();
+  expect(workerTaskFingerprint(read.record,3)).not.toBe(workerTaskFingerprint(record,3));
+});
+it.each(['target','instructions','source','stage','owner'] as const)('revokes a design session when its %s changes',async change=>{
+  const {records,record}=await fixture(),admitted=workerTaskFingerprint(record,2),next=structuredClone(record.content);
+  if(change==='target')next.environmentUrl='https://other.crm.dynamics.com';
+  if(change==='instructions')next.contracts[0].description='Changed processing instructions with a different recovery strategy';
+  if(change==='source')next.sourceCommit='c'.repeat(40);
+  if(change==='stage')next.tasks.find(t=>t.issue===2)!.stage='discovery';
+  if(change==='owner')next.owner='other-dev';
+  const saved=await records.save('test/repo',record.revision,next,'manager');
+  expect(workerTaskFingerprint(saved,2)).not.toBe(admitted);
+});
 const review={docId,artifactSha256:hash,decision:'approved',notes:'Independent synthetic review of requirements, discovery evidence, alternatives, contracts and the deployed first journey.'};
+it('persists an application contract, holds material questions, binds synthesis and prevents silent downgrade',async()=>{
+  const data=content();data.applicationSpec={schemaVersion:1,journeys:[{id:'submit',actor:'Employee',outcome:'Submit a valid expense',requirementIds:['r1'],scenarios:[{id:'persist',kind:'happy',given:'A valid draft',when:'The employee submits',then:'The submission survives reload'}]}],decisions:[{id:'approver',question:'Who approves?',owner:'dev',requirementIds:['r1'],material:true,status:'open'}],assumptions:[],components:[{id:'app',platform:'canvas',owner:'dev',requirementIds:['r1'],contractIds:['expense'],findingIds:['repository'],dependsOn:[]}],securityBoundaries:[{id:'own',actor:'Employee',allowed:'Read own expenses',denied:'Read another employee expense',requirementIds:['r1'],findingIds:['security']}],checks:[{id:'runtime',kind:'runtime',requirementIds:['r1'],componentIds:['app'],scenarioIds:['persist'],expectedEvidence:'Authenticated persisted readback'}]};
+  const {records,root}=await fixture(data);expect(()=>records.assertDiscovery('test/repo',context)).toThrow('Who approves?');expect(()=>records.assertWork('test/repo',1,context)).not.toThrow();
+  await expect(approve(records)).rejects.toThrow('Who approves?');
+  const input={solutionName:'Expense',problemContext:context.brief,components:[]};const before=synthesisRequirements(input,records.current('test/repo')!);
+  Object.assign(data.applicationSpec.decisions[0],{status:'answered',answer:'Assigned manager',answerSource:'Synthetic manager clarification reference'});
+  data.taskPlan={schemaVersion:1,tasks:[3,4].map(issue=>({issue,owner:'dev',componentIds:['app'],dependsOn:issue===4?[3]:[],resources:[],inputs:['Reviewed application requirements'],outputs:['Scoped implementation and evidence'],checkIds:['runtime'],stopConditions:['Missing required input or actual capability']}))};
+  withSyntheticIntegration(data);await records.save('test/repo',1,data,'ceo');await approve(records);
+  const after=synthesisRequirements(input,records.current('test/repo')!);
+  expect(before.find(r=>r.id==='application-decisions-approver')?.sourceSha256).not.toBe(after.find(r=>r.id==='application-decisions-approver')?.sourceSha256);
+  expect(after.some(row=>row.kind==='application-specification'&&row.id==='application-journeys-submit')).toBe(true);
+  const reopened=new DeliveryRecords(root);await reopened.init();expect(reopened.current('test/repo')?.content.applicationSpec).toEqual(data.applicationSpec);
+  const legacy={...data};delete legacy.applicationSpec;delete legacy.taskPlan;await expect(records.save('test/repo',2,legacy,'ceo')).rejects.toThrow('silently removed');
+  await records.save('test/repo',2,{...data,outcome:'Revised outcome'},'ceo');expect(records.current('test/repo')?.designReview).toBeUndefined();
+});
 it('binds a licence-aware control baseline to its approved tenant and blocks required unknown controls',async()=>{
   const data=content(),tenantId='11111111-1111-4111-8111-111111111111';
   data.governanceProfile={tenantId,environmentUrl:context.environmentUrl,audience:'Synthetic pilot user',subscriptions:[],controls:[{id:'classification',name:'Classification',owner:'dev',scope:'Pilot data',requirement:'required',availability:'unknown',subscriptionProducts:[],delivery:'none',verification:'unverified',rationale:'Awaiting evidence of an available control or a manual alternative',evidence:data.findings[0].evidence}]};
@@ -64,7 +108,7 @@ it('keeps revision history on restart and rejects concurrent stale edits',async(
 });
 it('allows discovery and design at the correct stages but holds slice and wider work',async()=>{
   const data=content();data.sourceCommit=null;data.findings=[];const {records}=await fixture(data);
-  expect(()=>records.assertWork('test/repo',1,context)).not.toThrow();expect(()=>records.assertWork('test/repo',2,context)).toThrow('Inspect');
+  expect(()=>records.assertWork('test/repo',1,context)).not.toThrow();expect(()=>records.assertWork('test/repo',2,context)).not.toThrow();
   await records.save('test/repo',1,content(),'ceo');expect(()=>records.assertWork('test/repo',2,context)).not.toThrow();
   expect(()=>records.assertWork('test/repo',3,context)).toThrow('review');await approve(records);
   expect(()=>records.assertWork('test/repo',3,context)).not.toThrow();expect(()=>records.assertWork('test/repo',4,context)).toThrow('vertical slice');
@@ -73,7 +117,7 @@ it('allows discovery and design at the correct stages but holds slice and wider 
 it('allows discovery before a target is known without inventing environment readiness',async()=>{
   const data=content();data.environmentUrl=null;data.sourceCommit=null;data.findings=[];const {records,record}=await fixture(data);
   expect(()=>records.assertWork('test/repo',1,{brief:context.brief})).not.toThrow();expect(discoveryBlockers(record)).toContain('Discover and approve the deployment target');
-  expect(()=>records.assertWork('test/repo',2,{brief:context.brief})).toThrow('Inspect');
+  expect(()=>records.assertWork('test/repo',2,{brief:context.brief})).not.toThrow();expect(()=>records.assertWork('test/repo',3,{brief:context.brief})).toThrow();
 });
 it.each(['assumed','unresolved'] as const)('critical %s findings block discovery while naming owner and remedy',async status=>{
   const data=content();data.findings.push({...data.findings[0],id:'licence',status,remedy:'Obtain the required licence',owner:'admin',evidence:[]});const {record,records}=await fixture(data);
@@ -176,7 +220,7 @@ it.each(['success','changed'] as const)('grounds actual synthesis in the shared 
   await service.init();
   try{
     const input={solutionName:'Synthetic expenses',problemContext:'A short supplied brief',components:[]},job=await service.start('test/repo',input);
-    await vi.waitFor(()=>expect(options).toBeDefined());const supplied=JSON.parse(options.prompt);expect(supplied.discoveryEvidence.sha256).toBe(record.sha256);expect(supplied.requirementCatalogue.map((r:{id:string})=>r.id)).toContain('delivery-r1');
+    await vi.waitFor(()=>expect(options).toBeDefined());const supplied=JSON.parse(options.prompt);expect(supplied.discoveryEvidence.reference.sha256).toBe(record.sha256);expect(supplied.requirementCatalogue.map((r:{id:string})=>r.id)).toContain('delivery-r1');
     if(mode==='changed')await records.save('test/repo',1,{...content(),outcome:'Changed scope during model execution'},'ceo');
     const detail='Synthetic design text with observable acceptance; no tenant validation claimed.';
     callbacks.finished({ok:true,text:'',costUsd:0,turns:1,errors:[],structured:{summary:detail,architecture:detail,dataModel:detail,securityAndGovernance:detail,operationsAndRecovery:detail,decisions:[{decision:detail,rationale:detail,alternatives:detail}],risks:[{risk:detail,mitigation:detail}],missingEvidence:['Independent tenant verification remains required'],skillBindings:[],implementationPlan:['build','test','deploy'].map(id=>({id,title:id,deliverables:[detail],acceptance:[detail]})),requirements:supplied.requirementCatalogue.map((source:{id:string;sourceSha256:string})=>({requirementId:source.id,sourceSha256:source.sourceSha256,planStepIds:['build'],requirement:detail,design:detail,acceptance:detail})),mermaidDiagrams:{topology:'flowchart LR\nA-->B',erd:'erDiagram\nA ||--o{ B : contains',sequence:'sequenceDiagram\nA->>B: Submit'}}});
@@ -184,4 +228,137 @@ it.each(['success','changed'] as const)('grounds actual synthesis in the shared 
     if(mode==='success'){const artifact=await service.result('test/repo',job.id);expect(artifact.result.deliveryRecord).toEqual(recordReference(record));expect(artifact.result.markdownContent).toContain('Captured discovery and delivery scope');}
     else await expect(service.result('test/repo',job.id)).rejects.toThrow();
   }finally{await service.close();}
+});
+
+// Phase 3 acceptance: explicit task authority, merged inputs and bounded context.
+function plannedContent():DeliveryRecordContent {
+  const data=content();
+  data.requirements=[1,2,3].map(n=>({id:`r${n}`,description:`Requirement ${n}`,acceptance:`Observable outcome ${n}`}));
+  data.tasks=[1,2,3].map(n=>({issue:n+10,stage:'slice' as const,requirementIds:[`r${n}`]}));
+  data.slice.requirementIds=['r1','r2','r3'];
+  data.applicationSpec={schemaVersion:1,journeys:[1,2,3].map(n=>({id:`j${n}`,actor:'Tester',outcome:`Outcome ${n}`,requirementIds:[`r${n}`],scenarios:[{id:`s${n}`,kind:'happy' as const,given:'An authenticated user',when:'They perform the operation',then:'The expected outcome persists'}]})),decisions:[],assumptions:[],securityBoundaries:[{id:'own',actor:'Tester',allowed:'Read own records',denied:'Read other records',requirementIds:['r1'],findingIds:['security']}],
+    components:[1,2,3].map(n=>({id:`c${n}`,platform:'canvas' as const,owner:`dev${n}`,requirementIds:[`r${n}`],contractIds:[],findingIds:['repository'],dependsOn:n===2?['c1']:[]})),
+    checks:[1,2,3].map(n=>({id:`check${n}`,kind:'runtime' as const,requirementIds:[`r${n}`],componentIds:[`c${n}`],scenarioIds:[`s${n}`],expectedEvidence:'Authenticated persisted readback'}))};
+  data.taskPlan={schemaVersion:1,tasks:[1,2,3].map(n=>({issue:n+10,owner:`dev${n}`,componentIds:[`c${n}`],dependsOn:n===2?[11]:[],resources:[],inputs:['Approved source contract'],outputs:['Implemented component and evidence'],checkIds:[`check${n}`],stopConditions:['Stop if required input or authenticated capability is unavailable']}))};
+  return withSyntheticIntegration(data);
+}
+async function approveTask(records:DeliveryRecords,issue:number,decision:'approved'|'rejected'='approved'){
+  const record=records.current('test/repo')!;
+  return records.reviewTask('test/repo',recordReference(record),issue,{taskHash:taskScopeHash(record,issue)!,decision,notes:review.notes},'qa',context);
+}
+const taskEvidence={prNumber:101,headSha:head,mergeCommitSha:'c'.repeat(40),evidenceHash:hash};
+it('rejects invalid ownership, missing contracts/checks, undeclared component prerequisites and cyclic tasks',()=>{
+  expect(deliveryRecordContentSchema.safeParse(plannedContent()).success).toBe(true);
+  for(const mutate of [
+    (d:DeliveryRecordContent)=>{d.taskPlan!.tasks[0].owner='qa';},
+    (d:DeliveryRecordContent)=>{d.taskPlan!.tasks.pop();},
+    (d:DeliveryRecordContent)=>{d.taskPlan!.tasks[0].checkIds=['unknown'];},
+    (d:DeliveryRecordContent)=>{d.taskPlan!.tasks[1].dependsOn=[];},
+    (d:DeliveryRecordContent)=>{d.taskPlan!.tasks[0].dependsOn=[12];},
+    (d:DeliveryRecordContent)=>{d.taskPlan!.tasks[0].dependsOn=[99];},
+    (d:DeliveryRecordContent)=>{d.taskPlan!.tasks[0].componentIds=['c3'];},
+  ]){const d=plannedContent();mutate(d);expect(deliveryRecordContentSchema.safeParse(d).success).toBe(false);}
+});
+it('holds exact task scope for independent review and prerequisites for merged QA receipts, never issue closure',async()=>{
+  const {records}=await fixture(plannedContent());await approve(records);
+  expect(()=>records.assertWork('test/repo',11,context)).toThrow('exact task scope');
+  const record=records.current('test/repo')!;
+  await expect(records.reviewTask('test/repo',recordReference(record),11,{taskHash:taskScopeHash(record,11)!,decision:'approved',notes:review.notes},'dev1',context)).rejects.toThrow('independent QA');
+  await expect(records.reviewTask('test/repo',recordReference(record),11,{taskHash:'f'.repeat(64),decision:'approved',notes:review.notes},'qa',context)).rejects.toThrow('scope changed');
+  await approveTask(records,11);await approveTask(records,12);
+  expect(()=>records.assertWork('test/repo',11,context)).not.toThrow();
+  expect(()=>records.assertWork('test/repo',12,context)).toThrow('dependency #11');
+  await expect(records.acceptTask('test/repo',recordReference(records.current('test/repo')!),11,taskEvidence,'dev1',context)).rejects.toThrow('independent QA');
+  await records.acceptTask('test/repo',recordReference(records.current('test/repo')!),11,taskEvidence,'qa',context);
+  expect(()=>records.assertWork('test/repo',12,context)).not.toThrow();
+});
+it('preserves unrelated scoped approvals and receipts but invalidates edited tasks and transitive dependents',async()=>{
+  const {records,root}=await fixture(plannedContent());await approve(records);for(const n of [11,12,13])await approveTask(records,n);
+  await records.acceptTask('test/repo',recordReference(records.current('test/repo')!),11,taskEvidence,'qa',context);
+  const before=records.current('test/repo')!,fingerprint=taskAuthorityHash(before,12),data=structuredClone(before.content);
+  data.requirements[2].acceptance='Revised unrelated acceptance';withSyntheticIntegration(data);await records.save('test/repo',1,data,'ceo');
+  let current=records.current('test/repo')!;expect(current.designReview).toBeUndefined();expect(current.taskReviews?.map(r=>r.issue)).toEqual([11,12]);expect(current.taskAcceptances).toHaveLength(1);expect(taskAuthorityHash(current,12)).toBe(fingerprint);
+  expect(()=>records.assertWork('test/repo',12,context)).not.toThrow();
+  const reopened=new DeliveryRecords(root);await reopened.init();expect(reopened.current('test/repo')?.taskAcceptances).toHaveLength(1);
+  data.requirements[0].acceptance='Changed prerequisite contract';withSyntheticIntegration(data);await records.save('test/repo',2,data,'ceo');current=records.current('test/repo')!;
+  expect(current.taskReviews).toEqual([]);expect(current.taskAcceptances).toEqual([]);expect(()=>records.assertWork('test/repo',12,context)).toThrow('exact task scope');
+  delete data.taskPlan;await expect(records.save('test/repo',3,data,'ceo')).rejects.toThrow('silently removed');
+});
+it('rejects tampered persisted task evidence and slice provenance at restart',async()=>{
+  const {records,root}=await fixture(plannedContent());await approve(records);await approveTask(records,11);
+  const filename=path.join(root,'delivery-records.json'),original=await fs.readFile(filename,'utf8');
+  for(const mutate of [
+    (r:ReturnType<DeliveryRecords['current']>)=>{r!.taskReviews![0].taskHash='f'.repeat(64);},
+    (r:ReturnType<DeliveryRecords['current']>)=>{r!.taskReviews![0].reviewer='dev1';},
+    (r:ReturnType<DeliveryRecords['current']>)=>{r!.taskReviews![0].sliceReceipt={releaseId:crypto.randomUUID(),runId:crypto.randomUUID(),evidenceHash:hash,head,acceptedAt:new Date().toISOString()};},
+  ]){const state=JSON.parse(original);mutate(state.records[0]);await fs.writeFile(filename,JSON.stringify(state));await expect(new DeliveryRecords(root).init()).rejects.toThrow();}
+});
+it('requires task splitting when the dependency context exceeds its authoring budget',async()=>{
+  const data=plannedContent();const {records,record}=await fixture(data);await approve(records);await approveTask(records,11);data.taskPlan!.tasks[0].inputs=Array(20).fill('x'.repeat(2000));
+  await expect(records.save('test/repo',1,data,'ceo')).rejects.toThrow('24 KiB');expect(records.current('test/repo')?.sha256).toBe(record.sha256);expect(records.current('test/repo')?.content.taskPlan?.tasks[0].inputs).toEqual(['Approved source contract']);
+});
+
+it('exposes scoped hashes and accepts independent review_task through the actual office tool contract',async()=>{
+  const {records,root}=await fixture(plannedContent());await approve(records);
+  const deps={repo:()=>({...context,checkoutPath:root}),agents:()=>[],delivery:()=>({releases:[],runs:[]} as unknown as import('../shared/delivery.ts').DeliveryView),assertOpen:()=>{}};
+  const tool=deliveryRecordHandler(records,deps,{id:'qa',role:'qa',repoId:'test/repo',reviewOnly:true});
+  const read=JSON.parse(await tool({repo_id:'test/repo',action:'read'}));expect(read.taskScopes).toHaveLength(3);
+  const payload={reference:recordReference(records.current('test/repo')!),issue:11,taskHash:read.taskScopes[0].taskHash,decision:'approved',notes:review.notes};
+  const result=JSON.parse(await tool({repo_id:'test/repo',action:'review_task',expected_revision:1,payload_json:JSON.stringify(payload)}));expect(result.taskReviews[0].decision).toBe('approved');
+  const developer=deliveryRecordHandler(records,deps,{id:'dev1',role:'dev',repoId:'test/repo'});
+  await expect(developer({repo_id:'test/repo',action:'review_task',expected_revision:1,payload_json:JSON.stringify(payload)})).rejects.toThrow('independent QA');
+});
+
+it('requires mapped first-slice execution and merged implementation before accepting a deployment or unlocking expansion',async()=>{
+  const data=plannedContent();data.requirements=data.requirements.slice(0,1);data.slice.requirementIds=['r1'];data.slice.acceptanceCriteria=[data.requirements[0].acceptance];data.tasks=[{issue:11,stage:'slice',requirementIds:['r1']},{issue:12,stage:'implementation',requirementIds:['r1']}];
+  const spec=data.applicationSpec!;spec.components=spec.components.slice(0,1);spec.journeys=spec.journeys.slice(0,1);spec.checks=spec.checks.slice(0,1);
+  spec.journeys[0].scenarios=['happy','denied','failure'].map(kind=>({id:kind,kind:kind as 'happy'|'denied'|'failure',given:'Authenticated synthetic identity',when:'They submit',then:'Expected result is observed'}));spec.checks[0].scenarioIds=['happy','denied','failure'];
+  const quality=qualityContract([{componentId:'c1',targetKey:'app',platform:'canvas'}],['happy','denied','failure']);quality.checks.find(c=>c.kind==='runtime')!.checkId='check1';
+  spec.checks=quality.checks.map(c=>({id:c.checkId,kind:c.kind,requirementIds:['r1'],componentIds:['c1'],scenarioIds:'cases' in c?c.cases.map(row=>row.scenarioId):[],expectedEvidence:'Independently inspect the runner-owned evidence and handover content'}));
+  data.taskPlan!.tasks=[data.taskPlan!.tasks[0],{...data.taskPlan!.tasks[0],issue:12,dependsOn:[11]}];
+  withSyntheticIntegration(data);spec.checks=spec.checks.filter(c=>!c.id.startsWith('local-'));for(const task of data.taskPlan!.tasks)task.checkIds=['compile'];for(const qa of data.taskPlan!.integrationQa!){qa.checkIds=quality.checks.map(c=>c.checkId);for(const row of qa.cases)row.testName=row.scenarioId;}const {records}=await fixture(data);await approve(records);const r=release(records);r.plan.quality={maxTaskDurationMs:30000} as any;r.plan.acceptanceCriteria=[data.requirements[0].acceptance];r.plan.requiredIssues=[11];r.plan.verification={scenarios:['journey','authorization','error-handling'].map((category,i)=>({name:['happy','denied','failure'][i],category,criterion:0}))} as DeliveryRelease['plan']['verification'];
+  expect(()=>records.assertRelease('test/repo',r.plan,context)).toThrow('execution mapping');
+  r.plan.firstSlice={schemaVersion:1,components:[{componentId:'c1',targetKey:'app',platform:'canvas'}],cases:[...['happy','denied','failure'].map(scenarioId=>({checkId:'check1',scenarioId,testName:scenarioId})),{checkId:'access',scenarioId:'denied',testName:'denied'}]};
+  expect(()=>records.assertRelease('test/repo',r.plan,context)).toThrow('merged task evidence');
+  await approveTask(records,11);await records.acceptTask('test/repo',recordReference(records.current('test/repo')!),11,taskEvidence,'qa',context);
+  expect(()=>records.assertRelease('test/repo',r.plan,context)).toThrow('quality evidence bindings');r.plan.qualityEvidence=quality;
+  expect(()=>records.assertRelease('test/repo',r.plan,context)).not.toThrow();
+  const deployment=run(r),ref=recordReference(records.current('test/repo')!);
+  await expect(records.acceptSlice('test/repo',ref,r,deployment,context)).rejects.toThrow('Runner-owned');
+  deployment.firstSlice={schemaVersion:1,observedAfter:new Date().toISOString(),contractHash:firstSliceContractHash(r.plan),artifactSha256:hash,evidenceFile:'first-slice-verification.json'};deployment.evidence=['first-slice-verification.json'];
+  await expect(records.acceptSlice('test/repo',ref,r,deployment,context)).rejects.toThrow('QA and documentation');
+  deployment.qualityEvidence={schemaVersion:1,contractHash:qualityContractHash(r.plan),artifactSha256:hash,evidenceFile:'quality-evidence.json',observedAfter:new Date().toISOString(),checks:quality.checks.map(c=>({checkId:c.checkId,kind:c.kind,evidenceSha256:hash}))};
+  deployment.qualityReview={reviewer:'qa',reviewedAt:new Date().toISOString(),evidenceHash:hash,contractHash:deployment.qualityEvidence.contractHash,decisions:quality.checks.map(c=>({checkId:c.checkId,evidenceSha256:hash,decision:'approved',notes:'Independent synthetic assessment of the actual check evidence and its limits.'}))};
+  const deps={repo:()=>({...context,checkoutPath:'synthetic'}),agents:()=>[],delivery:()=>({releases:[r],runs:[deployment]} as unknown as import('../shared/delivery.ts').DeliveryView),assertOpen:()=>{}};
+  const input={repo_id:'test/repo',action:'accept_slice' as const,expected_revision:1,payload_json:JSON.stringify({reference:ref,runId:deployment.id})};
+  await expect(deliveryRecordHandler(records,deps,{id:'qa',role:'qa'})(input)).rejects.toThrow('Trusted');
+  const verifySliceAcceptance=vi.fn(async()=>{throw new Error('Evidence changed after approval');});
+  await expect(deliveryRecordHandler(records,{...deps,verifySliceAcceptance},{id:'qa',role:'qa'})(input)).rejects.toThrow('Evidence changed');expect(records.current('test/repo')?.sliceReceipt).toBeUndefined();
+  verifySliceAcceptance.mockResolvedValueOnce(undefined as never);await deliveryRecordHandler(records,{...deps,verifySliceAcceptance},{id:'qa',role:'qa'})(input);
+  expect(records.current('test/repo')?.sliceReceipt?.firstSlice).toMatchObject({recordSha256:ref.sha256,planHash:r.planHash,contractHash:firstSliceContractHash(r.plan)});
+  await approveTask(records,12);expect(()=>records.assertWork('test/repo',12,context)).not.toThrow();
+});
+
+it.each([false,true])('keeps retained legacy receipts readable but blocks application-spec expansion (taskPlan=%s)',async withPlan=>{
+  const data=plannedContent();if(!withPlan)delete data.taskPlan;const {records,root}=await fixture(data);if(!withPlan){await expect(approve(records)).rejects.toThrow('task contracts');expect(()=>records.assertWork('test/repo',11,context)).toThrow('task contracts');return;}await approve(records);const r=release(records);
+  const filename=path.join(root,'delivery-records.json'),stored=JSON.parse(await fs.readFile(filename,'utf8'));
+  stored.records[0].sliceReceipt={releaseId:r.id,runId:crypto.randomUUID(),head,evidenceHash:hash,acceptedAt:new Date().toISOString()};await fs.writeFile(filename,JSON.stringify(stored));
+  const reopened=new DeliveryRecords(root);await reopened.init();expect(reopened.current('test/repo')?.sliceReceipt).toBeDefined();
+  expect(()=>reopened.assertRelease('test/repo',{...r.plan,deliveryRecord:{...recordReference(reopened.current('test/repo')!),purpose:'expansion'}},context)).toThrow('First deployed slice');
+});
+it('saves a complete manager record above the worker action ceiling without losing findings or restart history',async()=>{
+  const {records,record,root}=await fixture(),large=content();
+  large.findings=Array.from({length:80},(_,i)=>({...large.findings[0],id:`retained-${i}`,statement:'Retained observation '.repeat(180).trim(),critical:false}));
+  const bytes=JSON.stringify(large);expect(Buffer.byteLength(bytes)).toBeGreaterThan(256*1024);expect(Buffer.byteLength(bytes)).toBeLessThan(1024*1024);
+  const deps={repo:()=>({...context,checkoutPath:root}),agents:()=>[{id:'dev',role:'dev',repoId:'test/repo'},{id:'qa',role:'qa',repoId:'test/repo'}],delivery:()=>({}) as never,assertOpen(){}};
+  const manager=deliveryRecordHandler(records,deps,{id:'manager',role:'manager'});
+  const saved=JSON.parse(await manager({repo_id:'test/repo',action:'save',expected_revision:record.revision,payload_json:bytes}));
+  expect(saved.content).toEqual(large);await records.close();const reloaded=new DeliveryRecords(root);await reloaded.init();expect(reloaded.current('test/repo')?.content).toEqual(large);expect(reloaded.view('test/repo')).toHaveLength(2);await reloaded.close();
+});
+it('keeps worker payload bounds and rejects oversized manager saves without changing history',async()=>{
+  const {records,record,root}=await fixture(),deps={repo:()=>({...context,checkoutPath:root}),agents:()=>[],delivery:()=>({}) as never,assertOpen(){}};
+  const dev=deliveryRecordHandler(records,deps,{id:'dev',role:'dev',repoId:'test/repo'}),manager=deliveryRecordHandler(records,deps,{id:'manager',role:'manager'});
+  await expect(dev({repo_id:'test/repo',action:'finding',expected_revision:record.revision,payload_json:JSON.stringify({secret:'x'.repeat(270000)})})).rejects.toMatchObject({status:413});
+  await expect(manager({repo_id:'test/repo',action:'save',expected_revision:record.revision,payload_json:JSON.stringify({secret:'x'.repeat(1024*1024)})})).rejects.toMatchObject({status:413});
+  expect(records.current('test/repo')).toEqual(record);expect(records.view('test/repo')).toHaveLength(1);
 });

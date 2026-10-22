@@ -13,7 +13,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 const HELP = `
-  cubefarm ${pkg.version}: a cartoon 3D office where a team of AI coding agents works through your GitHub issues.
+  Agent Swarm ${pkg.version}: a cartoon 3D office where a team of AI coding agents works through your GitHub issues.
 
   Usage
     npx cubefarm            start the office and open it in your browser
@@ -40,7 +40,7 @@ const fail = (msg) => {
   process.exit(1);
 };
 
-if (Number(process.versions.node.split('.')[0]) < MIN_NODE) fail(`cubefarm needs Node.js ${MIN_NODE} or newer (this is ${process.version}). Get it from https://nodejs.org`);
+if (Number(process.versions.node.split('.')[0]) < MIN_NODE) fail(`Agent Swarm needs Node.js ${MIN_NODE} or newer (this is ${process.version}). Get it from https://nodejs.org`);
 
 let args;
 try {
@@ -201,7 +201,7 @@ async function checkForUpdate() {
     const res = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`, { signal: AbortSignal.timeout(4000) });
     const { version } = await res.json();
     if (typeof version === 'string' && newer(version, pkg.version)) {
-      console.log(`\n  cubefarm ${version} is out (this is ${pkg.version}). Start it with ${green('npx cubefarm@latest')} to update.\n`);
+      console.log(`\n  Agent Swarm ${version} is out (this is ${pkg.version}). Start it with ${green('npx cubefarm@latest')} to update.\n`);
     }
   } catch {
     // offline, or the registry is slow: try again next time
@@ -211,7 +211,7 @@ async function checkForUpdate() {
 // ---------- commands ----------
 
 if (command === 'doctor') {
-  console.log(`\n  cubefarm ${pkg.version}\n`);
+  console.log(`\n  Agent Swarm ${pkg.version}\n`);
   const results = checks();
   results.forEach(printCheck);
   const ok = results.every((c) => c.ok);
@@ -235,8 +235,8 @@ const demo = values.demo || process.env.SWARM_DEMO === '1' || process.env.SWARM_
 
 // A second office on the same state would resume every agent's session a second time.
 if (port !== 0 && (await portOpen(port))) {
-  if (!(await isOffice(`http://127.0.0.1:${port}`))) fail(`Something else is using port ${port}. Start cubefarm on another one: npx cubefarm --port 4400`);
-  console.log(`\n  cubefarm is already running: ${url}\n`);
+  if (!(await isOffice(`http://127.0.0.1:${port}`))) fail(`Something else is using port ${port}. Start Agent Swarm on another one: npx cubefarm --port 4400`);
+  console.log(`\n  Agent Swarm is already running: ${url}\n`);
   if (!values['no-open']) openBrowser(url);
   process.exit(0);
 }
@@ -246,7 +246,7 @@ if (!demo) {
   if (problems.length) {
     console.log('');
     problems.forEach(printCheck);
-    if (problems.some((c) => c.required)) fail('cubefarm can’t run without these.');
+    if (problems.some((c) => c.required)) fail('Agent Swarm can’t run without these.');
     console.log(dim('\n  Starting anyway. Fix the above, and check again with: npx cubefarm doctor'));
   }
 }

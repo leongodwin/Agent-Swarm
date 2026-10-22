@@ -30,6 +30,7 @@ export function DeliveryPlanPanel({initialRepo}:{initialRepo?:string}) {
     {busy&&<p role="status">Loading or requesting team work…</p>}{error&&<p role="alert">{error}</p>}
     {view?.demo&&<p>Demo mode. Planning does not inspect or change a real project.</p>}
     {view&&<p><strong>Current stage: {view.phase.replaceAll('-',' ')}</strong>{record&&` · revision ${record.revision}`}</p>}
+    {view?.readiness&&<section aria-label="Planning and delivery readiness"><p>Architecture: <strong>{view.readiness.architectureStatus}</strong> · Delivery policy: <strong>{view.readiness.deliveryPolicy}</strong></p><p>Next action: {view.readiness.nextAction.replaceAll('-', ' ')}.</p><p>Capability readiness does not establish design or delivery readiness. Release and runtime checks remain required.</p></section>}
     {!!view?.blockers.length&&<section aria-label="Discovery blockers"><h4>Before the team can proceed</h4><ul>{view.blockers.map((blocker,index)=><li key={index}>{blocker}</li>)}</ul></section>}
     {content&&<>
       <h4>Outcome and scope</h4><p>{content.outcome}</p><p><strong>Success measure:</strong> {content.successMeasure}</p>
@@ -42,10 +43,28 @@ export function DeliveryPlanPanel({initialRepo}:{initialRepo?:string}) {
         {content.findings.filter(f=>f.area===area).map(f=><div className="card" key={f.id}><strong>{f.status} · {f.conclusion??'unknown'}{f.critical?' · critical':''}</strong><p>{f.statement}</p><p>Owner: {name(f.owner)} · Next action: {f.remedy}</p>{f.evidence.map((e,index)=><p className="small" key={index} style={{overflowWrap:'anywhere'}}>{e.reference}<br/>Observed {e.observedAt} · expires {e.expiresAt}<br/>SHA-256: {e.sha256}</p>)}</div>)}
       </details>)}
       <h4>Requirements and linked work</h4>{content.requirements.map(req=><div className="card" key={req.id}><strong>{req.id}: {req.description}</strong><p>Acceptance: {req.acceptance}</p><p>Issues: {content.tasks.filter(task=>task.requirementIds.includes(req.id)).map(task=>`#${task.issue} (${task.stage})`).join(', ')||'No task linked yet'}</p></div>)}
+      <section aria-label="Application journeys and decisions"><h4>Application journeys and decisions</h4>
+        {!content.applicationSpec?<p>Application journeys, questions and verification checks have not been recorded yet. Existing delivery gates still apply.</p>:<>
+          <p>{content.applicationSpec.journeys.length} journeys · {content.applicationSpec.decisions.filter(d=>d.status==='open').length} open questions · {content.applicationSpec.checks.length} planned checks. Planned checks are not verified results.</p>
+          {content.applicationSpec.decisions.map(decision=><div className="card" key={decision.id}><strong>{decision.status} · {decision.question}{decision.material?' · material decision':''}</strong><p>Owner: {name(decision.owner)} · Requirements: {decision.requirementIds.join(', ')}</p>{decision.answer&&<p>{decision.answer}<br/>Source: {decision.answerSource}</p>}</div>)}
+          {content.applicationSpec.journeys.map(journey=><details key={journey.id}><summary>{journey.actor}: {journey.outcome}</summary>{journey.scenarios.map(scenario=><p key={scenario.id}><strong>{scenario.kind}</strong>: Given {scenario.given}, when {scenario.when}, then {scenario.then}.</p>)}</details>)}
+          <details><summary>Assumptions, components and verification</summary>
+            {content.applicationSpec.assumptions.map(a=><p key={a.id}>{a.status}{a.critical?' · critical':''}: {a.statement} · Owner: {name(a.owner)}</p>)}
+            {content.applicationSpec.components.map(c=><p key={c.id}>{c.id} · {c.platform} · Owner: {name(c.owner)} · Depends on: {c.dependsOn.join(', ')||'none declared'}</p>)}
+            {content.applicationSpec.securityBoundaries.map(b=><p key={b.id}>{b.actor}: allowed {b.allowed}; denied {b.denied}</p>)}
+            {content.applicationSpec.checks.map(c=><p key={c.id}>{c.id} · {c.kind} · Required evidence: {c.expectedEvidence}</p>)}
+          </details>
+        </>}
+      </section>
+      <section aria-label="Task execution contracts"><h4>Task execution contracts</h4>
+        {!content.taskPlan?<p>Task contracts have not been adopted. Existing delivery gates still apply.</p>:content.taskPlan.tasks.map(task=><details key={task.issue}><summary>#{task.issue} · {name(task.owner)} · {record.taskAcceptances?.some(a=>a.issue===task.issue)?'QA accepted and merged':record.taskReviews?.find(r=>r.issue===task.issue)?.decision??'Awaiting task review'}</summary><p>Components: {task.componentIds.join(', ')} · Prerequisites: {task.dependsOn.map(n=>`#${n}`).join(', ')||'none'}</p><p>Resources: {task.resources.join(', ')||'none'} · Checks: {task.checkIds.join(', ')}</p><p>Inputs: {task.inputs.join('; ')}</p><p>Outputs: {task.outputs.join('; ')}</p><p>Stop conditions: {task.stopConditions.join('; ')}</p></details>)}
+      </section>
       <h4>Design review</h4><p>{record.designReview?`${record.designReview.decision} by ${name(record.designReview.reviewer)}`:'Awaiting independent review of discovery and design.'}</p>{record.designReview&&<p>{record.designReview.notes}</p>}
       <button className="btn btn-small" disabled={busy||view?.demo||!!record.sliceReceipt} onClick={()=>void act(()=>api.reviewDeliveryRecord(repoId))}>Request independent design review</button>
       <h4>First deployed journey</h4><p>{content.slice.description}</p><ul>{content.slice.acceptanceCriteria.map((item,index)=><li key={index}>{item}</li>)}</ul>
-      <p>{record.sliceReceipt?`Accepted from deployment ${record.sliceReceipt.runId}.`:'Wider implementation remains held until deployment and independent acceptance are recorded.'}</p>
+      <p>{record.sliceReceipt?.firstSlice?`First-slice execution verified and independently accepted from deployment ${record.sliceReceipt.runId}.`:record.sliceReceipt&&!content.applicationSpec?`Accepted from deployment ${record.sliceReceipt.runId}.`:'Wider implementation remains held until deployment and independent acceptance are recorded.'}</p>
+      {content.applicationSpec&&<p>{record.sliceReceipt?.firstSlice?'Happy, denied and failure scenario mappings are bound to the release evidence.':'First-slice acceptance requires component mappings and independent execution of happy, denied and failure scenarios. Planned checks alone do not unlock expansion.'}</p>}
+      {content.applicationSpec&&<p>{record.sliceReceipt?.qualityAcceptance?`QA and documentation evidence independently accepted by ${name(record.sliceReceipt.qualityAcceptance.reviewer)}.`:'QA and documentation acceptance is pending; expansion remains held.'}</p>}
       <details><summary>Shared contracts and version</summary>{content.contracts.map(contract=><p key={contract.id}><strong>{contract.id}</strong> · {name(contract.owner)} · {contract.description}</p>)}<p style={{overflowWrap:'anywhere'}}>Record {record.id} · {record.sha256}<br/>Discovery source: {content.sourceCommit??'Not inspected yet'}</p></details>
     </>}
   </section>;

@@ -4,9 +4,13 @@ A solution is complete when the intended user can open it in the approved develo
 
 For capability configuration, versioned starters, measurable UX gates, recovery receipts and monitoring, see [Reliability priorities 5–8](RELIABILITY.md).
 
+For reviewed functional-development imports, manifests may opt in to `importTransport: "dataverse-tracked"` with `manualDevelopmentGovernance: true`, `targetBinding` and `platformIdentity`. This path records and flushes the exact ImportJob ID before the authenticated Dataverse request. It refuses settings files, production publish-changes semantics and packages over47 MiB; omitted transport retains PAC behavior. See [tracked import/adoption evidence and limits](TRACKED-IMPORT-ADOPTION-QA.md). Missing jobs or interrupted intents never authorize automatic replay, and maintenance adoption does not establish deployment success.
+
 ## Team contract
 
 ### Shared delivery record and discovery (P0)
+
+For loosely defined app requests, add the versioned `applicationSpec` described in [Application specification](APPLICATION-SPECIFICATION.md). It adds traceable journeys, clarification decisions, assumptions, component dependencies, access boundaries and planned checks to this same record. Planned checks do not establish runtime success.
 
 New work uses the office-owned shared record before implementation. Existing releases/history remain readable; delivery execution and new assignments require the current record. Open **Manager's console → Delivery plan** to inspect outcomes, findings, stage blockers, requirements/tasks, independent design review and slice acceptance. **Ask CEO to plan discovery** queues planning without deploying anything. Missing or corrupt record storage blocks progression and preserves the original bytes; it never resets history silently. Records live in `<SWARM_HOME>/planning/delivery-records.json` (separate demo storage), with bounded, atomic, revision-checked updates and retained content history. This is local-office state, not distributed multi-host storage. Export/preserve it with the office state for handover; architecture copies committed to Git remain release artifacts.
 
@@ -34,7 +38,7 @@ Example **content**, with illustrative values to replace from the real brief/con
 }
 ```
 
-The CEO reads the record and existing issues before filing work, then maps actual returned issue numbers into `tasks`. Unmapped issues cannot be assigned. A task has stage `discovery`, `design`, `slice` or `implementation`. Discovery is allowed while prerequisites are unresolved; design waits for discovery; slice authoring waits for independent design approval; wider implementation waits for accepted deployed slice evidence. Discovery/design workers commit evidence/design documentation for QA rather than application changes. These stage checks apply at assignment and supported pre-tool authorization; they do not physically contain tools outside the office's trusted hooks or revoke already-issued platform requests.
+The CEO reads the record and existing issues before filing work, then maps actual returned issue numbers into `tasks`. Unmapped issues cannot be assigned. A task has stage `discovery`, `design`, `slice` or `implementation`. Discovery is allowed while prerequisites are unresolved; design waits for discovery; slice authoring waits for independent design approval; wider implementation waits for accepted deployed slice evidence. Discovery/design workers record findings and use office-owned evidence/design operations; their native shell and authoring tools remain denied. Record-only discovery is retained for independent review and issue disposition without a PR-completion retry. These stage checks apply at assignment and supported pre-tool authorization; they do not physically contain tools outside the office's trusted hooks or revoke already-issued platform requests.
 
 Use `environmentUrl: null` while no target is connected/approved. Discovery work can start in that state; design and deployment remain held. Once the approved target is known, the CEO updates the record to match the connected project/delivery target. Do not invent an environment merely to create the record.
 
@@ -61,7 +65,11 @@ The optional structured `governanceProfile` binds a tenant, target and affected 
 
 For example, assess manual/default sensitivity labelling separately from automatic sensitivity labelling and insider-risk automation. Business Premium includes core information-protection features and can have Purview add-ons; Microsoft 365 E5 also does not imply every feature has been enabled for the affected users and workloads. Verify current Microsoft feature entitlements, assigned service plans, configuration and enforcement. Do not generalise an M365 licence to Power Platform connector-policy entitlement or effective enforcement.
 
-The CEO or engineering session uses action `synthesize_design` with the architecture input `{solutionName, problemContext, tenantName?, components}`. Use `design_result` with `{jobId}` to read status and, when complete, the structured artifact. The normal architecture board remains available. Synthesis receives the full discovery snapshot and a requirement catalogue that includes every shared-record requirement, with exact source hashes. It still has no tenant/tool authority; the evidence is its grounding context. Scope/evidence changes deny late publication. Commit the returned architecture JSON and Markdown unchanged in the design documentation PR.
+Save application task contracts before synthesizing the final design. Application-specification records require a complete `taskPlan` for design approval, authoring and release; legacy records retain their existing gates. Discovery and design tasks may produce read-only drafts while decisions remain unresolved. This never grants implementation or deployment authority. Preserve discovery/design issues; define genuinely distinct authoring work with actual issue numbers, owners, component dependencies, stable resource IDs, inputs, outputs, check IDs and stop conditions. Save this plan, freeze its record revision, then synthesize. Any subsequent content edit requires a new bound architecture; do not rebind an old draft to a new record.
+
+The CEO or engineering session uses action `synthesize_design` with the architecture input `{solutionName, problemContext, tenantName?, components}`. Each component contains `{role,title,badge,details,deliverables}`. Use `design_result` with `{jobId}` to read status and, when complete, the structured artifact. The normal architecture board remains available. Synthesis receives the full discovery snapshot and a requirement catalogue that includes every shared-record requirement, with exact source hashes. It still has no tenant/tool authority; the evidence is its grounding context. Scope/evidence changes deny late publication. Commit the returned architecture JSON and Markdown unchanged in the design documentation PR.
+
+If architecture or application task contracts are missing, assigned independent QA can record action `reject_inputs` with current `expected_revision` and payload `{reference:{id,revision,sha256},missingInputs:["architecture","task-contracts"],notes}`. Include only inputs actually missing; notes need at least 80 characters. The server checks absence and stores `inputReview` with a fixed rejected decision and session-derived reviewer. It grants no design/task approval, clears prior approvals, and cannot change an accepted slice. Existing artifacts must be reviewed by exact version instead. Unreadable artifacts are errors, not proof of absence. Later content revisions discard this negative review; a subsequent valid architecture review supersedes it. QA must never invent document IDs to record rejection.
 
 The CEO calls `review_delivery_record` with `repo_id` to dispatch the assigned independent QA agent before implementation. Review sessions cannot mutate discovery inputs. The read response includes the verified local architecture content so uncommitted drafts do not depend on GitHub file access. QA reads the exact saved architecture and evidence, challenges reuse/alternatives, feasibility, permissions, contracts, experience, failure/recovery and the first journey, then calls action `review` with:
 
@@ -365,3 +373,46 @@ For a completed independently accepted slice without a shared receipt, requestin
 The current owned-record validator accepts only validation codes explicitly pinned in the plan, from supported codes `0x80073001` and `0x80044331`; unrelated provider errors cannot pass as validation proof. Current evidence collection includes raw recovery result/journal files and deduplicates filenames before persistence. Older accepted aggregates retain their original identity and recorded exceptions; a later collection dry run does not retroactively expand QA acceptance.
 
 Preserve the original archive before investigating unreadable state or interrupted operations. The pilot's exact-duplicate evidence-list repair was archived, validated and restart-checked without changing the accepted aggregate hash. It is not permission to reset history, replay ambiguous mutations or edit signed evidence. Keep scheduled health results and production recovery requirements separate from the completed development receipt.
+
+### Scoped execution contracts
+
+Phase 3 adds opt-in `taskPlan` contracts and independent `review_task` decisions. See [task execution](TASK-EXECUTION.md) for owner/resource coordination, bounded context, merged prerequisite receipts and recovery. These are planning and code execution gates; live deployment and runtime acceptance remain independently required.
+
+### First-slice execution
+
+Application specifications now require explicit firstSlice mappings before a slice release. The runner binds actual independent observations to component/scenario coverage and revalidates evidence before the receipt can unlock expansion. See [FIRST-SLICE.md](FIRST-SLICE.md). Unsupported adapters remain named blockers.
+
+### QA and documentation evidence
+
+Application-spec releases require qualityEvidence bindings for all scoped compile, package, runtime, access, recovery and documentation checks. Handover covers user, administrator, operations and architecture content from the pinned commit. The assigned QA session supplies exact per-check evidence hashes and substantive decisions before completion; old receipts do not gain this assurance. See [QUALITY-EVIDENCE.md](QUALITY-EVIDENCE.md).
+
+### Retained delivery resumption
+
+The authenticated `POST /api/delivery/recovery/resume` endpoint requires maintenance, an unavailable delivery service, stable authentication ownership, fresh terminal cloud observations and a complete eligible Windows native epoch. It preserves uncertain checkpoints and independent approvals, reinitializes delivery in durable maintenance, and leaves unsupported histories blocked. See [native ownership and handoff evidence](NATIVE-LEASE-HANDOFF-QA.md) for the supported command scope, crash recovery and live verification limits.
+
+See [pinned preparation recovery QA](PINNED-PREPARATION-RECOVERY-QA.md) for the explicit prebuilt-artifact route, normal-service live evidence and remaining custom-script recovery limits.
+
+The [standard-M365 showcase end-to-end test](AGENT-SWARM-M365-E2E-QA.md) remains blocked before deployment: SharePoint-backed Canvas schema, inventory, governance and recovery do not yet have a complete normal-delivery adapter. Existing Dataverse pilot exclusions cannot approve that scope.
+
+
+### Guarded SharePoint schema provisioning
+
+`office.sharepoint_provisioning` provides read-only `{"action":"inspect","siteUrl":"https://tenant.sharepoint.com/sites/name"}` metadata inventory. It validates the executing delegated Graph tenant/account, canonical site URL and site collection/web IDs, then inventories paginated list/library and column metadata. It never reads business items or document content. Graph access does not prove effective permissions, licensing or DLP compliance. Text plans must declare maxLength only for single-line columns; multiline columns require plain text and cannot claim a provider-enforced schema length cap. The native serializer/readback uses only the facets applicable to that mode.
+
+Provisioning uses `{"action":"provision","planSha256":"<hash of parsed typed plan>"}`. The server reads **cubefarm.sharepoint.json at the delivery record's pinned source commit**, never caller JSON or working files. The plan has schemaVersion1, tenantId, username, siteUrl, siteCollectionId, webId, and resources with key, displayName, template (`genericList` or `documentLibrary`), columns. Supported column kinds are text (multiline,maxLength), number (decimals), currency (locale en-GB), choice (choices), and single-value lookup (`targetKey`, `columnName: "Title"`), with explicit name/required. A lookup must reference an earlier generic list in the same plan; its ID is resolved only from that operation's verified journal and read back exactly. Self/forward/external-list references are rejected. Built-in column changes, folders, seeds, updates, deletion and permission mutations are not supported.
+
+A server-owned `write-target-proposal.json` must match the entire resource set. A time-limited `write-target-approval.json` operator assertion must bind the repository, proposal hash, full plan hash and create-schema operation. It is separate from independent architecture/QA approval. The customer-app writer may use `graph-schema-writer.json` for exact-account silent Graph `Sites.Manage.All`; configured authentication failures never fall back. Missing schema scope or resource approval stops before connecting/leases/intents as applicable.
+
+An independently approved current design and authoring task are mandatory. The assigned owner's task.inputs must contain `sharepoint-plan-sha256:<exact hash>` and task.resources must contain every resource key. Existing work admission, dependency and preflight gates remain. Required governance controls `sharepoint-permissions`, `sharepoint-data-boundary` and `sharepoint-recovery` must have exact siteUrl scope and fresh independently reviewed evidence. Discovery/design workers can inspect; they cannot provision.
+
+For creation prerequisites that would otherwise circularly require new IDs before creation, the separate fixed schema bootstrap runner supports an expiring independent schema-only architecture/task risk decision. It does not admit a generic worker or set global design/task/release approval. It retains exact input, writer, operator and evidence bindings, with the same typed creation executor and unknown-outcome containment. See [schema bootstrap contracts and live evidence](SCHEMA-BOOTSTRAP-QA.md). An existing dispatched intent still requires explicit independent reconciliation; a new plan or grant never authorizes blind resumption.
+
+The executor validates all name conflicts before writing, refuses adoption by name, writes and flushes shared intent before POST, then verifies returned list ID, ownership marker, template, URL and every declared column. A global per-user site lease coordinates offices independently of SWARM_HOME. Interrupted or unverifiable writes retain both shared history and lease and never automatically retry. Explicit independently evidenced reconciliation is still required; no automatic unknown-outcome recovery is implemented. A successful schema receipt does not approve an application release.
+
+
+For application task plans, version 2 separates component-local author acceptance
+from QA-owned integration. Read TASK-EXECUTION.md before planning dependencies.
+The release must exactly implement its recorded integration QA phase, merged
+issue prerequisites, reviewer, tests/criteria, checks and budget. Existing runner
+and native evidence requirements remain mandatory; planning never executes or
+approves an integration test.

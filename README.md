@@ -1,4 +1,4 @@
-# ✻ cubefarm
+# ✻ Agent Swarm
 
 A cartoon 3D office where a team of AI coding agents works through your GitHub issues. You walk the floors, look over their shoulders and watch their pull requests get tested and merged.
 
@@ -8,7 +8,7 @@ A cartoon 3D office where a team of AI coding agents works through your GitHub i
 npx cubefarm
 ```
 
-That's it. cubefarm checks your machine, starts the office and opens it in your browser. The first time, `npx` asks whether to install cubefarm: say yes.
+That's it. Agent Swarm checks your machine, starts the office and opens it in your browser. The first time, `npx` asks whether to install Agent Swarm: say yes.
 
 ### What you need
 
@@ -75,7 +75,7 @@ Demo mode fakes GitHub and the agents. It never changes real PAC authentication 
 
 ## Updating
 
-`npx` keeps using the version it downloaded first. When a newer one is out, cubefarm tells you as it starts. To update:
+`npx` keeps using the version it downloaded first. When a newer one is out, Agent Swarm tells you as it starts. To update:
 
 ```bash
 npx cubefarm@latest
@@ -123,5 +123,7 @@ Start with the shared **Delivery plan**, evidence-backed discovery and independe
 The CEO now checks delivery status, and every engineering/QA task includes documentation, deployment and UX requirements. Browser tools use a pinned local Playwright MCP installation. See [the delivery contract](docs/DELIVERY.md) for manifests, platform-specific work, verification reports and operational limits. Missing project scripts or tenant access remain visible blockers; the runner does not replace them with simulated success.
 
 Capability checks gate new work; versioned platform starter bundles are available in Solution delivery. UI releases require measurable UX checks and independent screen review. All releases need recovery evidence appropriate to their declared scope. Registered monitoring runs while the server is available; release completion does not establish continuing health. See [reliability configuration and limits](docs/RELIABILITY.md).
+
+Real authoring and QA launches now also require an owner-reviewed `.cubefarm/worker-preflight.json` in the project worktree. Workers read pinned skills and verify read-only MCP results in their own session before supported authoring or approval tools are allowed. Local read-only discovery can proceed before a target is known and cannot grant authoring readiness. Missing authoring contracts block launch; existing projects are not automatically migrated. See [worker readiness and native-session evidence](docs/WORKER-READINESS.md) before enabling real work.
 
 The [backend pilot completed on 15 October 2026](docs/BACKEND-PILOT-COMPLETION.md) using existing licences and independently reviewed manual controls. This proves the declared reference-only development backend slice. Full-app journeys, least-privilege acceptance and production assurance remain open; see [current status](docs/PRODUCTION-GOAL-STATUS.md) and the [roadmap](docs/AGENT-SWARM-IMPLEMENTATION-PLAN.md).

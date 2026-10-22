@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+import {nativeTargetSchema} from '../shared/nativeQa.ts';
 import {parseUnambiguousJson} from './unambiguousJson.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -42,7 +44,7 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
     const names = new Set<string>(),cursors=new Set<string>(); let cursor: string | undefined;
     for (let page = 0; page < 20; page++) { const list = await client.listTools({ cursor }, { signal, timeout: 15000 });signal.throwIfAborted();cleanup.assertOpen();list.tools.forEach((tool) => names.add(tool.name));cursor = list.nextCursor;if (!cursor) break;if(cursors.has(cursor))throw new Error('FlowAgent tool discovery returned a repeated cursor');cursors.add(cursor); }
     if (cursor) throw new Error('FlowAgent tool discovery exceeded its pagination limit');
-    for (const tool of ['whoami', 'get_flow', 'get_flow_context', 'preflight_flow', 'publish_flow', 'disable_flow', 'get_run_history', 'get_run_action_content']) if (!names.has(tool)) throw new Error(`FlowAgent tool ${tool} is missing`);
+    for (const tool of ['whoami', 'get_flow', 'get_flow_context', 'preflight_flow', 'publish_flow', 'disable_flow', 'get_run_history', 'get_run_details', 'get_run_actions', 'get_run_action_content']) if (!names.has(tool)) throw new Error(`FlowAgent tool ${tool} is missing`);
     return { close, async call(tool, args) {
       signal.throwIfAborted();cleanup.assertOpen();
       const result = await client.callTool({ name: tool, arguments: args }, undefined, { signal, timeout: 30000 });
@@ -93,16 +95,43 @@ async function checkFlowBindings(adapter: FlowAdapter, environmentId: string, fl
   }
   return observations;
 }
-export const cloudFlowCheckSchema = z.object({ component: z.string().min(1), action: z.string().min(1), correlationPointer: z.array(z.string()).min(1), assertions: z.array(z.object({ pointer: z.array(z.string()).min(1), equals: z.union([z.string(), z.boolean(), z.number()]) }).strict()).min(1).max(20) }).strict();
+const flowPointer=z.array(z.string().min(1).max(200).refine(key=>!['__proto__','constructor','prototype'].includes(key))).min(1).max(20);
+const triggerEvidenceSchema=z.strictObject({name:z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/),siteUrl:nativeTargetSchema.shape.siteUrl,listId:z.uuid(),itemId:z.number().int().positive(),itemIdPointer:flowPointer,version:z.string().min(1).max(100),versionPointer:flowPointer,correlationPointer:flowPointer,assertions:z.array(z.strictObject({pointer:flowPointer,equals:z.union([z.string(),z.number(),z.boolean()])})).min(1).max(20)});
+export const cloudFlowCheckSchema = z.object({selectionAssertions:z.array(z.strictObject({pointer:flowPointer,equals:z.union([z.string(),z.number(),z.boolean()])})).min(1).max(10).optional(),sharepointTrigger:triggerEvidenceSchema.optional(), component: z.string().min(1).max(200), action: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), correlationPointer: flowPointer, assertions: z.array(z.object({ pointer: flowPointer, equals: z.union([z.string(), z.boolean(), z.number()]) }).strict()).min(1).max(20) }).strict();
 const at = (data: unknown, pointer: string[]) => pointer.reduce<unknown>((value, key) => value && typeof value === 'object' && Object.hasOwn(value, key) ? (value as Record<string, unknown>)[key] : undefined, data);
-/** Correlate recorded action output with this delivery, never just the most recent successful run. */
-export async function verifyCloudFlowRun(adapter: FlowAdapter, environmentId: string, flowId: string, releaseRunId: string, startedAt: string, check: z.infer<typeof cloudFlowCheckSchema>) {
-  const runs = z.array(z.object({ name: z.string(), startTime: z.string(), endTime: z.string().optional(), status: z.string() })).parse(await adapter.call('get_run_history', { env: environmentId, flow: flowId, top: 20 }));
-  for (const run of runs.filter((run) => run.status === 'Succeeded' && Date.parse(run.startTime) >= Date.parse(startedAt) && Date.parse(run.startTime) <= Date.now() + 60000)) {
-    const result = z.object({ content: z.unknown().optional(), skipped: z.string().optional() }).parse(await adapter.call('get_run_action_content', { env: environmentId, flow: flowId, run: run.name, action: check.action, which: 'outputs', maxBytes: 256000 }));
-    if (result.skipped || at(result.content, check.correlationPointer) !== releaseRunId) continue;
-    for (const assertion of check.assertions) if (at(result.content, assertion.pointer) !== assertion.equals) throw new Error(`Correlated cloud flow ${check.component} failed its output assertion`);
-    return { component: check.component, flowId, runId: run.name, startTime: run.startTime, status: run.status, correlationId: releaseRunId, assertions: check.assertions };
+/** Recent history locates candidates only. Exact provider reads bind positive
+ * dispatch evidence; neither an empty list nor a match proves historical absence. */
+export async function verifyCloudFlowRun(adapter: FlowAdapter, environmentId: string, flowId: string, releaseRunId: string, startedAt: string, rawCheck: z.infer<typeof cloudFlowCheckSchema>) {
+  const check=cloudFlowCheckSchema.parse(rawCheck),safeId=z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/);
+  safeId.parse(environmentId);safeId.parse(flowId);safeId.parse(releaseRunId);
+  const since=z.iso.datetime({offset:true}).parse(startedAt);if(Date.parse(since)>Date.now())throw new Error('Cloud-flow observation start is in the future');
+  const bounded=(value:unknown)=>{try{const text=JSON.stringify(value);if(!text||Buffer.byteLength(text)>256000)throw Error();return crypto.createHash('sha256').update(text).digest('hex');}catch{throw new Error('Cloud-flow provider evidence malformed or oversized; content withheld');}};
+  const runSchema=z.object({name:safeId,startTime:z.iso.datetime({offset:true}),endTime:z.iso.datetime({offset:true}).optional(),status:z.string()});
+  const history=await adapter.call('get_run_history',{env:environmentId,flow:flowId,top:20});bounded(history);const runs=z.array(runSchema).max(20).parse(history);
+  if(new Set(runs.map(run=>run.name)).size!==runs.length)throw new Error('Cloud-flow history contains duplicate run identities');
+  const details=async(name:string)=>{
+    const raw=await adapter.call('get_run_details',{env:environmentId,flow:flowId,run:name}),sha256=bounded(raw);
+    const value=z.object({name:safeId,id:z.string(),properties:z.object({startTime:z.iso.datetime({offset:true}),endTime:z.iso.datetime({offset:true}),status:z.literal('Succeeded')})}).parse(raw);
+    const expected=`/providers/Microsoft.ProcessSimple/environments/${environmentId}/flows/${flowId}/runs/${name}`;
+    if(value.name!==name||value.id.toLowerCase()!==expected.toLowerCase()||!value.id.endsWith('/runs/'+name)||Date.parse(value.properties.startTime)<Date.parse(since)||Date.parse(value.properties.endTime)<Date.parse(value.properties.startTime)||Date.parse(value.properties.endTime)>Date.now())throw new Error('Cloud-flow provider run identity or chronology differs');
+    return{value,sha256,trigger:z.object({properties:z.object({trigger:z.unknown().optional()})}).parse(raw).properties.trigger};
+  };
+  for(const candidate of runs.filter(run=>run.status==='Succeeded'&&Date.parse(run.startTime)>=Date.parse(since)&&Date.parse(run.startTime)<=Date.now())){
+    const first=await details(candidate.name);
+    const source=check.sharepointTrigger;let triggerDefinitionSha256:string|undefined,triggerOutputSha256:string|undefined,triggerStartTime:string|undefined,triggerEndTime:string|undefined;
+    const definition=async()=>{const raw=await adapter.call('get_flow',{env:environmentId,flow:flowId,path:'properties.definition'});bounded(raw);const triggers=z.object({triggers:z.record(z.string(),z.unknown())}).parse(raw).triggers;if(!source||!Object.hasOwn(triggers,source.name))throw new Error('Approved SharePoint trigger unavailable');const trigger=z.object({type:z.enum(['OpenApiConnection','OpenApiConnectionWebhook','OpenApiConnectionNotification']),inputs:z.object({host:z.object({apiId:z.literal('/providers/Microsoft.PowerApps/apis/shared_sharepointonline'),operationId:z.enum(['GetOnNewItems','GetOnUpdatedItems','GetOnNewFileItems','GetOnUpdatedFileItems'])}),parameters:z.object({dataset:z.string(),table:z.string()})})}).parse(triggers[source.name]);if(trigger.inputs.parameters.dataset!==source.siteUrl||trigger.inputs.parameters.table.toLowerCase()!==source.listId.toLowerCase())throw new Error('SharePoint trigger target differs');return bounded(trigger);};
+    if(first.value.properties.startTime!==candidate.startTime||candidate.endTime&&candidate.endTime!==first.value.properties.endTime)throw new Error('Cloud-flow history and exact run differ');
+    const raw=await adapter.call('get_run_action_content',{env:environmentId,flow:flowId,run:candidate.name,action:check.action,which:'outputs',maxBytes:256000}),actionOutputSha256=bounded(raw);
+    const result=z.object({action:z.literal(check.action),which:z.literal('outputs'),content:z.unknown().optional(),skipped:z.string().optional()}).parse(raw);
+    if(result.skipped!==undefined||!Object.hasOwn(result,'content'))continue;
+    if(at(result.content,check.correlationPointer)!==releaseRunId)continue;
+    if(check.selectionAssertions?.some(a=>at(result.content,a.pointer)!==a.equals))continue;
+    for(const assertion of check.assertions)if(at(result.content,assertion.pointer)!==assertion.equals)throw new Error(`Correlated cloud flow ${check.component} failed its output assertion`);
+    if(source){triggerDefinitionSha256=await definition();const trigger=z.object({name:z.literal(source.name),status:z.literal('Succeeded'),startTime:z.iso.datetime({offset:true}),endTime:z.iso.datetime({offset:true}),outputs:z.unknown()}).parse(first.trigger);if(!Object.hasOwn(trigger,'outputs')||trigger.outputs===undefined||Date.parse(trigger.startTime)<Date.parse(since)||Date.parse(trigger.endTime)<Date.parse(trigger.startTime)||Date.parse(trigger.endTime)>Date.parse(first.value.properties.startTime))throw new Error('SharePoint trigger chronology or recorded outputs unavailable');if(at(trigger.outputs,source.correlationPointer)!==releaseRunId||at(trigger.outputs,source.itemIdPointer)!==source.itemId||at(trigger.outputs,source.versionPointer)!==source.version||source.assertions.some(assertion=>at(trigger.outputs,assertion.pointer)!==assertion.equals))throw new Error('SharePoint trigger output correlation differs');triggerOutputSha256=bounded(trigger.outputs);triggerStartTime=trigger.startTime;triggerEndTime=trigger.endTime;}
+    const last=await details(candidate.name);
+    if(source&&(JSON.stringify(last.trigger)!==JSON.stringify(first.trigger)||await definition()!==triggerDefinitionSha256))throw new Error('SharePoint trigger evidence changed during observation');
+    if(JSON.stringify(last.value)!==JSON.stringify(first.value))throw new Error('Cloud-flow provider run changed during observation');
+    return{component:check.component,flowId,runId:candidate.name,startTime:first.value.properties.startTime,endTime:first.value.properties.endTime,status:'Succeeded',correlationId:releaseRunId,assertions:check.assertions,providerRunSha256:last.sha256,actionOutputSha256,positiveDispatchObserved:true,sharepointTriggerCorrelationObserved:Boolean(source),...(source?{triggerDefinitionSha256,triggerOutputSha256,sharepointTriggerEvidence:{binding:source,startTime:triggerStartTime,endTime:triggerEndTime},historicalTriggerDefinitionVerified:false}:{}),sharepointCausalityVerified:false,completeDispatches:false,replayAuthorized:false};
   }
   throw new Error(`No fresh successful cloud-flow run correlates with delivery ${releaseRunId}; exercise the flow with SWARM_DELIVERY_RUN_ID and record the correlation in ${check.action} outputs`);
 }

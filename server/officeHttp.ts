@@ -1,3 +1,9 @@
+import {taskReconciliationReviewRequest,type TaskReconciliationReviewRequest} from './taskReconciliationReview.ts';
+import {planningReadiness} from './planningReadiness.ts';
+import {coordinatorVerification} from './coordinatorBrowserVerification.ts';
+import type {ExecutionLedger} from './executionLedger.ts';
+import {retainedRecoverySchema} from './retainedCloudRecovery.ts';
+import type {EfficiencyReport} from '../shared/efficiency.ts';
 import {verifyJsonStructure} from './unambiguousJson.ts';
 import path from 'node:path';
 import {currentEnvironment} from '../shared/tenancy.ts';
@@ -31,9 +37,18 @@ import {governanceEvidenceView} from './governanceEvidence.ts';
 import type {DeliveryRecords} from './deliveryRecords.ts';
 import type {RecordToolHandler} from './ceo.ts';
 import {recordPhase,discoveryBlockers} from '../shared/deliveryRecord.ts';
+import {taskPlanningBlockers} from './taskInputs.ts';
 import type {ManualGovernance} from './manualGovernance.ts';
 
 export interface OfficeHttpServices {
+  requestTaskReconciliationReview?:(repoId:string,input:TaskReconciliationReviewRequest)=>Promise<string>;
+  canvasPackaging?:(repoId:string,action:'inspect'|'execute'|'reconcile'|'recover',body:unknown)=>Promise<unknown>;
+  requestCanvasPackagingReview?:(repoId:string)=>Promise<string>;
+  schemaBootstrap?:(repoId:string,action:'inspect'|'execute',body:unknown)=>Promise<unknown>;
+  requestSchemaBootstrapReview?:(repoId:string)=>Promise<string>;
+  nativeRuntime?:()=>{keeperPid:number;keeperInstance:string|null;nativePids:number[]};
+  executionLedger?:ExecutionLedger;
+  executionReport?:(repoId:string)=>EfficiencyReport;
   manualGovernance?:Pick<ManualGovernance,'view'>;
   deliveryRecords?:DeliveryRecords;
   managerRecordTool?:RecordToolHandler;
@@ -111,7 +126,11 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     return workflowReliability.observe(repo.fullName);
   }));
 
+  app.get('/api/repos/:repo/efficiency',route((req,res)=>{res.set('Cache-Control','no-store');const repo=connectedRepo(repoId(req));if(!services.executionReport)throw new HttpError(503,'Execution telemetry unavailable');return services.executionReport(repo.id);}));
+  app.get('/api/repos/:repo/efficiency/export',route((req,res)=>{res.set('Cache-Control','no-store');const repo=connectedRepo(repoId(req));if(!services.executionLedger)throw new HttpError(503,'Execution telemetry unavailable');return {scope:'retained-coordinator-attempts',events:services.executionLedger.exportFor(repo.id)};}));
   app.get('/api/state', route(() => swarm.snapshot()));
+  app.get('/api/repos/:repo/browser-handoffs',route(async req=>{connectedRepo(repoId(req));if(!services.managerRecordTool)throw new HttpError(503,'Browser handoff unavailable');return JSON.parse(await services.managerRecordTool({repo_id:repoId(req),action:'browser_handoff',payload_json:JSON.stringify({action:'inspect'})}));}));
+  app.post('/api/repos/:repo/browser-handoffs',route(async req=>{connectedRepo(repoId(req));if(!services.managerRecordTool)throw new HttpError(503,'Browser handoff unavailable');return JSON.parse(await services.managerRecordTool({repo_id:repoId(req),action:'browser_handoff',payload_json:JSON.stringify(req.body)}));}));
   app.get('/api/repos/:repo/manual-governance',route(req=>{const repo=connectedRepo(repoId(req));if(!services.manualGovernance)throw new HttpError(503,'Manual governance unavailable');return {assessments:services.manualGovernance.view(repo.id)};}));
   app.get('/api/repos/:repo/delivery-record',route(req=>{
     const repo=connectedRepo(repoId(req));
@@ -119,7 +138,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     const record=services.deliveryRecords.current(repo.id);
     let scopeError:string|undefined;
     if(record)try{services.deliveryRecords.assertContext(record,{brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId});}catch{scopeError='Brief or deployment target changed. Refresh discovery and design review.';}
-    return {record,phase:scopeError?'discovery':record?recordPhase(record):'not-started',blockers:[...(scopeError?[scopeError]:[]),...(record?discoveryBlockers(record):['Ask the CEO to create the delivery record and discovery tasks'])],demo:backend.demo};
+    return {record,readiness:planningReadiness(record,delivery.view().policy,scopeError),phase:scopeError?'discovery':record?recordPhase(record):'not-started',blockers:[...(scopeError?[scopeError]:[]),...(record?[...discoveryBlockers(record),...taskPlanningBlockers(record)]:['Ask the CEO to create the delivery record and discovery tasks'])],demo:backend.demo};
   }));
   app.post('/api/repos/:repo/delivery-record',route(async req=>{
     connectedRepo(repoId(req));if(backend.demo||!services.managerRecordTool)throw new HttpError(409,'Record editing is unavailable in demo mode');
@@ -127,9 +146,18 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     return JSON.parse(await services.managerRecordTool({repo_id:repoId(req),action:'save',expected_revision:input.expectedRevision,payload_json:JSON.stringify(input.content)}));
   }));
   app.post('/api/repos/:repo/delivery-record/review',route(req=>{connectedRepo(repoId(req));return swarm.requestRecordReview(repoId(req));}));
+  app.post('/api/repos/:repo/delivery-record/reconcile-review',route(req=>{connectedRepo(repoId(req));const input=parseBody(taskReconciliationReviewRequest,req.body);if(!services.requestTaskReconciliationReview)throw new HttpError(503,'Task reconciliation review unavailable');return services.requestTaskReconciliationReview(repoId(req),input);}));
+  app.get('/api/repos/:repo/schema-bootstrap',route(req=>{connectedRepo(repoId(req));if(!services.schemaBootstrap)throw new HttpError(503,'Schema bootstrap unavailable');return services.schemaBootstrap(repoId(req),'inspect',{});}));
+  app.get('/api/repos/:repo/canvas-packaging',route(req=>{connectedRepo(repoId(req));if(!services.canvasPackaging)throw new HttpError(503,'Canvas packaging unavailable');return services.canvasPackaging(repoId(req),'inspect',{});}));
+  app.post('/api/repos/:repo/canvas-packaging/reconcile',route(req=>{connectedRepo(repoId(req));parseBody(z.strictObject({}),req.body);if(!services.canvasPackaging)throw new HttpError(503,'Canvas packaging unavailable');return services.canvasPackaging(repoId(req),'reconcile',{});}));
+  app.post('/api/repos/:repo/canvas-packaging/recover',route(req=>{connectedRepo(repoId(req));const body=parseBody(z.strictObject({proposalSha256:z.string().regex(/^[a-f0-9]{64}$/)}),req.body);if(!services.canvasPackaging)throw new HttpError(503,'Canvas packaging unavailable');return services.canvasPackaging(repoId(req),'recover',body);}));
+  app.post('/api/repos/:repo/canvas-packaging/review',route(req=>{connectedRepo(repoId(req));parseBody(z.strictObject({}),req.body);if(!services.requestCanvasPackagingReview)throw new HttpError(503,'Canvas packaging review unavailable');return services.requestCanvasPackagingReview(repoId(req));}));
+  app.post('/api/repos/:repo/canvas-packaging/execute',route(req=>{connectedRepo(repoId(req));const body=parseBody(z.strictObject({proposalSha256:z.string().regex(/^[a-f0-9]{64}$/)}),req.body);if(!services.canvasPackaging)throw new HttpError(503,'Canvas packaging unavailable');return services.canvasPackaging(repoId(req),'execute',body);}));
+  app.post('/api/repos/:repo/schema-bootstrap/review',route(req=>{connectedRepo(repoId(req));parseBody(z.strictObject({}),req.body);if(!services.requestSchemaBootstrapReview)throw new HttpError(503,'Schema review unavailable');return services.requestSchemaBootstrapReview(repoId(req));}));
+  app.post('/api/repos/:repo/schema-bootstrap/execute',route(req=>{connectedRepo(repoId(req));const body=parseBody(z.strictObject({planSha256:z.string().regex(/^[a-f0-9]{64}$/)}),req.body);if(!services.schemaBootstrap)throw new HttpError(503,'Schema bootstrap unavailable');return services.schemaBootstrap(repoId(req),'execute',body);}));
   app.get('/api/capabilities', route(() => capabilities.view()));
   app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
-  app.get('/api/runtime', route(() => ({ pid: process.pid, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, authenticationWork:backend.tenancy.activity(), deliveryAvailability:delivery.available?'ready':'unavailable', draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+  app.get('/api/runtime', route(() => ({ pid: process.pid, parentPid:process.ppid, nativeRuntime:services.nativeRuntime?.()??{keeperPid:0,keeperInstance:null,nativePids:[]}, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, authenticationWork:backend.tenancy.activity(), deliveryAvailability:delivery.available?'ready':'unavailable', draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
   app.post('/api/office/reload',route(async(req,res)=>{
     const {expectedPid}=parseBody(z.object({expectedPid:z.number().int().positive()}).strict(),req.body);
     const ready=()=>{
@@ -193,11 +221,24 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.post('/api/repos/:repo/implementation-templates/:template', route((req) => { if (backend.demo) throw new HttpError(409, 'Demo cannot install into a real project'); return installTemplate(connectedRepo(repoId(req)).checkoutPath, String(req.params.template) as TemplateId); }));
   app.post('/api/repos/:repo/delivery/monitor/:run', route(async (req) => { await delivery.monitor(connectedRepo(repoId(req)), String(req.params.run)); return delivery.view(repoId(req)); }));
   app.get('/api/delivery', route((req) => delivery.view(typeof req.query.repo === 'string' ? req.query.repo : undefined)));
+  app.get('/api/delivery/browser-handoffs',route(()=>coordinatorVerification(homeDir).list()));
+  app.get('/api/delivery/browser-handoffs/:id',route(req=>coordinatorVerification(homeDir).status(String(req.params.id))));
+  app.post('/api/delivery/browser-handoffs',route(req=>{const input=parseBody(z.discriminatedUnion('action',[z.strictObject({action:z.literal('claim'),id:z.uuid()}),z.strictObject({action:z.literal('complete'),id:z.uuid(),claim:z.uuid(),result:z.unknown()})]),req.body);const broker=coordinatorVerification(homeDir);return input.action==='claim'?broker.claim(input.id):broker.complete(input.id,input.claim,input.result);}));
   app.get('/api/delivery/recovery',route(async(_req,res)=>{res.set('Cache-Control','no-store');return delivery.recoveryInspection();}));
   app.post('/api/delivery/recovery',route(async(req)=>{
     const {snapshotSha256}=parseBody(z.strictObject({snapshotSha256:z.string().regex(/^[a-f0-9]{64}$/)}),req.body);
     if(!swarm.isDraining||!delivery.isDraining)throw new HttpError(409,'Office maintenance is required for delivery recovery');
     return delivery.recoverStartup(snapshotSha256);
+  }));
+  app.post('/api/delivery/recovery/retained',route(async(req)=>{
+    const input=parseBody(retainedRecoverySchema,req.body);
+    const guard=()=>{requireOpen();if(!swarm.isDraining||!delivery.isDraining||backend.tenancy.activity().profileMutation?.status!=='clear')throw new HttpError(409,'Maintenance and clear authentication ownership are required for retained reconciliation');};
+    guard();return delivery.reconcileRetainedStartup(input,guard);
+  }));
+  app.post('/api/delivery/recovery/resume',route(async(req)=>{
+    const input=parseBody(retainedRecoverySchema,req.body);
+    const guard=()=>{requireOpen();if(!swarm.isDraining||!delivery.isDraining||backend.tenancy.activity().profileMutation?.status!=='clear')throw new HttpError(409,'Maintenance and clear authentication ownership are required for retained reconciliation');};
+    guard();return delivery.reconcileRetainedStartup(input,guard,true);
   }));
   app.post('/api/delivery/platforms', route((req) => {
     const { copilotPaused } = parseBody(z.object({ copilotPaused: z.boolean() }).strict(), req.body);
@@ -358,6 +399,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.post('/api/repos/:repo/pulls/:n/merge', route((req) => swarm.mergePull(repoId(req), num(req.params.n), req.body?.method ?? 'squash')));
   app.post('/api/repos/:repo/pulls/:n/close', route((req) => swarm.closePull(repoId(req), num(req.params.n))));
   app.post('/api/repos/:repo/pulls/:n/qa', route((req) => swarm.sendToQa(repoId(req), num(req.params.n))));
+  app.post('/api/repos/:repo/pulls/:n/retry-fix', route((req) => swarm.retryPrFix(repoId(req), num(req.params.n))));
   app.post(
     '/api/repos/:repo/agents',
     route((req) =>

@@ -11,7 +11,13 @@ const reportShape = z.object({
   fixInstructions: text.optional(),
 }).strict();
 export type QaReport = z.infer<typeof reportShape>;
-export const QA_SCHEMA = z.toJSONSchema(reportShape) as Record<string, unknown>;
+export const QA_SCHEMA = {
+  ...z.toJSONSchema(reportShape),
+  allOf: [{
+    if: {properties: {verdict: {const: 'pass'}},required:['verdict']},
+    then: {properties: {checks: {items: {properties: {result: {const: 'pass'}}}}}},
+  }],
+} as Record<string, unknown>;
 const schema = reportShape.superRefine((report, context) => {
   if (report.verdict === 'pass' && report.checks.some(check => check.result !== 'pass')) {
     context.addIssue({code: 'custom', message: 'A pass requires every reported check to pass'});
