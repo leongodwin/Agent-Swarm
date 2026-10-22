@@ -1,4 +1,5 @@
 import {rehearseHeadlessLifecycle} from './headlessFlowVerification.ts';
+import {loadAcceptedHeadlessReport} from './headlessAcceptedReport.ts';
 import {functionalTransportCheck} from '../shared/functionalShowcase.ts';
 import {verifyFunctionalRejection} from './functionalRejection.ts';
 import {createFunctionalRecovery} from './functionalRecovery.ts';
@@ -215,6 +216,7 @@ export class DeliveryService {
   checkCapabilities: (repoId: string, cwd: string, environment: string, force: boolean) => Promise<{ status: string; configHash?: string; checks: { id: string; category: string; passed: boolean; remedy: string }[] }> = async () => { throw new Error('Configure capability checks before delivery'); };
   validateMonitoring?: (repoId:string,plan:ReleasePlan,manifest:MonitoringManifest,environmentUrl:string)=>void;
   checkDeliveryRecord?: (repo:Pick<RepoView,'id'>,plan:ReleasePlan) => void;
+  acceptedHeadlessSlice?:(repoId:string,plan:ReleasePlan)=>{runId:string;evidenceHash:string};
   checkGovernance?: LifecycleCheck;
   private lease: DeliveryLease | null = null;
   private writer = new SerialWriter();
@@ -565,6 +567,29 @@ export class DeliveryService {
     const hash = crypto.createHash('sha256');
     for (const name of [...new Set(run.evidence)].sort()) { hash.update(name); hash.update(await fs.readFile(await containedFile(path.join(this.root, 'delivery-runs', run.id, 'evidence'), name))); }
     return hash.digest('hex');
+  }
+  private async acceptedReportFor(plan:ReleasePlan,run:DeliveryRun,signal:AbortSignal,guard:()=>Promise<void>){
+    await guard();signal.throwIfAborted();const headless=plan.verification.headlessFlow,accepted=this.acceptedHeadlessSlice?.(run.repoId,plan);
+    const prior=this.state.runs.find(item=>item.id===accepted?.runId),priorRelease=this.state.releases.find(item=>item.id===prior?.releaseId);
+    if(!headless?.dispatchReport||!accepted||!prior||!priorRelease||await this.evidenceHash(prior)!==accepted.evidenceHash)throw Error('Independently accepted slice report evidence is unavailable');
+    const snapshot=JSON.stringify(accepted);
+    const value=await loadAcceptedHeadlessReport(headless,{repoId:run.repoId,environmentUrl:run.environmentUrl,qaOwner:plan.qaOwner},accepted,prior,priorRelease,this.root,signal,guard);
+    await guard();signal.throwIfAborted();if(JSON.stringify(this.acceptedHeadlessSlice?.(run.repoId,plan))!==snapshot||!this.state.runs.includes(prior)||!this.state.releases.includes(priorRelease)||await this.evidenceHash(prior)!==accepted.evidenceHash)throw Error('Accepted slice report authority changed');
+    return value;
+  }
+  async acceptedHeadlessReports(repoId:string,recordId:string,qaOwner:string,environmentUrl:string,accepted:{runId:string;evidenceHash:string},sessionGuard:()=>void){
+    const guard=async()=>{this.requireReady();sessionGuard();};await guard();
+    const source=this.state.runs.find(run=>run.id===accepted.runId),release=this.state.releases.find(item=>item.id===source?.releaseId),plan=release?.plan.verification.headlessFlow;
+    if(!source||!release||!plan?.privateReport||plan.privateReport.recordId!==recordId||source.repoId!==repoId||await this.evidenceHash(source)!==accepted.evidenceHash)throw Error('Accepted slice report metadata unavailable');
+    const evidence=path.join(this.root,'delivery-runs',source.id,'evidence'),reports=[];
+    for(const [index,check] of plan.checks.entries())if(check.mode==='dry-run'&&check.expectedStatus==='Succeeded'){
+      await guard();const file='headless-'+index+'-receipt.json';if(!source.evidence.includes(file))throw Error('Accepted report receipt unavailable');
+      const receipt=z.object({privateReportSha256:z.string().regex(/^[a-f0-9]{64}$/)}).parse(await readBoundedJson(await containedFile(evidence,file),65536));
+      const verified=await loadAcceptedHeadlessReport({...plan,dispatchReport:{sliceRunId:source.id,checkName:check.name,reportSha256:receipt.privateReportSha256}},{repoId,environmentUrl,qaOwner},accepted,source,release,this.root,AbortSignal.timeout(45000),guard);
+      reports.push({sliceRunId:source.id,checkName:check.name,reportSha256:verified.reportSha256,providerRunId:verified.providerRunId,flowId:plan.flowId,definitionSha256:plan.definitionSha256});
+    }
+    await guard();if(!reports.length||!this.state.runs.includes(source)||!this.state.releases.includes(release)||await this.evidenceHash(source)!==accepted.evidenceHash)throw Error('Accepted report metadata changed');
+    return{scope:'accepted-headless-report-metadata',reports,privateContentReturned:false,dispatchAuthorized:false};
   }
   private async assertFirstSliceEvidence(run:DeliveryRun,release:DeliveryRelease){
     if(!release.plan.firstSlice)return;
@@ -998,11 +1023,13 @@ export class DeliveryService {
         await this.assertLeaseOwned();await targetLease!.assertOwned();
         const qaContext={runId:run.id,releaseId:release.id,planHash:release.planHash,recordSha256:release.plan.deliveryRecord?.sha256??'',sourceCommit:run.head,environmentUrl:run.environmentUrl,startedAt:run.startedAt};
         const qaOwned=async()=>{controller.signal.throwIfAborted();await this.assertLeaseOwned();await targetLease!.assertOwned();recordGate();};
+        const headless=release.plan.verification.headlessFlow;
+        const acceptedReport=headless?.dispatchReport?()=>this.acceptedReportFor(release.plan,run,controller.signal,qaOwned):undefined;
         let functionalObserver:Awaited<ReturnType<typeof createFunctionalRecovery>>|undefined;
         if(functional){if(!flow||!manifest.platformIdentity||!manifest.sharepoint)throw Error('Functional recovery native adapters unavailable');const component=verifiedMapping.find(c=>c.key===functional.recovery.flowComponent)!;await verifyCloudFlowContext(flow,manifest.platformIdentity,component.id,component.id,manifest.solutionUniqueName);const sp=manifest.sharepoint.plan;const graph=await (this.deps.sharepoint??connectSharepointGraph)(sp.tenantId,sp.username,checkout,controller.signal,()=>{controller.signal.throwIfAborted();recordGate();},{run:async(item,cwd)=>command(item.executable,item.args,cwd,qaOwned),fetch:globalThis.fetch});functionalObserver=await createFunctionalRecovery({config:functional,context:qaContext,evidence,captureRoot:path.join(this.resourceLeaseRoot,'functional-recovery-captures'),leaseSha256:this.lease!.identitySha256,procedureSha256:qualityBytesHash(await fs.readFile(path.join(evidence,'recovery-runbook.md'))),flow,flowId:component.id,environmentId:manifest.platformIdentity.environmentId,graph,guard:qaOwned});}
         independent ??= release.plan.verification.api
           ? await verifyApiIndependently(release.plan.verification.api, request, evidence, controller.signal,{runId:run.id,sourceCommit:run.head})
-          : await journalNativeCommand(this.root,this.lease!.identitySha256,{executable:release.plan.verification.headlessFlow?'external-headless-flow-verification':'external-browser-verification',args:[]},checkout,run.id,()=>this.assertLeaseOwned(),()=>(this.deps.verify ?? verifyIndependently)(release.plan, this.root, evidence, controller.signal,undefined,release.plan.verification.headlessFlow?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl,assertOwned:qaOwned}:functionalObserver?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl,scenarioStarted:functionalObserver.scenarioStarted,scenarioCompleted:functionalObserver.scenarioCompleted}:coordinatorBrowserEnabled()?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl}:undefined));
+          : await journalNativeCommand(this.root,this.lease!.identitySha256,{executable:release.plan.verification.headlessFlow?'external-headless-flow-verification':'external-browser-verification',args:[]},checkout,run.id,()=>this.assertLeaseOwned(),()=>(this.deps.verify ?? verifyIndependently)(release.plan, this.root, evidence, controller.signal,undefined,release.plan.verification.headlessFlow?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl,assertOwned:qaOwned,...(acceptedReport?{acceptedHeadlessReport:acceptedReport}:{})}:functionalObserver?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl,scenarioStarted:functionalObserver.scenarioStarted,scenarioCompleted:functionalObserver.scenarioCompleted}:coordinatorBrowserEnabled()?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl}:undefined));
         await this.assertLeaseOwned();await targetLease!.assertOwned();
         if (copilotComponents.length) {
           await atomicWrite(path.join(evidence, 'copilot-verification.json'), JSON.stringify({ environmentUrl: run.environmentUrl, sourceCommit: run.head, mapping: verifiedMapping.filter((c) => c.kind === 'copilot'),

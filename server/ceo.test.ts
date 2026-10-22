@@ -3,6 +3,13 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createOfficeTools, createDeliveryQaTools, createEngineeringTools, IssueCap, jobLabel, planRoute, specialtyLabel, specialtySlug, type CeoJob, type RouteRequest } from './ceo.ts';
 
+it.each(['coordinator-save','coordinator-read','coordinator-byte-limit','developer','qa'])('keeps the retained-record save ceiling scoped to the coordinator: %s',async mode=>{
+ const handler=vi.fn(async()=>'retained record saved'),office=mode.startsWith('coordinator')?createOfficeTools({deliveryRecord:handler,companyStatus:()=> '{}',agentDetail:()=> '{}',setFloorProfile:()=> '',updateJob:()=> '',proposeHire:()=> '',proposeLetGo:()=> '',fileIssue:async()=> '',routeIssue:async()=> ''}):mode==='developer'?createEngineeringTools(()=>'',undefined,undefined,handler):createDeliveryQaTools(()=>'',async()=>'',undefined,undefined,undefined,handler);
+ const client=new Client({name:'bounded-record-test',version:'1'}),[a,b]=InMemoryTransport.createLinkedPair();await office.server.instance.connect(a);await client.connect(b);
+ try{const result=await client.callTool({name:'delivery_record',arguments:{repo_id:'synthetic/project',action:mode==='coordinator-read'?'read':'save',expected_revision:1,payload_json:JSON.stringify({retained:(mode==='coordinator-byte-limit'?'漢':'x').repeat(mode==='coordinator-byte-limit'?400000:270000)})}});expect(result.isError===true).toBe(mode!=='coordinator-save');expect(handler).toHaveBeenCalledTimes(mode==='coordinator-save'?1:0);}
+ finally{await client.close();await office.server.instance.close();}
+});
+
 it('gives developers readiness and templates without QA approval authority', async () => {
   const tools = createEngineeringTools(() => 'Tenant access blocked');
   const client = new Client({ name: 'developer-test', version: '1' });

@@ -61,11 +61,11 @@ export interface OfficeTools {
 
 const EFFORT = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 
-export type RecordToolHandler = (input: {repo_id:string; action:'browser_handoff'|'read'|'evidence_index'|'task_input'|'save'|'inspect_repository'|'finding'|'synthesize_design'|'design_result'|'review'|'reject_inputs'|'review_task'|'reconcile_task'|'accept_slice'|'schema_bootstrap'|'canvas_packaging'; expected_revision?:number; payload_json?:string}) => Promise<string>;
-function recordTools(handler?:RecordToolHandler) {
-  return [tool('delivery_record', 'Read the shared delivery record and gates. For bounded receipt metadata use evidence_index with payload_json {findingId?,reference?,startIndex:0,maxEntries:20}; it returns the exact current reference and hashes without the full design. Later pages require that reference. CEO saves the scoped record; workers add discovery findings; assigned QA reviews an exact design. Payload contracts are in docs/DELIVERY.md. Evidence is reported observation, not automatic tenant certification.', {
-    repo_id:z.string(), action:z.enum(['browser_handoff','read','evidence_index','task_input','save','inspect_repository','finding','synthesize_design','design_result','review','reject_inputs','review_task','reconcile_task','accept_slice','schema_bootstrap','canvas_packaging']), expected_revision:z.number().int().nonnegative().optional(), payload_json:z.string().max(256*1024).optional(),
-  }, async input => {try{return {content:[{type:'text' as const,text:handler?await handler(input):'Delivery records unavailable'}]};}catch(error){return {isError:true,content:[{type:'text' as const,text:`Refused: ${(error as Error).message}`}]};}})];
+export type RecordToolHandler = (input: {repo_id:string; action:'browser_handoff'|'read'|'evidence_index'|'accepted_reports'|'task_input'|'save'|'amend_plan'|'inspect_repository'|'finding'|'synthesize_design'|'design_result'|'review'|'reject_inputs'|'review_task'|'reconcile_task'|'accept_slice'|'schema_bootstrap'|'canvas_packaging'; expected_revision?:number; payload_json?:string}) => Promise<string>;
+function recordTools(handler?:RecordToolHandler,coordinator=false) {
+  return [tool('delivery_record', 'Read the shared delivery record and gates. For bounded receipt metadata use evidence_index with payload_json {findingId?,reference?,startIndex:0,maxEntries:20}; later pages require that exact reference. CEO/manager may amend_plan with only changed planning sections, retaining server-owned findings, source, target and owners; complete validation and fresh review still apply. Workers add discovery findings; assigned QA reviews an exact design. Payload contracts are in docs/DELIVERY.md. Evidence is observation, not automatic tenant certification.', {
+    repo_id:z.string(), action:z.enum(['browser_handoff','read','evidence_index','accepted_reports','task_input','save','amend_plan','inspect_repository','finding','synthesize_design','design_result','review','reject_inputs','review_task','reconcile_task','accept_slice','schema_bootstrap','canvas_packaging']), expected_revision:z.number().int().nonnegative().optional(), payload_json:z.string().max((coordinator?1024:256)*1024).optional(),
+  }, async input => {try{if(Buffer.byteLength(input.payload_json??'{}','utf8')>(coordinator&&input.action==='save'?1024*1024:256*1024))throw Error('Delivery record payload exceeds the bounded action limit');return {content:[{type:'text' as const,text:handler?await handler(input):'Delivery records unavailable'}]};}catch(error){return {isError:true,content:[{type:'text' as const,text:`Refused: ${(error as Error).message}`}]};}})];
 }
 
 function authorizeDefinitions<T extends OfficeToolDefinition>(defs: T[], authorize?: SessionAuthorization): T[] {
@@ -104,7 +104,7 @@ export function createOfficeTools(h: OfficeHandlers, authorize?: SessionAuthoriz
       if(denied)throw new Error(denied.reason);
       return result;
     }),
-    ...recordTools(h.deliveryRecord),
+    ...recordTools(h.deliveryRecord,true),
     tool('review_delivery_record','Start the assigned independent QA agent on discovery and design before implementation.',{repo_id:z.string()},a=>run(()=>h.reviewDeliveryRecord?h.reviewDeliveryRecord(a.repo_id):'Delivery record review unavailable')),
     ...skillTools(),
     tool('capability_status', 'Pre-assignment authentication, environment, licence, MCP, CLI and connector readiness; failed/unknown checks block new work.', {}, () => run(() => h.capabilityStatus?.() ?? 'Capability service unavailable')),

@@ -1,6 +1,7 @@
 import type {ReleasePlan} from './releasePlan.ts';
 import {z} from 'zod';
-export interface BrowserVerificationContext {runId:string;repoId?:string;environmentUrl?:string;assertOwned?:()=>Promise<void>;scenarioStarted?:(name:string,viewportWidth:number)=>Promise<void>;scenarioCompleted?:(name:string,viewportWidth:number)=>Promise<void>}
+import type {AcceptedHeadlessReport} from './headlessAcceptedReport.ts';
+export interface BrowserVerificationContext {runId:string;repoId?:string;environmentUrl?:string;acceptedHeadlessReport?:()=>Promise<AcceptedHeadlessReport>;assertOwned?:()=>Promise<void>;scenarioStarted?:(name:string,viewportWidth:number)=>Promise<void>;scenarioCompleted?:(name:string,viewportWidth:number)=>Promise<void>}
 export function verificationNavigationUrl(plan:ReleasePlan,context?:BrowserVerificationContext){
  if(!plan.verification.functionalShowcase)return plan.verification.baseUrl;
  if(!context)throw Error('Functional showcase requires runner-owned execution correlation');

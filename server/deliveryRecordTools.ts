@@ -12,7 +12,16 @@ import type {DeliveryView} from '../shared/delivery.ts';
 import {taskScopeHash} from './taskScope.ts';
 import {readTaskInput,taskPlanningBlockers} from './taskInputs.ts';
 
+const planning=deliveryRecordContentSchema.shape;
+const planningAmendment=z.strictObject({
+ outcome:planning.outcome.optional(),successMeasure:planning.successMeasure.optional(),users:planning.users.optional(),
+ scope:planning.scope.optional(),exclusions:planning.exclusions.optional(),requirements:planning.requirements.optional(),
+ contracts:planning.contracts.optional(),tasks:planning.tasks.optional(),slice:planning.slice.optional(),
+ applicationSpec:planning.applicationSpec.optional(),taskPlan:planning.taskPlan.optional(),
+}).refine(value=>Object.keys(value).length>0,'Supply at least one changed planning section');
+
 export interface RecordToolContext {
+  acceptedReports?:(repoId:string,record:import('../shared/deliveryRecord.ts').DeliveryRecord,guard:()=>void)=>Promise<unknown>;
   browserHandoff?:(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void)=>Promise<unknown>;
   repo(repoId:string):RecordContext & {checkoutPath:string};
   agents():{id:string;repoId:string;role:string}[];
@@ -28,7 +37,7 @@ export interface RecordToolContext {
 export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolContext,actor:{id:string;role:'ceo'|'dev'|'qa'|'manager';repoId?:string;reviewOnly?:boolean}):RecordToolHandler {
   return async input => {
     deps.assertOpen();
-    if(actor.reviewOnly&&!['browser_handoff','read','evidence_index','task_input','review','reject_inputs','review_task','reconcile_task','accept_slice','schema_bootstrap','canvas_packaging'].includes(input.action))throw new HttpError(403,'Independent review cannot change its discovery inputs; report findings in the review notes');
+    if(actor.reviewOnly&&!['browser_handoff','read','evidence_index','accepted_reports','task_input','review','reject_inputs','review_task','reconcile_task','accept_slice','schema_bootstrap','canvas_packaging'].includes(input.action))throw new HttpError(403,'Independent review cannot change its discovery inputs; report findings in the review notes');
     if(actor.repoId&&actor.repoId!==input.repo_id)throw new HttpError(403,'Delivery record belongs to another project');
     const context=deps.repo(input.repo_id);
     const guard=()=>{deps.assertOpen();const current=deps.repo(input.repo_id);if(current.brief!==context.brief||current.environmentUrl!==context.environmentUrl||current.tenantId!==context.tenantId||current.checkoutPath!==context.checkoutPath)throw new HttpError(409,'Project scope changed during record update');};
@@ -67,6 +76,12 @@ export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolCon
       const endIndex=Math.min(entries.length,data.startIndex+data.maxEntries);guard();
       return JSON.stringify({scope:'discovery-evidence-index',repoId:input.repo_id,reference:recordReference(current),entries:entries.slice(data.startIndex,endIndex),totalEntries:entries.length,nextIndex:endIndex<entries.length?endIndex:null,limits:['Metadata only; retrieve exact receipt bytes with read_delivery_source kind discovery-evidence','Expired evidence is historical; no inspection or approval is implied']});
     }
+    if(input.action==='accepted_reports'){
+      if(!current?.sliceReceipt||!deps.acceptedReports)throw new HttpError(409,'An independently accepted slice and report metadata reader are required');
+      const data=z.strictObject({reference:recordReferenceSchema}).parse(payload),before=JSON.stringify(current.sliceReceipt);
+      const owned=()=>{guard();const latest=records.current(input.repo_id);if(!latest||JSON.stringify(recordReference(latest))!==JSON.stringify(data.reference)||JSON.stringify(latest.sliceReceipt)!==before)throw new HttpError(409,'Accepted slice reference changed');};
+      records.assertContext(current,context);owned();const result=await deps.acceptedReports(input.repo_id,current,owned);owned();return JSON.stringify(result);
+    }
     if(input.action==='task_input'){
       if(!current)throw new HttpError(409,'Task record is missing');
       const data=z.strictObject({reference:recordReferenceSchema,issue:z.number().int().positive(),taskHash:z.string().regex(/^[a-f0-9]{64}$/),section:z.enum(['global','task','requirement','contract','finding','component','journey','decision','assumption','security','check','slice','integration']),id:z.string().min(1).max(100)}).parse(payload);
@@ -76,9 +91,10 @@ export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolCon
       guard();return JSON.stringify(readTaskInput(current,data.issue,data.section,data.id));
     }
     if(input.expected_revision!==(current?.revision??0))throw new HttpError(409,'Delivery record changed; reload before updating');
-    if(input.action==='save') {
+    if(input.action==='save'||input.action==='amend_plan') {
       if(!['ceo','manager'].includes(actor.role))throw new HttpError(403,'Only the CEO or manager can change scope, contracts or task planning');
-      const content=deliveryRecordContentSchema.parse(payload);records.assertContext({content},context);
+      if(input.action==='amend_plan'&&!current)throw new HttpError(409,'Create the shared delivery record before amending its plan');
+      const content=deliveryRecordContentSchema.parse(input.action==='amend_plan'?{...current!.content,...planningAmendment.parse(payload)}:payload);records.assertContext({content},context);
       const agents=deps.agents();
       if(!agents.some(a=>a.repoId===input.repo_id&&a.id===content.owner&&a.role==='dev')||!agents.some(a=>a.repoId===input.repo_id&&a.id===content.qaOwner&&a.role==='qa'))throw new HttpError(400,'Assign a developer and a separate QA agent from this project');
       if(content.taskPlan?.tasks.some(t=>!agents.some(a=>a.repoId===input.repo_id&&a.id===t.owner&&a.role==='dev')))throw new HttpError(400,'Each task owner must be a developer on this project');
