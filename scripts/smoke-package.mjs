@@ -36,9 +36,12 @@ try {
     if (server.exitCode !== null) throw new Error(`the office exited with code ${server.exitCode}`);
     const session = await fetch(`http://127.0.0.1:${PORT}/api/session`).catch(() => null);
     cookie = session?.headers.get('set-cookie')?.split(';')[0] ?? '';
-    state = await fetch(`http://127.0.0.1:${PORT}/api/state`, { headers: { Cookie: cookie } })
-      .then((r) => r.json())
+    const observed = await fetch(`http://127.0.0.1:${PORT}/api/state`, { headers: { Cookie: cookie } })
+      .then((r) => r.ok ? r.json() : null)
       .catch(() => null);
+    // A startup/authentication error object is not a ready office snapshot.
+    // Keep the bounded readiness wait instead of exiting on the first JSON.
+    if (observed && Array.isArray(observed.repos) && Array.isArray(observed.agents)) state = observed;
   }
   if (!state || !Array.isArray(state.repos)) throw new Error('the office never answered /api/state');
   const page = await fetch(`http://127.0.0.1:${PORT}/`).then((r) => r.text());
