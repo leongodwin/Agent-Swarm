@@ -5,7 +5,8 @@ import { configDefaults, defineConfig } from 'vitest/config';
 
 // macOS exposes /var as a symlink to /private/var. Security fixtures must
 // start below a canonical temp root rather than weakening path admission.
-const testTemp = fs.realpathSync(os.tmpdir());
+// Native resolution also expands Windows runner 8.3 aliases (RUNNER~1).
+const testTemp = fs.realpathSync.native(os.tmpdir());
 
 // Kept apart from vite.config.ts, whose root is client/, so tests in server/, shared/ and scripts/ are found too.
 export default defineConfig({
