@@ -2,6 +2,7 @@ import path from 'node:path';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {EventEmitter} from 'node:events';
 import fs from 'node:fs';
+import {phaseRecordFixture} from './testFixtures/phaseRecord.ts';
 
 // No listener, model, tenant or user state is used: exercise the entry point's
 // dependency wiring and invoke its installed admission callbacks directly.
@@ -26,6 +27,7 @@ vi.mock('./hldSynthesis.ts',()=>({HldSynthesisService:service('synthesis')}));
 vi.mock('./deliveryRecords.ts',()=>({DeliveryRecords:service('records')}));
 vi.mock('./manualGovernance.ts',()=>({ManualGovernance:service('manual')}));
 vi.mock('./executionLedger.ts',()=>({ExecutionLedger:service('ledger')}));
+vi.mock('./executionAdmission.ts',()=>({ExecutionAdmission:service('admission')}));
 vi.mock('./ceo.ts',()=>({createEngineeringTools:(...args:any[])=>args,createDeliveryQaTools:(...args:any[])=>args}));
 vi.mock('./deliveryGovernance.ts',()=>({createDeliveryGovernance:()=>vi.fn()}));
 vi.mock('./declaredSchema.ts',()=>({createDeclaredSchemaObserver:()=>vi.fn()}));
@@ -34,7 +36,7 @@ vi.mock('./connectorCatalogue.ts',()=>({createConnectorCatalogueObserver:()=>vi.
 vi.mock('./officeHttp.ts',()=>({createOfficeHttpApp:(args:any)=>{h.args.http=args;return {app:{},browserAuth:{websocket:(req:any)=>req.allowed},closeAdmission:vi.fn()};}}));
 vi.mock('./officeReload.mjs',()=>({OfficeReloadRequester:service('reload')}));
 vi.mock('./deliveryRecordTools.ts',()=>({deliveryRecordHandler:(_records:any,deps:any,identity:any)=>async(input:any)=>{h.args.recordDeps=deps;deps.assertOpen();return {identity,input};}}));
-vi.mock('./platformDiscovery.ts',async importOriginal=>({...await importOriginal<typeof import('./platformDiscovery.ts')>(),PlatformDiscovery:class{async inspect(...args:any[]){h.args.discovery=args;args[3]();await h.args.duringDiscovery?.();args[3]();return {scope:'synthetic-metadata'};}}}));
+vi.mock('./platformDiscovery.ts',async importOriginal=>({...await importOriginal<typeof import('./platformDiscovery.ts')>(),PlatformDiscovery:class{async inspect(...args:any[]){h.args.discovery=args;args[3]();await h.args.duringDiscovery?.();args[3]();return h.args.discoveryResult??{scope:'synthetic-metadata'};}}}));
 vi.mock('./deliverySourceRead.ts',async importOriginal=>({...await importOriginal<typeof import('./deliverySourceRead.ts')>(),readDeliverySource:async(input:any,context:any)=>{h.args.source={input,context};context.guard();await h.args.duringSource?.();context.guard();return {scope:'synthetic-source'};}}));
 vi.mock('./sharepointOffice.ts',()=>({sharepointOffice:async(input:any,context:any)=>{h.args.sharepoint={input,context};context.guard();await h.args.duringSharepoint?.();context.guard();return {scope:'synthetic-sharepoint-no-provider-call'};}}));
 vi.mock('./sharepointGraph.ts',()=>({connectSharepointGraph:(...args:any[])=>{h.args.sharepointGraph=args;return Promise.resolve(()=>{throw Error('Native provider forbidden in bootstrap fixture');});}}));
@@ -49,7 +51,7 @@ beforeEach(()=>{
   vi.resetModules();h.demo=false;h.launcher=false;h.args={};h.ws=[];h.signals={};h.profile='clear';h.profileGeneration=0;h.record=null;h.snapshot={repos:[],agents:[]};h.capResult=null;h.view={policy:{environmentUrl:'https://target.example',copilotPaused:false},releases:[],runs:[],revision:1};
   h.http=new EventEmitter();h.http.listen=vi.fn((_port,_host,cb)=>cb());h.http.address=()=>({port:12345});
   const common=()=>({init:vi.fn(async()=>{}),close:vi.fn()});
-  h.services={features:common(),canvas:common(),governance:{...common(),check:vi.fn()},dlp:common(),maintenance:{...common(),draining:false,change:vi.fn()},manual:{...common(),view:()=>[],review:vi.fn()},ledger:{...common(),report:vi.fn(),accept:vi.fn()},records:{...common(),current:()=>h.record,assertContext:vi.fn(),assertWork:vi.fn(),assertRelease:vi.fn()},capabilities:{...common(),check:vi.fn(async()=>h.capResult),view:()=>({results:[]}),configuration:vi.fn(),configurationFingerprint:()=> 'config'},delivery:{...common(),available:true,view:()=>h.view,tick:vi.fn(async()=>{}),setDraining:vi.fn(),createRelease:vi.fn(async()=>({id:'release'})),approveRelease:vi.fn(),approveVisual:vi.fn(),reviewArchitecture:vi.fn()},synthesis:{...common(),pendingCleanup:()=>[]},reload:{...common(),probe:vi.fn(),ready:vi.fn()},swarm:{...common(),snapshot:()=>h.snapshot,shutdown:vi.fn(),setDraining:vi.fn(),restoreArchitectureCleanup:vi.fn(),runtimeCleanupChanged:vi.fn(),requestReview:vi.fn(),addClient:vi.fn(),attachTerminal:vi.fn(),reviewDeliveryRelease:vi.fn(),planningSessionGuard:()=>vi.fn(),reserveArchitectureSession:vi.fn()}};
+  h.services={admission:{check:vi.fn(async(_record:any,_attempt:any,guard:()=>void)=>guard()),view:()=>({receipts:[]})},features:common(),canvas:common(),governance:{...common(),check:vi.fn()},dlp:common(),maintenance:{...common(),draining:false,change:vi.fn()},manual:{...common(),view:()=>[],review:vi.fn()},ledger:{...common(),report:vi.fn(),accept:vi.fn()},records:{...common(),current:()=>h.record,assertContext:vi.fn(),assertWork:vi.fn(),assertRelease:vi.fn()},capabilities:{...common(),check:vi.fn(async()=>h.capResult),view:()=>({results:[]}),configuration:vi.fn(),configurationFingerprint:()=> 'config'},delivery:{...common(),available:true,view:()=>h.view,tick:vi.fn(async()=>{}),setDraining:vi.fn(),createRelease:vi.fn(async()=>({id:'release'})),approveRelease:vi.fn(),approveVisual:vi.fn(),reviewArchitecture:vi.fn()},synthesis:{...common(),pendingCleanup:()=>[]},reload:{...common(),probe:vi.fn(),ready:vi.fn()},swarm:{...common(),snapshot:()=>h.snapshot,shutdown:vi.fn(),setDraining:vi.fn(),restoreArchitectureCleanup:vi.fn(),runtimeCleanupChanged:vi.fn(),requestReview:vi.fn(),addClient:vi.fn(),attachTerminal:vi.fn(),reviewDeliveryRelease:vi.fn(),planningSessionGuard:()=>vi.fn(),reserveArchitectureSession:vi.fn()}};
   const packaging=()=>({inspect:vi.fn(async()=>({scope:'synthetic-runtime-inspection'})),review:vi.fn(async()=>({reviewed:true})),execute:vi.fn(async()=>({executed:true})),reconcile:vi.fn(async()=>({reconciled:true}))});
   h.services.packagingRuntime={packaging:packaging(),recovery:packaging()};h.services.bootstrapRuntime=packaging();h.services.browser={list:vi.fn(async()=>[]),request:vi.fn(),claim:vi.fn(),complete:vi.fn(),holdsTask:vi.fn()};
   vi.spyOn(process,'once').mockImplementation(((event:string,cb:Function)=>{h.signals[event]=cb;return process;}) as any);
@@ -65,6 +67,31 @@ const repo=()=>({id:'project',fullName:'demo/project',checkoutPath:'synthetic-ch
 function releasePlan(){return {acceptanceProfile:'functional-development',name:'Synthetic release',owner:'author',qaOwner:'qa',requiredIssues:[1],components:['app'],acceptanceCriteria:['Task works'],quality:{maxTaskDurationMs:30000,maxSeriousAccessibilityIssues:0},monitoring:{intervalMinutes:15,criticalProbeIds:['worker']},verification:{baseUrl:'https://app.example.test',identities:[{id:'tester',expectedUser:'tester@example.test',userSelector:'#user'}],scenarios:['loading','empty','validation','failure','recovery','success'].map((state,i)=>({name:state,states:[state],category:['journey','journey','error-handling','authorization','persistence','journey'][i],identity:'tester',criterion:0,steps:[{action:'press',selector:'#result',key:'Tab'},...(i===4?[{action:'reload'}]:[]),{action:'text',selector:'#result',contains:'Expected'}]}))}};}
 
 describe('isolated office bootstrap acceptance',()=>{
+  async function phaseHost(){
+   h.record=phaseRecordFixture();h.record.repoId='project';const target=h.record.content.environmentUrl;
+   h.snapshot.repos=[{...repo(),targetTenancy:{environmentUrl:target,tenantId:'tenant'}}];h.view.policy.environmentUrl=target;
+   const config={environmentUrl:target,checks:[{probe:{kind:'platform-auth',environmentUrl:target,identity:{username:'owner@example.test',tenantId:'tenant',environmentId:'11111111-1111-4111-8111-111111111111'},binding:{organizationId:'22222222-2222-4222-8222-222222222222',userId:'33333333-3333-4333-8333-333333333333'}}},...['shared_office365','shared_commondataserviceforapps'].map(api=>({probe:{kind:'pac-connection',api,account:'owner@example.test',environmentUrl:target,connectionId:api+'-exact'}}))]};
+   h.services.capabilities.configuration.mockReturnValue(config);const swarm=await boot();return{swarm,config,deps:h.args.admission[1]};
+  }
+  it('wires fixed native probes to exact reviewed connections and profile identity without caller receipts',async()=>{
+   const {deps,config}=await phaseHost();expect(deps.configuration(h.record).identity).toMatchObject({username:'owner@example.test',authenticationFingerprint:'0'});
+   config.checks.pop();expect(()=>deps.configuration(h.record)).toThrow('exact reviewed');config.checks.push({probe:{kind:'pac-connection',api:'shared_commondataserviceforapps',account:'owner@example.test',environmentUrl:config.environmentUrl,connectionId:'exact'}} as any);
+   const target=h.record.content.environmentUrl;h.record.content.environmentUrl='https://other.crm4.dynamics.com';expect(()=>deps.configuration(h.record)).toThrow('target differs');h.record.content.environmentUrl=target;
+   const at=new Date().toISOString(),until=new Date(Date.now()+60000).toISOString();h.capResult={repoId:'project',status:'ready',checkedAt:at,expiresAt:until,checks:[{id:'auth',category:'authentication',passed:true}]};
+   expect(await deps.observe('project-readiness',h.record,{issue:1},()=>{})).toMatchObject({passed:true,observedAt:at,expiresAt:until});h.capResult.checks[0].passed=false;expect((await deps.observe('project-readiness',h.record,{issue:1},()=>{})).passed).toBe(false);
+   h.args.discoveryResult={observation:{data:{status:'observed',requiredGlobalPrivilegesPresent:true,protectedOwnerOnly:true}},evidence:{observedAt:at,expiresAt:until,sha256:'e'.repeat(64),reference:'synthetic-original'}};
+   for(const probe of ['headless-authoring-rights','private-report-acl'])expect(await deps.observe(probe,h.record,{issue:1},()=>{})).toMatchObject({passed:true,sourceReference:'synthetic-original'});
+   h.services.capabilities.configuration.mockReturnValue(undefined);expect(()=>deps.configuration(h.record)).toThrow('missing');await expect(deps.observe('project-readiness',h.record,{},()=>{})).rejects.toThrow('missing');
+  });
+  it.each(['profile','approval','record','drain'])('rechecks %s mutations during phase admission and withholds worker authorization',async changed=>{
+   const {swarm}=await phaseHost();h.services.admission.check.mockImplementation(async(_record:any,_attempt:any,guard:()=>void)=>{guard();if(changed==='profile')h.profileGeneration++;if(changed==='approval')h.record.taskReviews[0].notes+='changed';if(changed==='record')h.record.sha256='f'.repeat(64);if(changed==='drain')swarm.isDraining=true;guard();});
+   await expect(swarm.executionEvidenceCheck('project',1,'dev','attempt',()=>{})).rejects.toThrow('context changed');
+  });
+  it('keeps legacy execution unchanged and refuses unsupported adapter execution for classified records',async()=>{
+   const {swarm}=await phaseHost();h.record.content.findings=[];await swarm.executionEvidenceCheck('project',1,'dev','attempt',()=>{});expect(h.services.admission.check).not.toHaveBeenCalled();
+   h.record.content.findings=phaseRecordFixture().content.findings;await expect(h.services.delivery.checkExecutionEvidence('project',{verification:{}},'run','deployment',()=>{})).rejects.toThrow('supported headless adapter');
+   await h.services.delivery.checkExecutionEvidence('project',{verification:{headlessFlow:{}}},'run','dispatch',()=>{});expect(h.services.admission.check).toHaveBeenCalledWith(h.record,expect.objectContaining({phase:'dispatch',actor:'delivery-runner',attemptId:'run'}),expect.any(Function));
+  });
   it('wires native ownership diagnostics from the runtime rather than inferred child IDs',async()=>{await boot();expect(h.args.http.nativeRuntime()).toEqual({keeperPid:123,keeperInstance:'synthetic-keeper',nativePids:[456]});});
   it('installs ledger and cleanup before native admission and listens only on loopback',async()=>{const s=await boot();expect(s.executionLedger).toBe(h.services.ledger);expect(h.services.ledger.init).toHaveBeenCalledOnce();expect(h.http.listen).toHaveBeenCalledWith(0,'127.0.0.1',expect.any(Function));h.args.cleanup();expect(s.runtimeCleanupChanged).toHaveBeenCalledOnce();expect(h.args.http.executionLedger).toBe(h.services.ledger);});
   it('blocks workers and deployment while authentication ownership is unresolved',async()=>{const s=await boot();h.profile='uncertain';expect(await s.capabilityPreflight('project','codex')).toMatch(/ownership/);expect(await s.ceoPreflight([],'codex')).toMatch(/ownership/);expect(await h.services.delivery.checkCapabilities('project','cwd','url',true)).toMatchObject({status:'blocked'});expect(h.services.capabilities.check).not.toHaveBeenCalled();});

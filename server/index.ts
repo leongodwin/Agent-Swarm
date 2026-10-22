@@ -210,8 +210,8 @@ const executionAdmission=new ExecutionAdmission(HOME_DIR,{
 const checkPhaseExecution=async(repoId:string,attempt:ExecutionAttempt,outerGuard:()=>void)=>{
  const record=deliveryRecords.current(repoId);if(!record||!record.content.findings.some(f=>f.executionEvidence))return;
  const approvalState=(r:typeof record|undefined)=>JSON.stringify([r?.designReview,r?.taskReviews,r?.taskAcceptances,r?.sliceReceipt]);
- const approvals=approvalState(record),config=capabilities.configurationFingerprint([repoId]),context=JSON.stringify(recordContext(repoId)),profile=backend.tenancy.activity().profileMutation?.fingerprint;
- const guard=()=>{outerGuard();const current=deliveryRecords.current(repoId);if(officeShutdown.closed||swarm.isDraining||current?.sha256!==record.sha256||approvalState(current)!==approvals||JSON.stringify(recordContext(repoId))!==context||capabilities.configurationFingerprint([repoId])!==config||backend.tenancy.activity().profileMutation?.status!=='clear'||backend.tenancy.activity().profileMutation?.fingerprint!==profile)throw Error('Phase execution context changed');};
+ const recordSha256=record.sha256,approvals=approvalState(record),config=capabilities.configurationFingerprint([repoId]),context=JSON.stringify(recordContext(repoId)),profile=backend.tenancy.activity().profileMutation?.fingerprint;
+ const guard=()=>{outerGuard();const current=deliveryRecords.current(repoId);if(officeShutdown.closed||swarm.isDraining||current?.sha256!==recordSha256||approvalState(current)!==approvals||JSON.stringify(recordContext(repoId))!==context||capabilities.configurationFingerprint([repoId])!==config||backend.tenancy.activity().profileMutation?.status!=='clear'||backend.tenancy.activity().profileMutation?.fingerprint!==profile)throw Error('Phase execution context changed');};
  guard();await executionAdmission.check(record,attempt,guard);guard();
 };
 swarm.executionEvidenceCheck=(repoId,issue,actor,attemptId,guard)=>checkPhaseExecution(repoId,{phase:'authoring',issue,actor,attemptId},guard);
