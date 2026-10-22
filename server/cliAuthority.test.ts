@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AgentTerminal } from './terminal.ts';
 import type { SessionOptions } from './agentRunner.ts';
 const native = vi.hoisted(() => ({autoExit:true,token: '', kill: vi.fn(),write:vi.fn(),args:[] as string[],data:undefined as undefined|((data:string)=>void),exit:undefined as undefined|((code:number)=>void)}));
@@ -32,6 +32,10 @@ import {CodexModelNotAdvertisedError} from './codexModelMetadata.ts';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import {SessionEvidence} from './sessionEvidence.ts';
+
+// Windows long preflight instructions require a native profile home. Keep it
+// isolated even on developer machines that already have a signed-in Codex home.
+beforeEach(async()=>{const home=path.join(HOME_DIR,'codex-home');await fs.mkdir(home,{recursive:true});vi.stubEnv('CODEX_HOME',home);});
 
 it('preserves large skill evidence through generated OpenCode plugin hooks before allowing authoring',async()=>{
   vi.useFakeTimers();setToolGovernanceGate(async()=>({status:'allowed',reason:'Synthetic policy'}));
@@ -81,6 +85,7 @@ it('enforces worker-session probes through actual CLI hooks and refuses stale re
   const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>''} as unknown as AgentTerminal;
   const finished=vi.fn();const handle=await startCliSession({cwd,prompt:'Synthetic',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'qa',cli:'codex',terminal:term,workerPreflight:true,typed:true,authorizeTool:()=>null},
     {log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished});
+  expect(term.bind).toHaveBeenCalledOnce();expect(finished).not.toHaveBeenCalled();
   const token=native.token;
   const pre=(id:string,name:string,input:unknown)=>handleHook(token,{hook_event_name:'PreToolUse',tool_use_id:id,tool_name:name,tool_input:input});
   expect((await pre('write','Edit',{})).hookSpecificOutput).toMatchObject({permissionDecision:'deny',permissionDecisionReason:expect.stringContaining('Reviewed preflight inputs')});

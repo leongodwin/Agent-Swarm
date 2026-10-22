@@ -245,7 +245,8 @@ describe('independent delivery evidence acceptance', () => {
     if (mode !== 'normal') { expect(run.phase).toBe('blocked'); expect(run.error).toContain(mode === 'ambiguous-create' ? 'unknown create' : 'length validation'); expect(f.calls.some(c => c.includes('solution import'))).toBe(false); return; }
     expect(run.phase, run.error).toBe('reviewing'); expect(writes).toHaveLength(8); expect(run.evidence).toContain('independent-recovery-journal.json'); expect(run.evidence).toContain('independent-journey-journal.json');
     expect(run.appUrls).toEqual([]); await f.service.approveVisual(run.id, 'sherlock', { ...validReview(run.evidenceHash!), scores: [] }); expect(f.service.view().runs[0].phase).toBe('complete');
-  },15000);
+  // Includes setup and multiple durable evidence fsyncs around the unchanged 30s journey limit.
+  },45000);
   it.each(['schema-sharing', 'binding-repair', 'mapping-drift'] as const)('reconciles typed %s against independent reads before allowing QA', async mode => {
     const f = await fixture(), native = f.deps.run, id = '11111111-1111-4111-8111-111111111111', principal = '22222222-2222-4222-8222-222222222222';
     const table = { key: 'reports', kind: 'dataverse-table', logicalName: 'exp_report' }, reference = { key: 'reference', kind: 'connection-reference', logicalName: 'exp_reference' };
