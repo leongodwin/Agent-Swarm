@@ -60,3 +60,10 @@ The installed Power Automate 3.2.1 `references/definition-reference.md` includes
 This is a sourced design example, not executed evidence. Replace the literal instructions and dynamic input with the reviewed recruitment contract; discover supported model choices and validate the real response during the first slice. Do not assume a model, capacity, output path or licence succeeds from this example.
 
 The reference's record-ID note conflicts with its table binding. The authenticated Development CSDL observation binds QuickTest to `msdyn_aiconfiguration`; `platform_discovery {kind:"ai-prompt-metadata"}` returns the actual generic configuration IDs and their model relationship. Use the observed bound configuration ID rather than silently substituting a model ID. Preserve this discrepancy in design review and verify the actual service result before acceptance. Generic `crmbaseentity`/expando parameters do not enumerate every prompt-specific output field; an unverified field mapping remains provisional until the controlled live slice.
+
+
+## Fixed prerequisite observations
+
+`platform_discovery {kind:"headless-authoring-rights"}` requires a server-bound current task and source. It rechecks native PAC/Flow identity, reads only the matched Dataverse user and its effective privilege metadata twice, and binds the evidence to that task and record. Missing or non-global privileges remain visible. The Dataverse licensed flag is not Power Automate Premium, AI capacity, connection-use, effective DLP or runtime proof. Validity is one minute; no permissions or licences are changed.
+
+`platform_discovery {kind:"private-report-metadata"}` reads only the fixed Windows profile leaf `.cubefarm/private-flow-reports/recruitment-e2e-<delivery-record-id>`. It checks canonical directories and protected ACL metadata for the current Windows user, SYSTEM and Administrators. It reads no filenames or contents and does not create or repair the leaf. The result does not prove runtime capture, retention or log suppression. Those remain independently verified before private live data is processed. Neither observation approves authoring or deployment.

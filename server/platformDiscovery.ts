@@ -1,4 +1,5 @@
 import {standardDlpEvidence} from './standardDlpEvidence.ts';
+import {privateReportMetadata} from './privateReportMetadata.ts';
 import {aiPromptMetadata} from './aiPromptMetadata.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -31,6 +32,8 @@ export const platformDiscoveryRequest=z.discriminatedUnion('kind',[
  z.strictObject({kind:z.literal('identity')}),
  z.strictObject({kind:z.literal('assigned-licenses')}),
  z.strictObject({kind:z.literal('ai-prompt-metadata')}),
+ z.strictObject({kind:z.literal('headless-authoring-rights')}),
+ z.strictObject({kind:z.literal('private-report-metadata')}),
  z.strictObject({kind:z.literal('user-entitlements'),username:z.email().max(254)}),
  z.strictObject({kind:z.literal('resource-permissions')}),
  z.strictObject({kind:z.literal('delivery-permissions')}),
@@ -88,7 +91,7 @@ export class PlatformDiscovery{
  constructor(private root:string,private deps:Dependencies={run:deliveryCommands.run,connect:connectFlowAdapter}){}
  async inspect(config:CapabilityConfig,cwd:string,input:unknown,guard:()=>void,signal:AbortSignal,repoId?:string,configurationRoot=this.root,scope?:{record:DeliveryRecord;issue:number}){
   const request=platformDiscoveryRequest.parse(input),binding=platformDiscoveryBinding(config);
-  if(['delivery-permissions','delivery-authoring-prerequisites'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)))throw Error('Delivery permission discovery requires a server-bound current task');
+  if(['delivery-permissions','delivery-authoring-prerequisites','headless-authoring-rights','private-report-metadata'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)))throw Error('Delivery permission discovery requires a server-bound current task');
   if(['write-readiness','sharepoint-list-schema'].includes(request.kind)&&!repoId)throw new Error('Write readiness and schema discovery require server-bound repository context');
   const assert=()=>{signal.throwIfAborted();guard();};assert();
   let flow:FlowAdapter|undefined,pac!:ReturnType<typeof parsePacIdentity>,data:unknown;
@@ -133,6 +136,8 @@ export class PlatformDiscovery{
     if(snapshot===undefined)data=await(this.deps.dlp??standardDlpEvidence)(binding,cwd,signal,guard);
     else{const identity={tenantId:binding.tenantId,caller:binding.username};data={status:'observed',scope:'standard-policy-inventory',inventory:verifyTenantSnapshot(snapshot,identity),complianceVerified:false,limits:['Standard policy inventory only; effective target policy, connector classification and operation eligibility remain unverified']};}
    }
+   else if(request.kind==='private-report-metadata')data={...await privateReportMetadata(scope!.record.id,cwd,signal,guard),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
+   else if(request.kind==='headless-authoring-rights')data={...await(this.deps.aiMetadata??aiPromptMetadata)(binding,cwd,signal,guard,{run:this.deps.run,fetch:globalThis.fetch},'headless-rights'),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
    else if(request.kind==='ai-prompt-metadata')data=await(this.deps.aiMetadata??aiPromptMetadata)(binding,cwd,signal,guard);
    else if(request.kind==='environments')data=await flow!.call('list_environments',{});
    else if(request.kind==='sharepoint-sites'||request.kind==='sharepoint-list-schema'){
