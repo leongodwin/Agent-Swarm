@@ -91,3 +91,9 @@ it.each(['ai','attachment'])('enforces the reviewed standard-mail operation scop
  expect(()=>assertHeadlessDefinition(d,owner,url,'Send_report',undefined,undefined,'standard-mail-v1')).toThrow('Reviewed standard-mail scope');
  expect(()=>assertHeadlessDefinition(definition(),owner,url,'Send_report',undefined,undefined,'standard-mail-v1')).not.toThrow();
 });
+
+it('also rejects attachment download routes through the generic Outlook GET operation in standard-mail scope',()=>{
+ const d:any=definition();d.actions.Attachment={type:'OpenApiConnection',inputs:{host:{apiId:'/providers/Microsoft.PowerApps/apis/shared_office365',operationId:'HttpRequest'},parameters:{Method:'GET',Uri:'https://graph.microsoft.com/v1.0/me/messages/mail-id/attachments/file-id/$value'}}};
+ expect(()=>assertHeadlessDefinition(d,owner,url,'Send_report',undefined,undefined,'standard-mail-v1')).toThrow('read-only mail Graph routes');
+ expect(()=>assertHeadlessDefinition(d,owner,url,'Send_report')).not.toThrow();
+});
