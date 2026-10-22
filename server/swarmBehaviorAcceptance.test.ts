@@ -57,6 +57,18 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(()=>vi.useFakeTimers());
+it.each(['valid','stale-target','foreign-account','foreign-selected-target','disconnected','not-real','busy','coordinator','authentication','changed-during-discovery','delivery-started','unbound','unsafe-url'])('changes project target only through idle authenticated admission: %s',async mode=>{
+ const {swarm,fake}=await office(true),m=swarm as any,repo=m.state.repos[0],old='https://old.crm.dynamics.com/',next='https://new.crm.dynamics.com/',owner='owner@example.test';
+ repo.targetTenancy={environmentUrl:old,user:owner};repo.autoAssign=true;repo.autoMerge=true;if(mode==='unbound')delete repo.targetTenancy;const original=JSON.stringify(repo.targetTenancy);let guardCalls=0;
+ (fake.tenancy as any).activity=()=>({busy:mode==='authentication'});
+ fake.tenancy.info.mockImplementation(async()=>{if(mode==='changed-during-discovery')repo.targetTenancy={environmentUrl:'https://changed.crm.dynamics.com',user:owner};return{tenantName:'Synthetic',tenantDomain:'example.test',tenantId:'',user:owner,isReal:mode!=='not-real',status:mode==='disconnected'?'disconnected':'connected',environments:[{index:1,name:'Developer test',url:mode==='foreign-selected-target'?old:next,user:mode==='foreign-account'?'other@example.test':owner,active:true}]};});
+ if(mode==='busy')vi.spyOn(swarm,'sessionUsage').mockReturnValue({used:1} as any);if(mode==='coordinator')m.state.ceo.job={kind:'plan',repoId:repo.id,at:Date.now()};
+ const pending=swarm.refreshRepoTarget(repo.id,mode==='unbound'?null:mode==='stale-target'?next:old,mode==='unsafe-url'?next+'foreign':next,owner,()=>{if(mode==='delivery-started'&&++guardCalls===2)throw Error('Delivery started during target discovery');});
+ if(mode==='valid'||mode==='unbound'){await pending;expect(swarm.snapshot().repos[0]).toMatchObject({targetTenancy:{environmentUrl:next,user:owner},autoAssign:false,autoMerge:false});}
+ else{await expect(pending).rejects.toThrow();if(mode!=='changed-during-discovery')expect(JSON.stringify(repo.targetTenancy)).toBe(original);expect(repo.autoAssign).toBe(true);expect(repo.autoMerge).toBe(true);}
+ m.state.ceo.job=null;repo.autoAssign=false;
+});
+it('does not dispatch workers while their coordinator is publishing a planning revision',async()=>{const {swarm}=await office(true),m=swarm as any,repo=m.state.repos[0];repo.autoAssign=true;const available=vi.spyOn(m,'available').mockReturnValue([]);m.state.ceo.job={kind:'plan',repoId:repo.id,at:Date.now()};expect(m.startIssueWork(repo)).toBe(false);expect(available).not.toHaveBeenCalled();m.state.ceo.job={kind:'plan',repoId:'other/project',at:Date.now()};expect(m.startIssueWork(repo)).toBe(false);expect(available).toHaveBeenCalled();m.state.ceo.job=null;});
 afterEach(async()=>{vi.useRealTimers();await Promise.all(offices.splice(0).map(s=>s.shutdown().catch(()=>{})));for(const name of await fs.readdir(HOME_DIR))await fs.rm(path.join(HOME_DIR,name),{recursive:true,force:true});vi.restoreAllMocks();});
 afterAll(()=>fs.rm(HOME_DIR,{recursive:true,force:true}));
 // Exercise the actual office through its public commands and inspect externally visible state.

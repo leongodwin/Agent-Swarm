@@ -1,4 +1,8 @@
+import {repositoryAccessMetadata} from './repositoryAccessMetadata.ts';
+import {reconcileHeadlessDispatch} from './headlessFlowVerification.ts';
 import {standardDlpEvidence} from './standardDlpEvidence.ts';
+import {privateReportMetadata} from './privateReportMetadata.ts';
+import {aiPromptMetadata} from './aiPromptMetadata.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -25,10 +29,16 @@ import {recordReference,type DeliveryRecord} from '../shared/deliveryRecord.ts';
 import {readBoundedText} from './boundedJson.ts';
 import {parseUnambiguousJson} from './unambiguousJson.ts';
 
-const connector=z.enum(['shared_sharepointonline','shared_teams','shared_approvals']);
+const connector=z.enum(['shared_sharepointonline','shared_teams','shared_approvals','shared_office365','shared_commondataserviceforapps']);
 export const platformDiscoveryRequest=z.discriminatedUnion('kind',[
  z.strictObject({kind:z.literal('identity')}),
  z.strictObject({kind:z.literal('assigned-licenses')}),
+ z.strictObject({kind:z.literal('ai-prompt-metadata')}),
+ z.strictObject({kind:z.literal('headless-authoring-rights')}),
+ z.strictObject({kind:z.literal('private-report-metadata')}),
+ z.strictObject({kind:z.literal('headless-dispatch-reconciliation')}),
+ z.strictObject({kind:z.literal('repository-access')}),
+ z.strictObject({kind:z.literal('headless-discovery-contracts')}),
  z.strictObject({kind:z.literal('user-entitlements'),username:z.email().max(254)}),
  z.strictObject({kind:z.literal('resource-permissions')}),
  z.strictObject({kind:z.literal('delivery-permissions')}),
@@ -47,7 +57,7 @@ export type PlatformDiscoveryRequest=z.infer<typeof platformDiscoveryRequest>;
 export function platformDiscoveryBudget(input:unknown){const {kind}=platformDiscoveryRequest.parse(input);return kind==='delivery-authoring-prerequisites'?100_000:['write-readiness','sharepoint-list-schema','user-entitlements','delivery-permissions'].includes(kind)?90_000:45_000;}
 /** Stable catalogue/schema observations need enough time for independent planning
  * review. This never extends identity, permissions, licence or writer readiness. */
-export function platformDiscoveryValidity(input:unknown){const {kind}=platformDiscoveryRequest.parse(input);return ['environments','sharepoint-sites','sharepoint-list-schema','connector-operations','operation'].includes(kind)?15*60_000:60_000;}
+export function platformDiscoveryValidity(input:unknown){const {kind}=platformDiscoveryRequest.parse(input);return ['environments','sharepoint-sites','sharepoint-list-schema','connector-operations','operation','ai-prompt-metadata'].includes(kind)?15*60_000:60_000;}
 /** Only reviewed identity assertions may select this discovery target. */
 export function platformDiscoveryBinding(config:CapabilityConfig){
  const url=new URL(config.environmentUrl);
@@ -73,6 +83,7 @@ interface Dependencies{
  run:typeof deliveryCommands.run;
  connect:(cwd:string,signal:AbortSignal)=>Promise<FlowAdapter>;
  licensing?:typeof callerLicensing;
+ aiMetadata?:typeof aiPromptMetadata;
  entitlements?:typeof userEntitlements;
  permissions?:typeof resourcePermissions;
  writer?:typeof sharepointWriteReadiness;
@@ -83,9 +94,10 @@ interface Dependencies{
 /** Fixed metadata-only methods. A caller cannot supply a command, URL, env or tool name. */
 export class PlatformDiscovery{
  constructor(private root:string,private deps:Dependencies={run:deliveryCommands.run,connect:connectFlowAdapter}){}
- async inspect(config:CapabilityConfig,cwd:string,input:unknown,guard:()=>void,signal:AbortSignal,repoId?:string,configurationRoot=this.root,scope?:{record:DeliveryRecord;issue:number}){
+ async inspect(config:CapabilityConfig,cwd:string,input:unknown,guard:()=>void,signal:AbortSignal,repoId?:string,configurationRoot=this.root,scope?:{record:DeliveryRecord;issue?:number;independentReview?:boolean}){
   const request=platformDiscoveryRequest.parse(input),binding=platformDiscoveryBinding(config);
   if(['delivery-permissions','delivery-authoring-prerequisites'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)))throw Error('Delivery permission discovery requires a server-bound current task');
+  if(['headless-authoring-rights','private-report-metadata','headless-dispatch-reconciliation','repository-access','headless-discovery-contracts'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!(scope.independentReview===true||scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)||scope.record.content.tasks.some(t=>t.issue===scope.issue&&t.stage==='discovery'))))throw Error('Headless metadata requires a server-bound current task or independent review');
   if(['write-readiness','sharepoint-list-schema'].includes(request.kind)&&!repoId)throw new Error('Write readiness and schema discovery require server-bound repository context');
   const assert=()=>{signal.throwIfAborted();guard();};assert();
   let flow:FlowAdapter|undefined,pac!:ReturnType<typeof parsePacIdentity>,data:unknown;
@@ -130,6 +142,18 @@ export class PlatformDiscovery{
     if(snapshot===undefined)data=await(this.deps.dlp??standardDlpEvidence)(binding,cwd,signal,guard);
     else{const identity={tenantId:binding.tenantId,caller:binding.username};data={status:'observed',scope:'standard-policy-inventory',inventory:verifyTenantSnapshot(snapshot,identity),complianceVerified:false,limits:['Standard policy inventory only; effective target policy, connector classification and operation eligibility remain unverified']};}
    }
+   else if(request.kind==='repository-access')data={...await repositoryAccessMetadata(repoId!,cwd,signal,guard,this.deps.run),reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
+   else if(request.kind==='headless-discovery-contracts'){
+    if(!scope!.record.content.brief.includes('AS-Recruitment-E2E')||!flow!.metadata)throw Error('Pinned recruitment scope and active adapter handshake metadata required');
+    const templates=z.array(z.object({id:z.string(),name:z.string(),description:z.string(),connectors:z.array(z.string())})).max(100).parse(await flow!.call('list_templates',{}));assert();
+    const inventory=async()=>{const rows=z.array(z.object({name:z.string(),displayName:z.string(),state:z.string()})).max(5000).parse(await flow!.call('list_flows',{env:pac.environmentId,top:50}));assert();if(new Set(rows.map(r=>r.name)).size!==rows.length)throw Error('Duplicate native flow inventory');return{nativeReturnedRows:rows.length,unsaturated:rows.length<50,dedicatedMatches:rows.filter(r=>r.displayName.toLowerCase().includes('as-recruitment-e2e'))};};
+    const before=await inventory(),after=await inventory();if(JSON.stringify(before)!==JSON.stringify(after))throw Error('Flow inventory changed during observation');
+    data={status:'observed',scope:'recruitment-template-runtime-inventory',runtime:flow!.metadata,templates,inventory:after,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit,limits:['Installed active MCP handshake and entry hash plus repeated native visible-flow inventory; no template instantiated','Inventory covers only caller-visible metadata; saturation blocks absence claims; no hidden-resource, connection execution, licence, DLP or runtime assurance','Duplicate-name checks still required at stopped-flow creation; never adopt or change unrelated flows']};
+   }
+   else if(request.kind==='headless-dispatch-reconciliation')data={...await reconcileHeadlessDispatch({...binding,environmentId:pac.environmentId},scope!.record.id,flow!,signal,guard),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
+   else if(request.kind==='private-report-metadata')data={...await privateReportMetadata(scope!.record.id,cwd,signal,guard),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
+   else if(request.kind==='headless-authoring-rights')data={...await(this.deps.aiMetadata??aiPromptMetadata)(binding,cwd,signal,guard,{run:this.deps.run,fetch:globalThis.fetch},'headless-rights'),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
+   else if(request.kind==='ai-prompt-metadata')data=await(this.deps.aiMetadata??aiPromptMetadata)(binding,cwd,signal,guard);
    else if(request.kind==='environments')data=await flow!.call('list_environments',{});
    else if(request.kind==='sharepoint-sites'||request.kind==='sharepoint-list-schema'){
     const connections=config.checks.flatMap(check=>check.probe.kind==='pac-connection'&&check.probe.api==='shared_sharepointonline'&&new URL(check.probe.environmentUrl).origin===binding.environmentUrl&&check.probe.account?.toLowerCase()===binding.username.toLowerCase()&&check.probe.connectionId?[check.probe.connectionId]:[]);

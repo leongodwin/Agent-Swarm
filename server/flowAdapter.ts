@@ -12,7 +12,7 @@ import { verifyFlowIdentity } from './platformAuth.ts';
 import type { TargetAction, TargetComponent } from './targetOperations.ts';
 import {flowCleanup} from './flowCleanup.ts';
 import {flowAdapterEnvironment} from './flowEnvironment.ts';
-export interface FlowAdapter { call(tool: string, args: Record<string, unknown>): Promise<unknown>; close(): Promise<void> }
+export interface FlowAdapter { metadata?:{name:string;version:string;entrySha256:string};call(tool: string, args: Record<string, unknown>): Promise<unknown>; close(): Promise<void> }
 /** The Flow API adds this parameter reference to connector inputs on readback.
  * The save validator rejects it in authored definitions. Strip only that exact
  * injected reference for connector steps, leaving explicit/custom auth intact. */
@@ -33,6 +33,7 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
   const skill = discoverSkills().skills.find((s) => s.id === 'power-automate:manage-flows');
   const entry = process.env.SWARM_FLOWAGENT_ENTRY ?? (skill ? path.resolve(path.dirname(skill.file), '..', '..', 'server', 'mcp.mjs') : '');
   if (!entry || !(await fs.stat(entry).catch(() => null))?.isFile()) throw new Error('FlowAgent runtime is unavailable; install/enable the Power Automate plugin or configure SWARM_FLOWAGENT_ENTRY');
+  const entrySha256=crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex');
   const transport = new StdioClientTransport({ command: process.execPath, args: [entry], cwd, stderr: 'ignore', env: flowAdapterEnvironment() });
   const client = new Client({ name: 'swarm-flow-delivery', version: '1' });
   const cleanup=flowCleanup(client,transport);
@@ -45,7 +46,9 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Prom
     for (let page = 0; page < 20; page++) { const list = await client.listTools({ cursor }, { signal, timeout: 15000 });signal.throwIfAborted();cleanup.assertOpen();list.tools.forEach((tool) => names.add(tool.name));cursor = list.nextCursor;if (!cursor) break;if(cursors.has(cursor))throw new Error('FlowAgent tool discovery returned a repeated cursor');cursors.add(cursor); }
     if (cursor) throw new Error('FlowAgent tool discovery exceeded its pagination limit');
     for (const tool of ['whoami', 'get_flow', 'get_flow_context', 'preflight_flow', 'publish_flow', 'disable_flow', 'get_run_history', 'get_run_details', 'get_run_actions', 'get_run_action_content']) if (!names.has(tool)) throw new Error(`FlowAgent tool ${tool} is missing`);
-    return { close, async call(tool, args) {
+    const server=client.getServerVersion();if(!server||crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex')!==entrySha256)throw Error('FlowAgent runtime changed during admission');
+    const metadata=z.object({name:z.string().min(1).max(200),version:z.string().min(1).max(100),entrySha256:z.string().regex(/^[a-f0-9]{64}$/)}).parse({...server,entrySha256});
+    return { metadata,close, async call(tool, args) {
       signal.throwIfAborted();cleanup.assertOpen();
       const result = await client.callTool({ name: tool, arguments: args }, undefined, { signal, timeout: 30000 });
       signal.throwIfAborted();cleanup.assertOpen();

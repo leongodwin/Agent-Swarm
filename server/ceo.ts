@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { blockers, holdUps, setDependsOn } from '../shared/issues.ts';
 import type { CeoJobKind } from '../shared/types.ts';
 import {parseUnambiguousJson} from './unambiguousJson.ts';
+import {deliverySourceRequest,readDeliverySource} from './deliverySourceRead.ts';
 
 // The CEO: a coding-agent session in the lobby that runs the company instead of writing code.
 // It studies each floor's repo, shapes the team (hire / let-go proposals the manager approves),
@@ -24,6 +25,7 @@ export interface CeoJob {
 
 /** What the CEO's tools do. Implemented by the swarm; errors are returned to the CEO as tool errors. */
 export interface OfficeHandlers {
+  readDiscoveryEvidence?(input:unknown):Promise<unknown>;
   deliveryRecord?: RecordToolHandler;
   reviewDeliveryRecord?(repoId:string):Promise<string>;
   companyStatus(): string;
@@ -59,11 +61,11 @@ export interface OfficeTools {
 
 const EFFORT = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 
-export type RecordToolHandler = (input: {repo_id:string; action:'browser_handoff'|'read'|'evidence_index'|'task_input'|'save'|'inspect_repository'|'finding'|'synthesize_design'|'design_result'|'review'|'reject_inputs'|'review_task'|'reconcile_task'|'accept_slice'|'schema_bootstrap'|'canvas_packaging'; expected_revision?:number; payload_json?:string}) => Promise<string>;
-function recordTools(handler?:RecordToolHandler) {
-  return [tool('delivery_record', 'Read the shared delivery record and gates. For bounded receipt metadata use evidence_index with payload_json {findingId?,reference?,startIndex:0,maxEntries:20}; it returns the exact current reference and hashes without the full design. Later pages require that reference. CEO saves the scoped record; workers add discovery findings; assigned QA reviews an exact design. Payload contracts are in docs/DELIVERY.md. Evidence is reported observation, not automatic tenant certification.', {
-    repo_id:z.string(), action:z.enum(['browser_handoff','read','evidence_index','task_input','save','inspect_repository','finding','synthesize_design','design_result','review','reject_inputs','review_task','reconcile_task','accept_slice','schema_bootstrap','canvas_packaging']), expected_revision:z.number().int().nonnegative().optional(), payload_json:z.string().max(256*1024).optional(),
-  }, async input => {try{return {content:[{type:'text' as const,text:handler?await handler(input):'Delivery records unavailable'}]};}catch(error){return {isError:true,content:[{type:'text' as const,text:`Refused: ${(error as Error).message}`}]};}})];
+export type RecordToolHandler = (input: {repo_id:string; action:'browser_handoff'|'read'|'evidence_index'|'accepted_reports'|'task_input'|'save'|'amend_plan'|'inspect_repository'|'finding'|'synthesize_design'|'design_result'|'review'|'reject_inputs'|'review_task'|'reconcile_task'|'accept_slice'|'schema_bootstrap'|'canvas_packaging'; expected_revision?:number; payload_json?:string}) => Promise<string>;
+function recordTools(handler?:RecordToolHandler,coordinator=false) {
+  return [tool('delivery_record', 'Read the shared delivery record and gates. For bounded receipt metadata use evidence_index with payload_json {findingId?,reference?,startIndex:0,maxEntries:20}; later pages require that exact reference. CEO/manager may amend_plan with only changed planning sections, retaining server-owned findings, source, target and owners; complete validation and fresh review still apply. Workers add discovery findings; assigned QA reviews an exact design. Payload contracts are in docs/DELIVERY.md. Evidence is observation, not automatic tenant certification.', {
+    repo_id:z.string(), action:z.enum(['browser_handoff','read','evidence_index','accepted_reports','task_input','save','amend_plan','inspect_repository','finding','synthesize_design','design_result','review','reject_inputs','review_task','reconcile_task','accept_slice','schema_bootstrap','canvas_packaging']), expected_revision:z.number().int().nonnegative().optional(), payload_json:z.string().max((coordinator?1024:256)*1024).optional(),
+  }, async input => {try{if(Buffer.byteLength(input.payload_json??'{}','utf8')>(coordinator&&input.action==='save'?1024*1024:256*1024))throw Error('Delivery record payload exceeds the bounded action limit');return {content:[{type:'text' as const,text:handler?await handler(input):'Delivery records unavailable'}]};}catch(error){return {isError:true,content:[{type:'text' as const,text:`Refused: ${(error as Error).message}`}]};}})];
 }
 
 function authorizeDefinitions<T extends OfficeToolDefinition>(defs: T[], authorize?: SessionAuthorization): T[] {
@@ -84,7 +86,7 @@ function skillTools() {
   ];
 }
 
-function sourceTools(read?:(input:unknown)=>Promise<unknown>){return [tool('read_delivery_source','Read bounded approved office guidance or a pinned committed repository file. request_json: {kind:"office-document",document:"DELIVERY"|"APPLICATION-SPECIFICATION"|"FIRST-SLICE"|"QUALITY-EVIDENCE"|"WORKER-READINESS"|"TASK-EXECUTION",startLine:1,maxLines:80} or {kind:"repository-file",file:"README.md",startLine:1,maxLines:80}. maxLines is 1..120. Continue at endLine+1 until endLine equals totalLines, supplying returned expectedSha256 for every further page. Or {kind:"discovery-evidence",reference:{id,revision,sha256},findingId,expectedSha256,startCharacter:0,maxCharacters:6000} for an exact cited server receipt; follow nextCharacter until null. Expired receipts stay historical. No arbitrary filesystem or shell access.',{request_json:z.string().min(2).max(4096)},async a=>{if(!read)throw new Error('Scoped delivery source reader unavailable');return {content:[{type:'text' as const,text:JSON.stringify(await read(parseUnambiguousJson(a.request_json,{maxBytes:4096})))}]};})];}
+function sourceTools(read?:(input:unknown)=>Promise<unknown>){return [tool('read_delivery_source','Read bounded approved office guidance or a pinned committed repository file. request_json: {kind:"office-document",document:"DELIVERY"|"APPLICATION-SPECIFICATION"|"FIRST-SLICE"|"QUALITY-EVIDENCE"|"HEADLESS-FLOW"|"HEADLESS-FLOW-CONTRACT"|"WORKER-READINESS"|"TASK-EXECUTION",startLine:1,maxLines:80} or {kind:"repository-file",file:"README.md",startLine:1,maxLines:80}. maxLines is 1..120. Continue at endLine+1 until endLine equals totalLines, supplying returned expectedSha256 for every further page. Or {kind:"discovery-evidence",reference:{id,revision,sha256},findingId,expectedSha256,startCharacter:0,maxCharacters:6000} for an exact cited server receipt; follow nextCharacter until null. Expired receipts stay historical. No arbitrary filesystem or shell access.',{request_json:z.string().min(2).max(4096)},async a=>{if(!read)throw new Error('Scoped delivery source reader unavailable');return {content:[{type:'text' as const,text:JSON.stringify(await read(parseUnambiguousJson(a.request_json,{maxBytes:4096})))}]};})];}
 export function createOfficeTools(h: OfficeHandlers, authorize?: SessionAuthorization): OfficeTools {
   const run = async (fn: () => string | Promise<string>) => {
     try {
@@ -94,7 +96,15 @@ export function createOfficeTools(h: OfficeHandlers, authorize?: SessionAuthoriz
     }
   };
   let defs = [
-    ...recordTools(h.deliveryRecord),
+    ...sourceTools(async input=>{
+      const request=deliverySourceRequest.parse(input);
+      if(request.kind!=='office-document'&&(request.kind!=='discovery-evidence'||!h.readDiscoveryEvidence))throw new Error('Coordinator source reader admits approved office documents and server-bound discovery receipts only');
+      const result=request.kind==='discovery-evidence'?await h.readDiscoveryEvidence!(request):await readDeliverySource(request,{repoId:'__office__',sourceCommit:null,read:async()=>{throw new Error('Repository reader unavailable');},guard:()=>{}});
+      const denied=authorize?await sessionAuthority(authorize):null;
+      if(denied)throw new Error(denied.reason);
+      return result;
+    }),
+    ...recordTools(h.deliveryRecord,true),
     tool('review_delivery_record','Start the assigned independent QA agent on discovery and design before implementation.',{repo_id:z.string()},a=>run(()=>h.reviewDeliveryRecord?h.reviewDeliveryRecord(a.repo_id):'Delivery record review unavailable')),
     ...skillTools(),
     tool('capability_status', 'Pre-assignment authentication, environment, licence, MCP, CLI and connector readiness; failed/unknown checks block new work.', {}, () => run(() => h.capabilityStatus?.() ?? 'Capability service unavailable')),
@@ -483,7 +493,7 @@ export function createDeliveryQaTools(status: () => string, approve: (id: string
 /** Developer sessions can discover starters/readiness without obtaining release approval authority. */
 function platformReadTools(capabilities:()=>string,discovery?:(input:unknown)=>Promise<unknown>){return [
  tool('capability_status','Read verified project capabilities and actionable blockers.',{},async()=>({content:[{type:'text' as const,text:capabilities()}]})),
- tool('platform_discovery','Read session-bound identity/environment, entitlements, permissions or standard connector metadata with a hashed receipt. request_json is {kind:"identity"|"environments"|"assigned-licenses"|"resource-permissions"|"delivery-permissions"|"delivery-authoring-prerequisites"|"write-readiness"|"sharepoint-sites"}, {kind:"user-entitlements",username:"exact nominated UPN"}, {kind:"connector-operations",connector:"shared_sharepointonline"|"shared_teams"|"shared_approvals",query:"folder"}, {kind:"operation",connector:...,operation:"exact discovered ID"}, or {kind:"sharepoint-list-schema",resourceKey:"exact planned key"} for a completed verified list through GetTable. Metadata only; no authoring, arbitrary HTTP, provisioning, connection repairs or release approval.',{request_json:z.string().min(2).max(4096)},async a=>{if(!discovery)throw Error('Scoped platform metadata discovery unavailable');return {content:[{type:'text' as const,text:JSON.stringify(await discovery(parseUnambiguousJson(a.request_json,{maxBytes:4096})))}]};}),
+ tool('platform_discovery','Read session-bound identity/environment, entitlements, permissions or standard connector metadata with a hashed receipt. request_json is {kind:"identity"|"environments"|"assigned-licenses"|"ai-prompt-metadata"|"headless-authoring-rights"|"private-report-metadata"|"headless-dispatch-reconciliation"|"repository-access"|"headless-discovery-contracts"|"dlp-inventory"|"resource-permissions"|"delivery-permissions"|"delivery-authoring-prerequisites"|"write-readiness"|"sharepoint-sites"}, {kind:"user-entitlements",username:"exact nominated UPN"}, {kind:"connector-operations",connector:"shared_sharepointonline"|"shared_teams"|"shared_approvals"|"shared_office365"|"shared_commondataserviceforapps",query:"folder"}, {kind:"operation",connector:...,operation:"exact discovered ID"}, or {kind:"sharepoint-list-schema",resourceKey:"exact planned key"} for a completed verified list through GetTable. Metadata only; no authoring, arbitrary HTTP, provisioning, connection repairs or release approval.',{request_json:z.string().min(2).max(4096)},async a=>{if(!discovery)throw Error('Scoped platform metadata discovery unavailable');return {content:[{type:'text' as const,text:JSON.stringify(await discovery(parseUnambiguousJson(a.request_json,{maxBytes:4096})))}]};}),
 ];}
 export function createEngineeringTools(capabilities: () => string, authoring?: { acquire(app: string, owner: string): Promise<unknown>; release(token: string): Promise<void> }, authorize?: SessionAuthorization, records?:RecordToolHandler,discovery?:(input:unknown)=>Promise<unknown>,sources?:(input:unknown)=>Promise<unknown>,sharepoint?:(input:unknown)=>Promise<unknown>): OfficeTools {
   let defs = [

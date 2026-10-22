@@ -1,3 +1,6 @@
+import {rehearseHeadlessLifecycle} from './headlessFlowVerification.ts';
+import {loadAcceptedHeadlessReport} from './headlessAcceptedReport.ts';
+import type {ExecutionPhase} from '../shared/executionEvidence.ts';
 import {functionalTransportCheck} from '../shared/functionalShowcase.ts';
 import {verifyFunctionalRejection} from './functionalRejection.ts';
 import {createFunctionalRecovery} from './functionalRecovery.ts';
@@ -73,7 +76,7 @@ export const deliveryManifest = z.object({
   importTransport:z.enum(['pac','dataverse-tracked']).optional(),
   preparation:pinnedArtifactSchema.optional(),
   canvasAuthoringApps: z.array(z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i)).max(30).default([]),
-  recovery: z.object({ runbook: z.string().min(1), rehearsalReport: z.string().min(1).optional(),scope:z.enum(['pilot-owned-development-records','empty-solution-only','functional-owned-request']).optional() }).strict(),
+  recovery: z.object({ runbook: z.string().min(1), rehearsalReport: z.string().min(1).optional(),scope:z.enum(['pilot-owned-development-records','empty-solution-only','functional-owned-request','headless-owned-development-flow']).optional() }).strict(),
   documentation: z.array(z.string().min(1)).min(3),
   build: z.array(command).max(10), test: z.array(command).max(10),
   postDeploy: z.array(command).max(10).default([]), verify: z.array(command).max(10),
@@ -87,6 +90,7 @@ export const deliveryManifest = z.object({
   if(manifest.preparation){if(manifest.build.length||manifest.test.length||manifest.verify.length||manifest.postDeploy.length)ctx.addIssue({code:'custom',message:'Pinned preparation forbids custom executable commands'});}
   else if(!manifest.build.length||!manifest.test.length||!manifest.verify.length)ctx.addIssue({code:'custom',message:'Legacy delivery requires build, test and verification commands'});
   if(manifest.recovery.scope==='empty-solution-only'&&(!manifest.preparation||!manifest.manualDevelopmentGovernance||manifest.importTransport!=='dataverse-tracked'||manifest.hasUi||manifest.targetComponents.length||manifest.postDeployActions.length||manifest.settingsFile))ctx.addIssue({code:'custom',message:'Empty-solution exclusion requires typed tracked development import with no application components/actions'});
+  if(manifest.recovery.scope==='headless-owned-development-flow'&&(manifest.hasUi||!manifest.manualDevelopmentGovernance||!manifest.targetBinding||!manifest.platformIdentity||manifest.targetComponents.filter(c=>c.kind==='cloud-flow').length!==1||manifest.targetComponents.some(c=>!['cloud-flow','connection-reference'].includes(c.kind))||manifest.sharepoint))ctx.addIssue({code:'custom',message:'Headless recovery is restricted to one explicitly bound Development flow and its connection references'});
   if(manifest.importTransport==='dataverse-tracked'&&(!manifest.manualDevelopmentGovernance||manifest.settingsFile))ctx.addIssue({code:'custom',message:'Tracked import currently requires reviewed manual development governance without PAC settings or publish-changes'});
   if(manifest.importTransport==='dataverse-tracked'&&(!manifest.targetBinding||!manifest.platformIdentity))ctx.addIssue({code:'custom',message:'Tracked import requires the approved target binding and executing platform identity'});
   if(!manifest.recovery.scope&&!manifest.recovery.rehearsalReport)ctx.addIssue({code:'custom',message:'Production recovery requires a separate-environment rehearsal report'});
@@ -213,6 +217,8 @@ export class DeliveryService {
   checkCapabilities: (repoId: string, cwd: string, environment: string, force: boolean) => Promise<{ status: string; configHash?: string; checks: { id: string; category: string; passed: boolean; remedy: string }[] }> = async () => { throw new Error('Configure capability checks before delivery'); };
   validateMonitoring?: (repoId:string,plan:ReleasePlan,manifest:MonitoringManifest,environmentUrl:string)=>void;
   checkDeliveryRecord?: (repo:Pick<RepoView,'id'>,plan:ReleasePlan) => void;
+  checkExecutionEvidence?:(repoId:string,plan:ReleasePlan,runId:string,phase:ExecutionPhase,guard:()=>void)=>Promise<void>;
+  acceptedHeadlessSlice?:(repoId:string,plan:ReleasePlan)=>{runId:string;evidenceHash:string};
   checkGovernance?: LifecycleCheck;
   private lease: DeliveryLease | null = null;
   private writer = new SerialWriter();
@@ -564,6 +570,29 @@ export class DeliveryService {
     for (const name of [...new Set(run.evidence)].sort()) { hash.update(name); hash.update(await fs.readFile(await containedFile(path.join(this.root, 'delivery-runs', run.id, 'evidence'), name))); }
     return hash.digest('hex');
   }
+  private async acceptedReportFor(plan:ReleasePlan,run:DeliveryRun,signal:AbortSignal,guard:()=>Promise<void>){
+    await guard();signal.throwIfAborted();const headless=plan.verification.headlessFlow,accepted=this.acceptedHeadlessSlice?.(run.repoId,plan);
+    const prior=this.state.runs.find(item=>item.id===accepted?.runId),priorRelease=this.state.releases.find(item=>item.id===prior?.releaseId);
+    if(!headless?.dispatchReport||!accepted||!prior||!priorRelease||await this.evidenceHash(prior)!==accepted.evidenceHash)throw Error('Independently accepted slice report evidence is unavailable');
+    const snapshot=JSON.stringify(accepted);
+    const value=await loadAcceptedHeadlessReport(headless,{repoId:run.repoId,environmentUrl:run.environmentUrl,qaOwner:plan.qaOwner},accepted,prior,priorRelease,this.root,signal,guard);
+    await guard();signal.throwIfAborted();if(JSON.stringify(this.acceptedHeadlessSlice?.(run.repoId,plan))!==snapshot||!this.state.runs.includes(prior)||!this.state.releases.includes(priorRelease)||await this.evidenceHash(prior)!==accepted.evidenceHash)throw Error('Accepted slice report authority changed');
+    return value;
+  }
+  async acceptedHeadlessReports(repoId:string,recordId:string,qaOwner:string,environmentUrl:string,accepted:{runId:string;evidenceHash:string},sessionGuard:()=>void){
+    const guard=async()=>{this.requireReady();sessionGuard();};await guard();
+    const source=this.state.runs.find(run=>run.id===accepted.runId),release=this.state.releases.find(item=>item.id===source?.releaseId),plan=release?.plan.verification.headlessFlow;
+    if(!source||!release||!plan?.privateReport||plan.privateReport.recordId!==recordId||source.repoId!==repoId||await this.evidenceHash(source)!==accepted.evidenceHash)throw Error('Accepted slice report metadata unavailable');
+    const evidence=path.join(this.root,'delivery-runs',source.id,'evidence'),reports=[];
+    for(const [index,check] of plan.checks.entries())if(check.mode==='dry-run'&&check.expectedStatus==='Succeeded'){
+      await guard();const file='headless-'+index+'-receipt.json';if(!source.evidence.includes(file))throw Error('Accepted report receipt unavailable');
+      const receipt=z.object({privateReportSha256:z.string().regex(/^[a-f0-9]{64}$/)}).parse(await readBoundedJson(await containedFile(evidence,file),65536));
+      const verified=await loadAcceptedHeadlessReport({...plan,dispatchReport:{sliceRunId:source.id,checkName:check.name,reportSha256:receipt.privateReportSha256}},{repoId,environmentUrl,qaOwner},accepted,source,release,this.root,AbortSignal.timeout(45000),guard);
+      reports.push({sliceRunId:source.id,checkName:check.name,reportSha256:verified.reportSha256,providerRunId:verified.providerRunId,flowId:plan.flowId,definitionSha256:plan.definitionSha256});
+    }
+    await guard();if(!reports.length||!this.state.runs.includes(source)||!this.state.releases.includes(release)||await this.evidenceHash(source)!==accepted.evidenceHash)throw Error('Accepted report metadata changed');
+    return{scope:'accepted-headless-report-metadata',reports,privateContentReturned:false,dispatchAuthorized:false};
+  }
   private async assertFirstSliceEvidence(run:DeliveryRun,release:DeliveryRelease){
     if(!release.plan.firstSlice)return;
     const evidence=path.join(this.root,'delivery-runs',run.id,'evidence');
@@ -643,6 +672,13 @@ export class DeliveryService {
   private async governance(run:DeliveryRun,manifest:unknown,phase:GovernancePhase) {
     const releaseId=run.releaseId;
     if(!releaseId) throw new Error('Lifecycle governance requires a pinned release identity');
+    if(this.checkExecutionEvidence){
+      const release=this.state.releases.find(r=>r.id===releaseId),controller=this.active;
+      if(!release)throw new Error('Execution admission release is unavailable');
+      const snapshot=JSON.stringify(release),policy=JSON.stringify(this.state.policy);
+      const guard=()=>{if(this.closed||this.draining||controller!==this.active||controller?.signal.aborted||!this.state.releases.includes(release)||JSON.stringify(release)!==snapshot||JSON.stringify(this.state.policy)!==policy)throw new Error('Phase execution ownership changed');this.checkDeliveryRecord?.({id:run.repoId},release.plan);};
+      guard();await this.checkExecutionEvidence(run.repoId,release.plan,run.id,phase==='verify'||phase==='health'?'verification':'deployment',guard);guard();
+    }
     const checkout=path.join(this.root,'delivery-runs',run.id,'checkout');
     let packageSha256:string|undefined;
     let settingsSha256:string|undefined;
@@ -820,6 +856,17 @@ export class DeliveryService {
         await atomicWrite(path.join(evidence,'functional-recovery-pending.json'),JSON.stringify({schemaVersion:1,kind:'functional-request-recovery-pending',runId:run.id,sourceCommit:run.head,solutionRollbackVerified:false,requestRecoveryVerified:false}));
         run.recovery={inventoryFile:'previous-inventory.json',runbook:'recovery-runbook.md',drillReport:'functional-recovery-pending.json',packageSha256:await stablePackageDigest(zip,controller.signal)};run.evidence.push('previous-inventory.json','recovery-runbook.md','functional-recovery-pending.json');await this.save();
       }
+      if(!run.recovery&&manifest.recovery.scope==='headless-owned-development-flow'){
+        const plan=release.plan.verification.headlessFlow;
+        if(!plan||!flow||manifest.hasUi||!manifest.manualDevelopmentGovernance||release.plan.acceptanceProfile!=='functional-development'||cloudComponents.length!==1||manifest.targetComponents.some(c=>!['cloud-flow','connection-reference'].includes(c.kind)))throw Error('Headless recovery requires an explicitly reviewed dedicated manual Development flow');
+        const mapping=await mapTargetComponents(request,manifest.solutionUniqueName,manifest.targetComponents,run.environmentUrl);if(mapping.find(c=>c.kind==='cloud-flow')?.id.toLowerCase()!==plan.flowId.toLowerCase())throw Error('Headless recovery flow differs from the exact owned solution component');
+        const bytes=await fs.readFile(await containedFile(checkout,manifest.recovery.runbook));
+        const guard=async()=>{controller.signal.throwIfAborted();recordGate();await this.assertLeaseOwned();await targetLease!.assertOwned();await this.governance(run,manifest,'post-deploy');recordGate();};
+        await guard();const observed=await rehearseHeadlessLifecycle(plan,run.environmentUrl,evidence,flow,controller.signal,guard);
+        await atomicWrite(path.join(evidence,'previous-inventory.json'),priorInventory);await fs.writeFile(path.join(evidence,'recovery-runbook.md'),bytes,{flag:'wx'});
+        await atomicWrite(path.join(evidence,'headless-recovery-binding.json'),JSON.stringify({runId:run.id,sourceCommit:run.head,procedureSha256:crypto.createHash('sha256').update(bytes).digest('hex'),receipt:observed.receipt}));
+        run.recovery={inventoryFile:'previous-inventory.json',runbook:'recovery-runbook.md',drillReport:'headless-recovery-binding.json',packageSha256:await stablePackageDigest(zip,controller.signal)};run.evidence.push('previous-inventory.json','recovery-runbook.md','headless-recovery-binding.json',...observed.files);await this.save();
+      }
       if (!run.recovery) {
         const runbook = await containedFile(checkout, manifest.recovery.runbook);
         const reportFile = manifest.recovery.scope?undefined:await containedFile(checkout, manifest.recovery.rehearsalReport!);
@@ -985,11 +1032,13 @@ export class DeliveryService {
         await this.assertLeaseOwned();await targetLease!.assertOwned();
         const qaContext={runId:run.id,releaseId:release.id,planHash:release.planHash,recordSha256:release.plan.deliveryRecord?.sha256??'',sourceCommit:run.head,environmentUrl:run.environmentUrl,startedAt:run.startedAt};
         const qaOwned=async()=>{controller.signal.throwIfAborted();await this.assertLeaseOwned();await targetLease!.assertOwned();recordGate();};
+        const headless=release.plan.verification.headlessFlow;
+        const acceptedReport=headless?.dispatchReport?()=>this.acceptedReportFor(release.plan,run,controller.signal,qaOwned):undefined;
         let functionalObserver:Awaited<ReturnType<typeof createFunctionalRecovery>>|undefined;
         if(functional){if(!flow||!manifest.platformIdentity||!manifest.sharepoint)throw Error('Functional recovery native adapters unavailable');const component=verifiedMapping.find(c=>c.key===functional.recovery.flowComponent)!;await verifyCloudFlowContext(flow,manifest.platformIdentity,component.id,component.id,manifest.solutionUniqueName);const sp=manifest.sharepoint.plan;const graph=await (this.deps.sharepoint??connectSharepointGraph)(sp.tenantId,sp.username,checkout,controller.signal,()=>{controller.signal.throwIfAborted();recordGate();},{run:async(item,cwd)=>command(item.executable,item.args,cwd,qaOwned),fetch:globalThis.fetch});functionalObserver=await createFunctionalRecovery({config:functional,context:qaContext,evidence,captureRoot:path.join(this.resourceLeaseRoot,'functional-recovery-captures'),leaseSha256:this.lease!.identitySha256,procedureSha256:qualityBytesHash(await fs.readFile(path.join(evidence,'recovery-runbook.md'))),flow,flowId:component.id,environmentId:manifest.platformIdentity.environmentId,graph,guard:qaOwned});}
         independent ??= release.plan.verification.api
           ? await verifyApiIndependently(release.plan.verification.api, request, evidence, controller.signal,{runId:run.id,sourceCommit:run.head})
-          : await journalNativeCommand(this.root,this.lease!.identitySha256,{executable:'external-browser-verification',args:[]},checkout,run.id,()=>this.assertLeaseOwned(),()=>(this.deps.verify ?? verifyIndependently)(release.plan, this.root, evidence, controller.signal,undefined,functionalObserver?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl,scenarioStarted:functionalObserver.scenarioStarted,scenarioCompleted:functionalObserver.scenarioCompleted}:coordinatorBrowserEnabled()?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl}:undefined));
+          : await journalNativeCommand(this.root,this.lease!.identitySha256,{executable:release.plan.verification.headlessFlow?'external-headless-flow-verification':'external-browser-verification',args:[]},checkout,run.id,()=>this.assertLeaseOwned(),()=>(this.deps.verify ?? verifyIndependently)(release.plan, this.root, evidence, controller.signal,undefined,release.plan.verification.headlessFlow?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl,assertOwned:qaOwned,...(this.checkExecutionEvidence?{executionAdmission:async(phase:ExecutionPhase)=>{await qaOwned();await this.checkExecutionEvidence!(run.repoId,release.plan,run.id,phase,()=>{controller.signal.throwIfAborted();recordGate();});await qaOwned();}}:{}),...(acceptedReport?{acceptedHeadlessReport:acceptedReport}:{})}:functionalObserver?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl,scenarioStarted:functionalObserver.scenarioStarted,scenarioCompleted:functionalObserver.scenarioCompleted}:coordinatorBrowserEnabled()?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl}:undefined));
         await this.assertLeaseOwned();await targetLease!.assertOwned();
         if (copilotComponents.length) {
           await atomicWrite(path.join(evidence, 'copilot-verification.json'), JSON.stringify({ environmentUrl: run.environmentUrl, sourceCommit: run.head, mapping: verifiedMapping.filter((c) => c.kind === 'copilot'),

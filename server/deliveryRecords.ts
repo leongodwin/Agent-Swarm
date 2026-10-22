@@ -12,7 +12,7 @@ import {taskInputPrompt,taskPlanningBlockers,TASK_CONTEXT_BYTES} from './taskInp
 import type {DeliveryRelease, DeliveryRun} from '../shared/delivery.ts';
 
 const stateSchema = recordSnapshotSchema;
-export interface RecordContext {brief:string; environmentUrl?:string;tenantId?:string}
+export interface RecordContext {brief:string; environmentUrl?:string;tenantId?:string;executionEvidenceVersion?:1}
 const digest = (record: Pick<DeliveryRecord,'id'|'repoId'|'revision'|'previousSha256'|'content'>) => crypto.createHash('sha256').update(JSON.stringify({id:record.id,repoId:record.repoId,revision:record.revision,previousSha256:record.previousSha256,content:record.content})).digest('hex');
 export class DeliveryRecords {
   private records: DeliveryRecord[] = [];
@@ -59,6 +59,7 @@ export class DeliveryRecords {
     return record;
   }
   assertContext(record:Pick<DeliveryRecord,'content'>, context:RecordContext) {
+    if(record.content.findings.some(f=>f.executionEvidence)&&context.executionEvidenceVersion!==1)throw new HttpError(409,'Phase execution admission is not configured; approval and execution remain blocked');
     if(record.content.brief !== context.brief || record.content.environmentUrl?.replace(/\/$/,'').toLowerCase() !== context.environmentUrl?.replace(/\/$/,'').toLowerCase()) throw new HttpError(409,'Brief or target changed; update discovery and obtain a fresh design review');
     if(record.content.governanceProfile&&record.content.governanceProfile.tenantId.toLowerCase()!==context.tenantId?.toLowerCase())throw new HttpError(409,'Governance entitlement profile does not match the approved tenant');
   }
@@ -165,6 +166,7 @@ export class DeliveryRecords {
   assertRelease(repoId:string,plan:DeliveryRelease['plan'],context:RecordContext) {
     if(!plan.deliveryRecord)throw new HttpError(409,'Pin the shared delivery record and release purpose');
     const record=this.match(repoId,plan.deliveryRecord);this.assertDiscovery(repoId,context);
+    if(record.content.findings.some(f=>f.executionEvidence)&&!plan.verification.headlessFlow)throw new HttpError(409,'Phase evidence currently requires the guarded headless verification adapter');
     if(record.content.owner!==plan.owner||record.content.qaOwner!==plan.qaOwner)throw new HttpError(409,'Release ownership differs from the shared record');
     if(record.designReview?.decision!=='approved'||record.designReview.artifactSha256!==plan.architecture?.sha256||record.designReview.docId!==plan.architecture.docId)throw new HttpError(409,'Release must use the independently reviewed design');
     if(plan.deliveryRecord.purpose==='expansion'&&(!record.sliceReceipt||record.content.applicationSpec&&(!record.sliceReceipt.firstSlice||!record.sliceReceipt.qualityAcceptance)))throw new HttpError(409,'First deployed slice acceptance is required before an expansion release');

@@ -1,4 +1,6 @@
 import {prepareTaskReconciliationReview} from './taskReconciliationReview.ts';
+import {ExecutionAdmission,type ExecutionAttempt} from './executionAdmission.ts';
+import {platformDiscoveryBinding} from './platformDiscovery.ts';
 import {BrowserHandoff,browserCoordinatorAction,browserTargetConfiguration} from './browserHandoff.ts';
 import {connectFlowAdapter} from './flowAdapter.ts';
 import {ExecutionLedger} from './executionLedger.ts';
@@ -85,7 +87,7 @@ try{await deliveryRecords.init();}catch{console.warn('Delivery records unavailab
 const recordContext=(repoId:string)=>{
   const repo=swarm.snapshot().repos.find(repo=>repo.id===repoId);
   if(!repo)throw new HttpError(404,'Repository is not connected');
-  return {brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId,checkoutPath:repo.checkoutPath};
+  return {brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId,checkoutPath:repo.checkoutPath,executionEvidenceVersion:1 as const};
 };
 const bootstrapFor=(repoId:string,outerGuard:()=>void=()=>{})=>{
  const context=recordContext(repoId),record=deliveryRecords.current(repoId),config=capabilities.configuration(repoId);
@@ -113,7 +115,7 @@ const coordinatorBrowser=async(repoId:string,payload:unknown,actor:{id:string;ro
  const input=browserCoordinatorAction.parse(payload);if(input.action==='inspect'){if(!['dev','qa','manager'].includes(actor.role))throw new HttpError(403,'Browser evidence requires project role');const rows=await browserHandoff.list(repoId);guard();return rows.filter(r=>actor.role!=='dev'||r.actor===actor.id);}
  if(actor.role!=='manager')throw new HttpError(403,'Only the authenticated coordinator may fulfill browser work');return input.action==='claim'?browserHandoff.claim(repoId,input.id,guard):browserHandoff.complete(repoId,input.id,input.result,guard);
 };
-const recordDependencies={browserHandoff:coordinatorBrowser,verifyAcceptedTask:(repoId:string,issue:number,source:import('../shared/deliveryRecord.ts').DeliveryRecord,receipt:NonNullable<import('../shared/deliveryRecord.ts').DeliveryRecord['taskAcceptances']>[number],originalQa?:import('./taskReconciliation.ts').OriginalTaskQa)=>swarm.verifyAcceptedTask(repoId,issue,source,receipt,originalQa),canvasPackaging:async(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void)=>{const data=packagingReviewRequest.parse(payload),service=packagingFor(repoId,guard);if(data.action==='inspect')return service.packaging.inspect(guard);if(data.action==='inspect-recovery')return service.recovery.inspect(guard);const {action,...review}=data;return action==='review-recovery'?service.recovery.review(review,actor,guard):service.packaging.review(review,actor,guard);},schemaBootstrap:async(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void)=>{const data=schemaBootstrapReviewRequest.parse(payload);const runner=bootstrapFor(repoId,guard);if(data.action==='inspect')return runner.inspect();const{action,...review}=data;return runner.review(review,actor);},verifySliceAcceptance:(id:string)=>delivery.verifySliceAcceptance(id),repo:recordContext,agents:()=>swarm.snapshot().agents,delivery:(repoId:string)=>delivery.view(repoId),get synthesis(){return synthesis;},inspectRepository:(checkoutPath:string,guard:()=>void)=>inspectRepository(checkoutPath,path.join(HOME_DIR,'planning','evidence'),guard),assertOpen:()=>{if(officeShutdown.closed||swarm.isDraining)throw new HttpError(503,'Office maintenance/shutdown pauses record changes');if(backend.demo)throw new HttpError(409,'Demo cannot change or certify delivery records');}};
+const recordDependencies={acceptedReports:(repoId:string,record:import('../shared/deliveryRecord.ts').DeliveryRecord,guard:()=>void)=>{if(!record.sliceReceipt)throw new HttpError(409,'Accept a slice before selecting its report');return delivery.acceptedHeadlessReports(repoId,record.id,record.content.qaOwner,record.content.environmentUrl??"",record.sliceReceipt,guard);},browserHandoff:coordinatorBrowser,verifyAcceptedTask:(repoId:string,issue:number,source:import('../shared/deliveryRecord.ts').DeliveryRecord,receipt:NonNullable<import('../shared/deliveryRecord.ts').DeliveryRecord['taskAcceptances']>[number],originalQa?:import('./taskReconciliation.ts').OriginalTaskQa)=>swarm.verifyAcceptedTask(repoId,issue,source,receipt,originalQa),canvasPackaging:async(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void)=>{const data=packagingReviewRequest.parse(payload),service=packagingFor(repoId,guard);if(data.action==='inspect')return service.packaging.inspect(guard);if(data.action==='inspect-recovery')return service.recovery.inspect(guard);const {action,...review}=data;return action==='review-recovery'?service.recovery.review(review,actor,guard):service.packaging.review(review,actor,guard);},schemaBootstrap:async(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void)=>{const data=schemaBootstrapReviewRequest.parse(payload);const runner=bootstrapFor(repoId,guard);if(data.action==='inspect')return runner.inspect();const{action,...review}=data;return runner.review(review,actor);},verifySliceAcceptance:(id:string)=>delivery.verifySliceAcceptance(id),repo:recordContext,agents:()=>swarm.snapshot().agents,delivery:(repoId:string)=>delivery.view(repoId),get synthesis(){return synthesis;},inspectRepository:(checkoutPath:string,guard:()=>void)=>inspectRepository(checkoutPath,path.join(HOME_DIR,'planning','evidence'),guard),assertOpen:()=>{if(officeShutdown.closed||swarm.isDraining)throw new HttpError(503,'Office maintenance/shutdown pauses record changes');if(backend.demo)throw new HttpError(409,'Demo cannot change or certify delivery records');}};
 const sourceReaderFor=(agentId:string,repoId:string)=>async(input:unknown)=>{
   const context=recordContext(repoId),session=swarm.planningSessionGuard(agentId),sourceCommit=deliveryRecords.current(repoId)?.content.sourceCommit??null;
   const agent=swarm.snapshot().agents.find(agent=>agent.id===agentId&&agent.repoId===repoId);if(!agent||!['dev','qa'].includes(agent.role))throw new HttpError(403,'Source reads require an active project worker');
@@ -121,6 +123,14 @@ const sourceReaderFor=(agentId:string,repoId:string)=>async(input:unknown)=>{
   const guard=()=>{recordDependencies.assertOpen();session();signal.throwIfAborted();if(JSON.stringify(context)!==JSON.stringify(recordContext(repoId))||sourceCommit!==(deliveryRecords.current(repoId)?.content.sourceCommit??null)||issue&&scope!==swarm.deliveryTaskFingerprint(repoId,issue))throw new HttpError(409,'Source scope changed; use the current admitted context');};
   const request=deliverySourceRequest.parse(input);
   return readDeliverySource(request,{repoId,sourceCommit,guard,evidence:request.kind==='discovery-evidence'?{home:HOME_DIR,repoId,guard,record:()=>deliveryRecords.current(repoId),findingIds:deliveryEvidenceFindingIds(deliveryRecords.current(repoId),issue,agent.role==='qa'?'qa':'dev')}:undefined,read:file=>readPinnedBlob(async args=>{guard();const output=await deliveryCommands.run({executable:'git',args},context.checkoutPath,{},signal);guard();return output;},sourceCommit!,file)});
+};
+swarm.coordinatorEvidenceRead=async(input,session,repoIds)=>{
+ const request=deliverySourceRequest.parse(input);session();if(request.kind!=='discovery-evidence')throw new HttpError(403,'Coordinator receipt reader requires an exact discovery reference');
+ const matches=repoIds.map(repoId=>deliveryRecords.current(repoId)).filter(record=>record?.id===request.reference.id);
+ if(matches.length!==1||!matches[0])throw new HttpError(403,'Discovery record is outside the coordinator project scope');
+ const record=matches[0],repoId=record.repoId,context=recordContext(repoId);
+ const guard=()=>{recordDependencies.assertOpen();session();const current=deliveryRecords.current(repoId);if(!current||JSON.stringify(recordContext(repoId))!==JSON.stringify(context))throw new HttpError(409,'Coordinator discovery target changed');deliveryRecords.assertContext(current,context);};
+ guard();return readDeliverySource(request,{repoId,sourceCommit:record.content.sourceCommit,guard,evidence:{home:HOME_DIR,repoId,record:()=>deliveryRecords.current(repoId),guard},read:async()=>{throw new HttpError(403,'Coordinator repository reads are not admitted');}});
 };
 const recordHandler=(id:string,role:'ceo'|'dev'|'qa'|'manager',repoId?:string):import('./ceo.ts').RecordToolHandler=>async input=>{
   const agent=role==='manager'?undefined:swarm.snapshot().agents.find(agent=>role==='ceo'?agent.role==='ceo':agent.id===id&&agent.repoId===repoId);
@@ -154,15 +164,16 @@ swarm.deliveryTaskComplete=async(repoId,issue,evidence)=>{
 };
 
 delivery.checkDeliveryRecord=(repo,plan)=>{const record=deliveryRecords.assertRelease(repo.id,plan,recordContext(repo.id));if(record.content.environmentUrl?.replace(/\/$/,'').toLowerCase()!==delivery.view().policy?.environmentUrl.replace(/\/$/,'').toLowerCase())throw new HttpError(409,'Shared record target differs from the authorised deployment target');};
+delivery.acceptedHeadlessSlice=(repoId,plan)=>{const record=deliveryRecords.assertRelease(repoId,plan,recordContext(repoId));if(plan.deliveryRecord?.purpose!=='expansion'||!record.sliceReceipt)throw new HttpError(409,'An independently accepted slice report is required');return{runId:record.sliceReceipt.runId,evidenceHash:record.sliceReceipt.evidenceHash};};
 swarm.requestRecordReview=async repoId=>{const record=deliveryRecords.current(repoId);if(!record)throw new HttpError(409,'Create a shared delivery record before requesting review');deliveryRecords.assertContext(record,recordContext(repoId));return swarm.reviewDeliveryRelease(record.content.qaOwner,repoId,`delivery record ${record.revision}`,true);};
 if(maintenance.draining)delivery.setDraining(true);
 const toolGovernance = new ToolGovernanceService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'), () => (!delivery.available||!!delivery.view().policy?.copilotPaused));
 await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
 await tenantDlp.init();
-const manualSourceFiles=['index.ts','sharepointWriteReadiness.ts','deliveryPermissions.ts','resourcePermissions.ts','userEntitlements.ts','delegatedEvidenceReader.ts','standardDlpEvidence.ts','callerLicensing.ts','platformDiscovery.ts','deliveryEvidenceRead.ts','deliverySourceRead.ts','synthesisEvidence.ts','flowAdapter.ts','sharepointRestAuth.ts','sharepointProvisioning.ts','sharepointGraph.ts','sharepointOffice.ts','monitoringContract.ts','manualGovernance.ts','deliveryGovernance.ts','lifecycleGovernance.ts','delivery.ts','backendJourney.ts','apiVerification.ts','packageInventory.ts','platformCommandError.ts','columnContracts.ts','tableStructure.ts','platformAuth.ts','identityContracts.ts','operationReconciliation.ts','deliveryRecords.ts','deliveryRecordTools.ts','firstSlice.ts','qualityEvidence.ts','taskScope.ts','taskIntegration.ts','nativeDeniedAccess.ts','productionNativeQa.ts','nativeClaimReconciliation.ts','nativeClaimSession.ts','nativeHistory.ts','nativeHistoryCapture.ts','nativeClaimTermination.ts','providerImportHistory.ts','sharepointProviderHistory.ts','taskInputs.ts','taskExecution.ts','executionLedger.ts','nativeUsage.ts','sessionEvidence.ts','releasePlan.ts','targetOperations.ts','ceo.ts','swarm.ts','../shared/governanceProfile.ts','../shared/deliveryRecord.ts','../shared/firstSlice.ts','../shared/qualityEvidence.ts','../shared/taskPlan.ts','../shared/nativeQa.ts','../shared/applicationSpec.ts','../shared/delivery.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url)));
-manualSourceFiles.push(...['sharepointSchemaWriter.ts','sharepointResourceApproval.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url))));
-const manualRuntimeFiles=manualSourceFiles.every(file=>fs.existsSync(file))?manualSourceFiles:[fileURLToPath(import.meta.url)];
+const manualSourceFiles=['index.ts','sharepointWriteReadiness.ts','deliveryPermissions.ts','resourcePermissions.ts','userEntitlements.ts','delegatedEvidenceReader.ts','standardDlpEvidence.ts','callerLicensing.ts','platformDiscovery.ts','deliveryEvidenceRead.ts','deliverySourceRead.ts','synthesisEvidence.ts','flowAdapter.ts','headlessFlowVerification.ts','headlessAcceptedReport.ts','aiPromptMetadata.ts','privateReportMetadata.ts','repositoryAccessMetadata.ts','sharepointRestAuth.ts','sharepointProvisioning.ts','sharepointGraph.ts','sharepointOffice.ts','monitoringContract.ts','manualGovernance.ts','deliveryGovernance.ts','lifecycleGovernance.ts','delivery.ts','backendJourney.ts','apiVerification.ts','packageInventory.ts','platformCommandError.ts','columnContracts.ts','tableStructure.ts','platformAuth.ts','identityContracts.ts','operationReconciliation.ts','deliveryRecords.ts','deliveryRecordTools.ts','firstSlice.ts','qualityEvidence.ts','taskScope.ts','taskIntegration.ts','nativeDeniedAccess.ts','productionNativeQa.ts','nativeClaimReconciliation.ts','nativeClaimSession.ts','nativeHistory.ts','nativeHistoryCapture.ts','nativeClaimTermination.ts','providerImportHistory.ts','sharepointProviderHistory.ts','taskInputs.ts','taskExecution.ts','executionLedger.ts','nativeUsage.ts','sessionEvidence.ts','releasePlan.ts','targetOperations.ts','ceo.ts','swarm.ts','../shared/governanceProfile.ts','../shared/deliveryRecord.ts','../shared/firstSlice.ts','../shared/qualityEvidence.ts','../shared/taskPlan.ts','../shared/nativeQa.ts','../shared/applicationSpec.ts','../shared/delivery.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url)));
+manualSourceFiles.push(...['sharepointSchemaWriter.ts','sharepointResourceApproval.ts','executionAdmission.ts','../shared/executionEvidence.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url))));
+const manualRuntimeFiles=[...new Set([fileURLToPath(import.meta.url),...(manualSourceFiles.every(file=>fs.existsSync(file))?manualSourceFiles:[])])];
 const manualRuntimeEvidence=manualRuntimeFiles.map(file=>({file,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}));
 const manualGovernance=new ManualGovernance(HOME_DIR,id=>delivery.view().releases.find(release=>release.id===id),()=>{if(officeShutdown.closed||swarm.isDraining||backend.demo)throw new HttpError(409,'Manual governance is paused or unavailable');},{sha256:crypto.createHash('sha256').update(JSON.stringify(manualRuntimeEvidence)).digest('hex'),evidence:manualRuntimeEvidence});
 try{await manualGovernance.init();}catch{console.warn('Manual governance storage unavailable; preserve its history before recovery');}
@@ -171,6 +182,45 @@ setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, in
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();
 const platformDiscovery=new PlatformDiscovery(HOME_DIR,{run:deliveryCommands.run,connect:connectFlowAdapter,dlpObservation:identity=>tenantDlp.observation(identity)});
+const executionAdmission=new ExecutionAdmission(HOME_DIR,{
+ configuration(record){
+  const config=capabilities.configuration(record.repoId);if(!config)throw Error('Execution configuration is missing');
+  const identity=platformDiscoveryBinding(config);
+  if(identity.environmentUrl!==record.content.environmentUrl?.replace(/\/$/,''))throw Error('Execution identity target differs');
+  for(const api of ['shared_office365','shared_commondataserviceforapps']){
+   const checks=config.checks.filter(c=>c.probe.kind==='pac-connection'&&c.probe.api===api&&c.probe.account?.toLowerCase()===identity.username.toLowerCase()&&c.probe.environmentUrl.replace(/\/$/,'')===identity.environmentUrl&&c.probe.connectionId);
+   if(checks.length!==1)throw Error('Execution requires exact reviewed Outlook and Dataverse connections');
+  }
+  return{sha256:crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex'),identity:{...identity,authenticationFingerprint:backend.tenancy.activity().profileMutation?.fingerprint}};
+ },
+ async observe(probe,record,attempt,guard){
+  const config=capabilities.configuration(record.repoId),context=recordContext(record.repoId);if(!config)throw Error('Execution configuration missing');guard();
+  if(probe==='project-readiness'){
+   const result=await capabilities.check(record.repoId,context.checkoutPath,context.environmentUrl,'git',true);guard();
+   const details={repoId:result.repoId,configHash:result.configHash,checkedAt:result.checkedAt,expiresAt:result.expiresAt,checks:result.checks.map(c=>({id:c.id,category:c.category,passed:c.passed}))};
+   return{passed:result.status==='ready'&&result.repoId===record.repoId&&result.checks.length>0&&result.checks.every(c=>c.passed),observedAt:result.checkedAt,expiresAt:result.expiresAt,sourceSha256:crypto.createHash('sha256').update(JSON.stringify(details)).digest('hex'),details};
+  }
+  const issue=attempt.issue??record.content.taskPlan?.tasks[0]?.issue;if(!issue)throw Error('Execution probe requires a bound task');
+  const input={kind:probe==='headless-authoring-rights'?'headless-authoring-rights':'private-report-metadata'};
+  const result=await platformDiscovery.inspect(config,context.checkoutPath,input,guard,AbortSignal.timeout(45_000),record.repoId,schemaBootstrapConfigurationRoot(HOME_DIR,record.repoId),{record,issue});guard();
+  const data=result.observation.data as Record<string,unknown>;
+  return{passed:data.status==='observed'&&(probe==='headless-authoring-rights'?data.requiredGlobalPrivilegesPresent===true:data.protectedOwnerOnly===true),observedAt:result.evidence.observedAt,expiresAt:result.evidence.expiresAt,sourceSha256:result.evidence.sha256,sourceReference:result.evidence.reference};
+ }
+});
+const checkPhaseExecution=async(repoId:string,attempt:ExecutionAttempt,outerGuard:()=>void)=>{
+ const record=deliveryRecords.current(repoId);if(!record||!record.content.findings.some(f=>f.executionEvidence))return;
+ const approvalState=(r:typeof record|undefined)=>JSON.stringify([r?.designReview,r?.taskReviews,r?.taskAcceptances,r?.sliceReceipt]);
+ const recordSha256=record.sha256,approvals=approvalState(record),config=capabilities.configurationFingerprint([repoId]),context=JSON.stringify(recordContext(repoId)),profile=backend.tenancy.activity().profileMutation?.fingerprint;
+ const guard=()=>{outerGuard();const current=deliveryRecords.current(repoId);if(officeShutdown.closed||swarm.isDraining||current?.sha256!==recordSha256||approvalState(current)!==approvals||JSON.stringify(recordContext(repoId))!==context||capabilities.configurationFingerprint([repoId])!==config||backend.tenancy.activity().profileMutation?.status!=='clear'||backend.tenancy.activity().profileMutation?.fingerprint!==profile)throw Error('Phase execution context changed');};
+ guard();await executionAdmission.check(record,attempt,guard);guard();
+};
+swarm.executionEvidenceCheck=(repoId,issue,actor,attemptId,guard)=>checkPhaseExecution(repoId,{phase:'authoring',issue,actor,attemptId},guard);
+delivery.checkExecutionEvidence=async(repoId,plan,runId,phase,guard)=>{
+ const record=deliveryRecords.current(repoId);if(!record?.content.findings.some(f=>f.executionEvidence))return;
+ if(!plan.verification.headlessFlow)throw Error('Execution evidence requires the supported headless adapter');
+ const owned=()=>{guard();deliveryRecords.assertRelease(repoId,plan,recordContext(repoId));};
+ await checkPhaseExecution(repoId,{phase,actor:'delivery-runner',attemptId:runId},owned);
+};
 const platformMetadataFor=(agentId:string,repoId:string,role:'dev'|'qa')=>async(input:unknown)=>{
  const config=capabilities.configuration(repoId);if(!config)throw new HttpError(409,'Configure the reviewed platform target before discovery');
  const context=recordContext(repoId),fingerprint=capabilities.configurationFingerprint([repoId]),session=swarm.planningSessionGuard(agentId),authentication=backend.tenancy.activity().profileMutation?.fingerprint;
@@ -178,9 +228,9 @@ const platformMetadataFor=(agentId:string,repoId:string,role:'dev'|'qa')=>async(
  const task=agent.issueNumber,scope=task?swarm.deliveryTaskFingerprint(repoId,task):null,recordSha=deliveryRecords.current(repoId)?.sha256,configurationRoot=schemaBootstrapConfigurationRoot(HOME_DIR,repoId);
  const guard=()=>{recordDependencies.assertOpen();session();const profile=backend.tenancy.activity().profileMutation;if(profile?.status!=='clear'||profile.fingerprint!==authentication)throw new HttpError(409,'Authentication profile ownership changed or is unresolved; discovery is paused');if(fingerprint!==capabilities.configurationFingerprint([repoId])||JSON.stringify(context)!==JSON.stringify(recordContext(repoId))||task&&scope!==swarm.deliveryTaskFingerprint(repoId,task)||role==='qa'&&recordSha!==deliveryRecords.current(repoId)?.sha256)throw new HttpError(409,'Discovery scope/configuration changed; use a newly admitted task');if(schemaBootstrapConfigurationRoot(HOME_DIR,repoId)!==configurationRoot)throw new HttpError(409,'Project discovery configuration scope changed');};
  const discoveryRecord=deliveryRecords.current(repoId);if(['delivery-permissions','delivery-authoring-prerequisites'].includes((input as {kind?:string})?.kind??'')&&(!task||!discoveryRecord||!discoveryRecord.content.taskPlan?.tasks.some(t=>t.issue===task&&(role==='qa'||t.owner===agentId))))throw new HttpError(403,'Delivery permissions require the assigned task owner');
- return platformDiscovery.inspect(config,context.checkoutPath,input,guard,AbortSignal.timeout(platformDiscoveryBudget(input)),repoId,configurationRoot,discoveryRecord&&task?{record:discoveryRecord,issue:task}:undefined);
+ return platformDiscovery.inspect(config,context.checkoutPath,input,guard,AbortSignal.timeout(platformDiscoveryBudget(input)),repoId,configurationRoot,discoveryRecord&&(task||role==='qa'&&discoveryRecord.content.qaOwner===agentId)?{record:discoveryRecord,...(task?{issue:task}:{}),independentReview:role==='qa'&&discoveryRecord.content.qaOwner===agentId}:undefined);
 };
-swarm.capabilityStatus = () => JSON.stringify(capabilities.view());
+swarm.capabilityStatus = () => JSON.stringify({...capabilities.view(),executionAdmission:executionAdmission.view()});
 swarm.engineeringTools = (authorize,agentId,repoId) => createEngineeringTools(swarm.capabilityStatus, {
   async acquire(app, owner) {
     if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');

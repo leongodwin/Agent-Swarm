@@ -24,6 +24,24 @@ it('requires a connected connector for the intended account and connection ID', 
   expect(connectedAccount('approvals-id  Standard approvals  /providers/Microsoft.PowerApps/apis/shared_approvals Connected', 'shared_approvals', undefined, 'approvals-id')).toBe(true);
   expect(connectedAccount(output, 'shared_office365users')).toBe(false);
 });
+it('accepts PAC connection columns with the single-space padding emitted for full-width cells', () => {
+  const output = 'Id                            Name               API Id                                                              Status\r\n'
+    + 'shared-commondataser-1f72b56f leon@graspai.co.uk /providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps Connected\r\n'
+    + 'shared-approvals-69aa3963     Standard approvals /providers/Microsoft.PowerApps/apis/shared_approvals                Connected\r\n'
+    + 'shared-office365-cf2c48f1     leon@graspai.co.uk /providers/Microsoft.PowerApps/apis/shared_office365                Connected';
+  expect(connectedAccount(output, 'shared_office365', 'leon@graspai.co.uk', 'shared-office365-cf2c48f1')).toBe(true);
+  expect(connectedAccount(output, 'shared_commondataserviceforapps', 'leon@graspai.co.uk', 'shared-commondataser-1f72b56f')).toBe(true);
+  expect(connectedAccount(output, 'shared_approvals', undefined, 'shared-approvals-69aa3963')).toBe(true);
+});
+it('keeps single-space connection identity and status assertions on one complete row', () => {
+  const output = 'wanted other@example.com /providers/Microsoft.PowerApps/apis/shared_office365 Connected\n'
+    + 'different maker@example.com /providers/Microsoft.PowerApps/apis/shared_office365 Connected\n'
+    + 'wanted maker@example.com /providers/Microsoft.PowerApps/apis/shared_office365 Error';
+  expect(connectedAccount(output, 'shared_office365', 'maker@example.com', 'wanted')).toBe(false);
+  expect(connectedAccount('wanted maker@example.com /providers/Microsoft.PowerApps/apis/shared_office365users Connected', 'shared_office365', 'maker@example.com', 'wanted')).toBe(false);
+  expect(connectedAccount('wanted maker@example.com /providers/Microsoft.PowerApps/apis/shared_office365 Connected trailing', 'shared_office365', 'maker@example.com', 'wanted')).toBe(false);
+  expect(connectedAccount('wanted maker@example.com /providers/Microsoft.PowerApps/apis/shared_office365 Connected', 'shared_office365')).toBe(false);
+});
 it('does not send Azure tokens to arbitrary destinations or for a different account', async () => {
   expect(azureResource('https://graph.microsoft.com.evil.test/me')).toBeUndefined();
   expect(azureResource('http://graph.microsoft.com/me')).toBeUndefined();

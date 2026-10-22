@@ -1,8 +1,10 @@
+import {headlessChecks} from './headlessFlowVerification.ts';
 import {HttpError} from './httpError.ts';
 import crypto from 'node:crypto';
 import {z} from 'zod';
 import type {DeliveryRecordContent} from '../shared/deliveryRecord.ts';
 import type {ReleasePlan} from './releasePlan.ts';
+import {assertHeadlessEvidence} from './headlessFlowVerification.ts';
 export const firstSliceContractHash=(plan:ReleasePlan)=>crypto.createHash('sha256').update(JSON.stringify({record:plan.deliveryRecord,execution:plan.firstSlice})).digest('hex');
 export function assertFirstSlicePlan(content:DeliveryRecordContent,plan:ReleasePlan){
   if(plan.deliveryRecord?.purpose!=='slice')return;
@@ -17,7 +19,7 @@ export function assertFirstSlicePlan(content:DeliveryRecordContent,plan:ReleaseP
   // manifest is checked separately at release preparation and execution.
   const supported=new Set(['dataverse','sharepoint','canvas','flow','copilot-studio']);
   if(execution.components.some(c=>!supported.has(c.platform)))throw new HttpError(409,'First-slice component has no supported typed target mapping');
-  const tests=plan.verification.scenarios;
+  const tests=(plan.verification.headlessFlow?headlessChecks(plan.verification.headlessFlow):undefined)??plan.verification.scenarios;
   const journeys=spec.journeys.filter(relevant),scenarios=journeys.flatMap(j=>j.scenarios);
   for(const journey of journeys)for(const kind of ['happy','denied','failure'])if(!journey.scenarios.some(s=>s.kind===kind))throw new HttpError(409,`First journey ${journey.id} requires happy, denied and failure scenarios`);
   const checks=spec.checks.filter(c=>relevant(c)&&['runtime','access'].includes(c.kind));
@@ -46,10 +48,11 @@ export function firstSliceEvidence(plan:ReleasePlan,context:{runId:string;releas
   if(!plan.firstSlice)throw new HttpError(409,'First-slice execution contract missing');
   if(plan.verification.api)throw new HttpError(409,'API-only first slices require a runner-owned denied-action adapter');
   assertBrowserEvidence(plan,plan.firstSlice.cases,context.observedAfter,raw);
-  return {schemaVersion:1,contractHash:firstSliceContractHash(plan),...context,deliveryRecord:plan.deliveryRecord,components:plan.firstSlice.components,cases:plan.firstSlice.cases,method:'browser',limitations:['Browser identity checks alone do not establish least-privilege permissions.']};
+  return {schemaVersion:1,contractHash:firstSliceContractHash(plan),...context,deliveryRecord:plan.deliveryRecord,components:plan.firstSlice.components,cases:plan.firstSlice.cases,method:plan.verification.headlessFlow?'power-automate-headless':'browser',limitations:[plan.verification.headlessFlow?'Single-owner flow guards do not certify multi-user isolation or UI.':'Browser identity checks alone do not establish least-privilege permissions.']};
 }
 
 export function assertBrowserEvidence(plan:ReleasePlan,cases:{testName:string}[],observedAfter:string,raw:unknown){
+  if(plan.verification.headlessFlow){assertHeadlessEvidence(plan.verification.headlessFlow,cases,plan.verification.baseUrl,observedAfter,raw);return;}
   if(plan.verification.api)throw new HttpError(409,'Independent denied-action API adapter is unavailable');
   const parsed=z.object({results:z.array(observed).min(1),applicationUrl:z.string(),completedAt:z.iso.datetime()}).safeParse(raw);
   if(!parsed.success)throw new HttpError(409,'First-slice independent execution evidence is malformed or failed');

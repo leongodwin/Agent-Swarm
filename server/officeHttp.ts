@@ -9,6 +9,7 @@ import path from 'node:path';
 import {currentEnvironment} from '../shared/tenancy.ts';
 import fs from 'node:fs';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import {profileRecovery} from './codexProfileRecovery.ts';
 import { z } from 'zod';
 import {WorkflowReliabilityService,observeWorkflowReliability} from './workflowReliability.ts';
 import { handleHook, handleMcp } from './cliRunner.ts';
@@ -137,7 +138,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     if(!services.deliveryRecords)throw new HttpError(503,'Delivery records unavailable');
     const record=services.deliveryRecords.current(repo.id);
     let scopeError:string|undefined;
-    if(record)try{services.deliveryRecords.assertContext(record,{brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId});}catch{scopeError='Brief or deployment target changed. Refresh discovery and design review.';}
+    if(record)try{services.deliveryRecords.assertContext(record,{brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId,...(delivery.checkExecutionEvidence?{executionEvidenceVersion:1 as const}:{})});}catch{scopeError='Brief or deployment target changed. Refresh discovery and design review.';}
     return {record,readiness:planningReadiness(record,delivery.view().policy,scopeError),phase:scopeError?'discovery':record?recordPhase(record):'not-started',blockers:[...(scopeError?[scopeError]:[]),...(record?[...discoveryBlockers(record),...taskPlanningBlockers(record)]:['Ask the CEO to create the delivery record and discovery tasks'])],demo:backend.demo};
   }));
   app.post('/api/repos/:repo/delivery-record',route(async req=>{
@@ -158,6 +159,11 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.get('/api/capabilities', route(() => capabilities.view()));
   app.get('/api/installed-skills', route((req) => { const catalogue = discoverSkills(); const task = str(req.query.task).slice(0, 2000); return task ? { ...catalogue, skills: selectSkills(catalogue, task) } : catalogue; }));
   app.get('/api/runtime', route(() => ({ pid: process.pid, parentPid:process.ppid, nativeRuntime:services.nativeRuntime?.()??{keeperPid:0,keeperInstance:null,nativePids:[]}, startedAt: runtimeStartedAt, homeDir, demo: backend.demo, policyReaderMode, authenticationWork:backend.tenancy.activity(), deliveryAvailability:delivery.available?'ready':'unavailable', draining:swarm.isDraining||delivery.isDraining, sessionUsage:swarm.sessionUsage(), reload:services.officeReload?.view()??{supported:false,phase:'idle',reason:'This office has no owning launcher reload service'}, features: ['api-verification', 'connection-repair', 'record-sharing', 'schema-contracts', 'canvas-ownership'] })));
+  app.post('/api/runtime/codex-profile-recovery',route(req=>{
+    const input=parseBody(z.strictObject({proposalSha256:z.string().regex(/^[a-f0-9]{64}$/).optional()}),req.body);
+    const guard=()=>{if(backend.demo||!swarm.isDraining||!delivery.isDraining||swarm.sessionUsage().agentSessions>0||backend.tenancy.activity().busy||!services.nativeRuntime||services.nativeRuntime().nativePids.length)throw new HttpError(409,'Profile recovery requires a drained real office, clear authentication and no native agent processes');};
+    return profileRecovery(homeDir,swarm.snapshot().repos.map(repo=>repo.checkoutPath),guard,input);
+  }));
   app.post('/api/office/reload',route(async(req,res)=>{
     const {expectedPid}=parseBody(z.object({expectedPid:z.number().int().positive()}).strict(),req.body);
     const ready=()=>{
@@ -382,6 +388,8 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.get('/api/tenancy', route(() => backend.tenancy.info()));
   const requireProfileChangeIdle=()=>{if(!backend.demo&&(swarm.sessionUsage().used>0||swarm.sessionUsage().blockedReason||delivery.view().running))throw new HttpError(409,'Wait for agent, architecture and delivery work to finish before changing authentication profiles');};
   app.post('/api/tenancy/select', route((req) => {const input=parseBody(selectSchema,req.body);requireProfileChangeIdle();return backend.tenancy.select(input.index);}));
+  app.post('/api/tenancy/environment',route(req=>{const input=parseBody(z.strictObject({environmentUrl:z.url(),username:z.email()}),req.body);requireProfileChangeIdle();if(!backend.tenancy.selectEnvironment)throw new HttpError(503,'Existing-account environment selection unavailable');return backend.tenancy.selectEnvironment(input.environmentUrl,input.username);}));
+  app.post('/api/repos/:repo/target',route(req=>{connectedRepo(repoId(req));const input=parseBody(z.strictObject({expectedEnvironmentUrl:z.url().nullable(),environmentUrl:z.url(),username:z.email()}),req.body);requireProfileChangeIdle();return swarm.refreshRepoTarget(repoId(req),input.expectedEnvironmentUrl,input.environmentUrl,input.username,requireProfileChangeIdle);}));
   app.post('/api/tenancy/login', route((req) => {const input=parseBody(loginSchema,req.body);requireProfileChangeIdle();return backend.tenancy.login(input);}));
   app.get('/api/tenancy/login/:id', route((req) => backend.tenancy.loginStatus(String(req.params.id))));
   app.delete('/api/tenancy/login/:id', route((req) => backend.tenancy.cancelLogin(String(req.params.id))));

@@ -3,6 +3,13 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createOfficeTools, createDeliveryQaTools, createEngineeringTools, IssueCap, jobLabel, planRoute, specialtyLabel, specialtySlug, type CeoJob, type RouteRequest } from './ceo.ts';
 
+it.each(['coordinator-save','coordinator-read','coordinator-byte-limit','developer','qa'])('keeps the retained-record save ceiling scoped to the coordinator: %s',async mode=>{
+ const handler=vi.fn(async()=>'retained record saved'),office=mode.startsWith('coordinator')?createOfficeTools({deliveryRecord:handler,companyStatus:()=> '{}',agentDetail:()=> '{}',setFloorProfile:()=> '',updateJob:()=> '',proposeHire:()=> '',proposeLetGo:()=> '',fileIssue:async()=> '',routeIssue:async()=> ''}):mode==='developer'?createEngineeringTools(()=>'',undefined,undefined,handler):createDeliveryQaTools(()=>'',async()=>'',undefined,undefined,undefined,handler);
+ const client=new Client({name:'bounded-record-test',version:'1'}),[a,b]=InMemoryTransport.createLinkedPair();await office.server.instance.connect(a);await client.connect(b);
+ try{const result=await client.callTool({name:'delivery_record',arguments:{repo_id:'synthetic/project',action:mode==='coordinator-read'?'read':'save',expected_revision:1,payload_json:JSON.stringify({retained:(mode==='coordinator-byte-limit'?'漢':'x').repeat(mode==='coordinator-byte-limit'?400000:270000)})}});expect(result.isError===true).toBe(mode!=='coordinator-save');expect(handler).toHaveBeenCalledTimes(mode==='coordinator-save'?1:0);}
+ finally{await client.close();await office.server.instance.close();}
+});
+
 it('gives developers readiness and templates without QA approval authority', async () => {
   const tools = createEngineeringTools(() => 'Tenant access blocked');
   const client = new Client({ name: 'developer-test', version: '1' });
@@ -159,7 +166,7 @@ describe('office tools', () => {
   it('lists every tool the CEO relies on', async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['agent_detail', 'capability_status', 'company_status', 'create_release', 'delivery_record', 'delivery_status', 'file_issue', 'implementation_templates', 'installed_skills', 'propose_hire', 'propose_let_go', 'read_skill', 'review_delivery_record', 'review_release', 'route_issue', 'set_floor_profile', 'update_job']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['agent_detail', 'capability_status', 'company_status', 'create_release', 'delivery_record', 'delivery_status', 'file_issue', 'implementation_templates', 'installed_skills', 'propose_hire', 'propose_let_go', 'read_delivery_source', 'read_skill', 'review_delivery_record', 'review_release', 'route_issue', 'set_floor_profile', 'update_job']);
   });
 
   it('still takes preview_env as a map of strings', async () => {
@@ -167,6 +174,18 @@ describe('office tools', () => {
     await client.callTool({ name: 'set_floor_profile', arguments: { floor: 1, preview_env: { VITE_API: 'http://localhost:{port}' } } });
     expect(floors).toEqual([{ floor: 1, preview_env: { VITE_API: 'http://localhost:{port}' } }]);
   });
+  it('reads hash-bound headless guidance while refusing repository expansion',async()=>{
+    const {client}=await connect();const args={request_json:JSON.stringify({kind:'office-document',document:'HEADLESS-FLOW',maxLines:2})};
+    const result=await client.callTool({name:'read_delivery_source',arguments:args});expect(result.isError).not.toBe(true);const page=JSON.parse((result.content as any)[0].text);expect(page).toMatchObject({scope:'approved-office-guidance',document:'HEADLESS-FLOW',startLine:1,endLine:2,sourceCommit:null});expect(page.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect((await client.callTool({name:'read_delivery_source',arguments:{request_json:JSON.stringify({kind:'repository-file',file:'README.md'})}})).isError).toBe(true);
+    expect((await client.callTool({name:'read_delivery_source',arguments:{request_json:JSON.stringify({kind:'office-document',document:'../../secret'})}})).isError).toBe(true);await client.close();
+  });
+  it('withholds coordinator document bytes when authority changes during the read',async()=>{
+    let observations=0;const office=createOfficeTools({companyStatus:()=> '{}',agentDetail:()=> '{}',setFloorProfile:()=> '',updateJob:()=> '',proposeHire:()=> '',proposeLetGo:()=> '',fileIssue:async()=> '',routeIssue:async()=> ''},()=>++observations===1?null:'Coordinator scope changed');
+    const [a,b]=InMemoryTransport.createLinkedPair(),client=new Client({name:'source-revocation',version:'1'});await office.server.instance.connect(a);await client.connect(b);
+    try{const result=await client.callTool({name:'read_delivery_source',arguments:{request_json:JSON.stringify({kind:'office-document',document:'HEADLESS-FLOW',maxLines:2})}});expect(result.isError).toBe(true);expect(JSON.stringify(result.content)).toContain('Coordinator scope changed');expect(JSON.stringify(result.content)).not.toContain('approved-office-guidance');}finally{await client.close();await office.server.instance.close();}
+  });
+  it('delegates exact discovery references to the server-bound coordinator reader only',async()=>{const read=vi.fn(async()=>({scope:'record-cited-discovery-evidence',content:'bounded receipt'})),office=createOfficeTools({readDiscoveryEvidence:read,companyStatus:()=> '{}',agentDetail:()=> '{}',setFloorProfile:()=> '',updateJob:()=> '',proposeHire:()=> '',proposeLetGo:()=> '',fileIssue:async()=> '',routeIssue:async()=> ''});const request={kind:'discovery-evidence',reference:{id:'11111111-1111-4111-8111-111111111111',revision:1,sha256:'a'.repeat(64)},findingId:'actual',expectedSha256:'b'.repeat(64)};await office.call('read_delivery_source',{request_json:JSON.stringify(request)});expect(read).toHaveBeenCalledWith(expect.objectContaining(request));await expect(office.call('read_delivery_source',{request_json:JSON.stringify({kind:'repository-file',file:'README.md'})})).rejects.toThrow('server-bound discovery');expect(read).toHaveBeenCalledOnce();});
 
   it.each(['primary','fresh'] as const)('revokes CEO mutation authority on the %s native transport',async kind=>{
     let active=true;const update=vi.fn(()=> 'saved');

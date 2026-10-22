@@ -223,7 +223,7 @@ it('reports terminal interruption only after native screen evidence changes',asy
 });
 
 it('stores long prompts in session files and removes inherited provider-session environment overrides',async()=>{
-  vi.stubEnv('ANTHROPIC_API_KEY','synthetic-secret');vi.stubEnv('CLAUDECODE','1');vi.stubEnv('CODEX_THREAD_ID','unrelated-thread');vi.stubEnv('OPENCODE_CONFIG_CONTENT','untrusted-inherited');vi.stubEnv('NO_COLOR','1');const prompt='Synthetic task requirements.\n'.repeat(400),run=await session({prompt,outputSchema:{type:'object',properties:{ok:{type:'boolean'}}},label:'Synthetic label'});const spawn=mock.spawn.mock.calls[0],env=spawn[2].env,meta=spawn[3];expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');expect(env).not.toHaveProperty('CLAUDECODE');expect(env).not.toHaveProperty('CODEX_THREAD_ID');expect(env).not.toHaveProperty('NO_COLOR');expect(env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');expect(fs.readFileSync(path.join(meta.dir,'task.md'),'utf8')).toContain(prompt);expect(spawn[1].join(' ')).toContain('Your task is in');run.handle.stop();
+  vi.stubEnv('ANTHROPIC_API_KEY','synthetic-secret');vi.stubEnv('CLAUDECODE','1');vi.stubEnv('CODEX_THREAD_ID','unrelated-thread');vi.stubEnv('OPENCODE_CONFIG_CONTENT','untrusted-inherited');vi.stubEnv('NO_COLOR','1');const prompt='Synthetic task requirements.\n'.repeat(400),run=await session({prompt,outputSchema:{type:'object',properties:{ok:{type:'boolean'}}},label:'Synthetic label'});const spawn=mock.spawn.mock.calls[0],env=spawn[2].env,meta=spawn[3];expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');expect(env).not.toHaveProperty('CLAUDECODE');expect(env).not.toHaveProperty('CODEX_THREAD_ID');expect(env).not.toHaveProperty('NO_COLOR');expect(env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');expect(fs.readFileSync(path.join(meta.dir,'task.md'),'utf8')).toContain(prompt);expect(spawn[1].join(' ')).not.toContain('Your task is in');expect(spawn[1].join(' ')).not.toContain(prompt);run.handle.stop();
 });
 
 it('shows login and setup blockers once without treating a waiting screen as completion',async()=>{
@@ -391,4 +391,22 @@ it.each(['ℹ User cancelled the request.','ℹ Request cancelled.'])('classifie
  const run=await session({cli:'gemini'}),bridgeSha256=crypto.createHash('sha256').update(GEMINI_HOOK_SOURCE).digest('hex');await handleHook(run.token,{hook_event_name:'UserPromptSubmit',session_id:'synthetic-root',bridgeSha256,prompt:'Synthetic runtime task'});
  mock.screen=notice;run.term.onInput?.('\x1b');await vi.advanceTimersByTimeAsync(800);expect(run.cb.finished).not.toHaveBeenCalled();
  mock.screen+='\n'+notice;await vi.advanceTimersByTimeAsync(1000);expect(run.cb.finished).toHaveBeenCalledWith(expect.objectContaining({ok:false,interrupted:true,errors:['Interrupted in the terminal']}));
+});
+
+it('submits a long initial Codex task once through acknowledged paste after native readiness without file tools',async()=>{
+ const prompt='Exact quoted "task" £ 😀\n'.repeat(500),run=await session({role:'ceo',prompt});
+ expect(mock.spawn.mock.calls[0][1]).not.toContain(prompt);expect(mock.write).not.toHaveBeenCalled();
+ mock.screen='Starting MCP servers (1/11)\n› Ask Codex to do anything';await vi.advanceTimersByTimeAsync(1000);expect(mock.write).not.toHaveBeenCalled();
+ mock.screen='› Ask Codex to do anything\n  GPT-Synthetic · office';await vi.advanceTimersByTimeAsync(1000);
+ expect(mock.write).toHaveBeenCalledOnce();expect(mock.write).toHaveBeenCalledWith('\x1b[200~'+prompt+'\x1b[201~');
+ mock.screen='› [Pasted Content '+Array.from(prompt).length+' chars]\n  GPT-Synthetic · office';await vi.advanceTimersByTimeAsync(150);
+ expect(mock.write.mock.calls.filter(([text])=>text==='\r')).toHaveLength(1);
+ await vi.advanceTimersByTimeAsync(3000);expect(mock.write.mock.calls.filter(([text])=>text.startsWith('\x1b[200~'))).toHaveLength(1);run.handle.stop();
+});
+it('does not submit a deferred initial task when native readiness never appears',async()=>{
+ const run=await session({role:'ceo',prompt:'Task '.repeat(2000)});mock.screen='Not logged in\n› Ask Codex to do anything';await vi.advanceTimersByTimeAsync(90000);
+ expect(mock.write).not.toHaveBeenCalled();expect(run.cb.finished).toHaveBeenCalledWith(expect.objectContaining({ok:false,errors:[expect.stringContaining('no task was sent')]}));
+});
+it('cancels deferred initial input when its task is stopped',async()=>{
+ const run=await session({role:'ceo',prompt:'Task '.repeat(2000)});run.handle.stop();mock.screen='› Ask Codex to do anything';await vi.advanceTimersByTimeAsync(90000);expect(mock.write).not.toHaveBeenCalled();
 });

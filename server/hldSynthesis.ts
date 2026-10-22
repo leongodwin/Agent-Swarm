@@ -1,4 +1,4 @@
-import {synthesisRecordContext,boundedSynthesisPrompt} from './synthesisContext.ts';
+import {synthesisRecordContext,synthesisCatalogueContext,boundedSynthesisPrompt} from './synthesisContext.ts';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {performance} from 'node:perf_hooks';
@@ -159,7 +159,7 @@ export class HldSynthesisService {
     const catalogue=synthesisRequirements(input,context.discoveryRecord);
     const skills=planningSkillReferences(context.skills,context.copilotPaused);
     const capturedEvidence=await captureSynthesisEvidence(context.discoveryRecord,[context.checkoutPath,...context.evidenceRoots??[]]);this.guard(job,context,signal);
-    const prompt=boundedSynthesisPrompt({requirements:input,discoveryEvidence:synthesisRecordContext(context.discoveryRecord),requirementCatalogue:catalogue,traceabilityRule:'Cover every catalogue ID exactly once; the server copies its sourceSha256; link to existing unique implementationPlan step IDs. Design and acceptance text require independent QA review.',skillBindingRule:'Select at least one supplied skill when available. Copy its ID and sha256 into skillBindings, cite valid plan step IDs and explain its use. Installation does not verify runtime tools; toolStatus must remain unverified.',installedSkillReferences:skills,copilotStudioPaused:context.copilotPaused},capturedEvidence);
+    const prompt=boundedSynthesisPrompt({requirements:input,discoveryEvidence:synthesisRecordContext(context.discoveryRecord),requirementCatalogue:synthesisCatalogueContext(catalogue,context.discoveryRecord),traceabilityRule:'Cover every catalogue ID exactly once; the server copies its sourceSha256; link to existing unique implementationPlan step IDs. Design and acceptance text require independent QA review.',skillBindingRule:'Select at least one supplied skill when available. Copy its ID and sha256 into skillBindings, cite valid plan step IDs and explain its use. Installation does not verify runtime tools; toolStatus must remain unverified.',installedSkillReferences:skills,copilotStudioPaused:context.copilotPaused},capturedEvidence);
     if(Buffer.byteLength(prompt)>256*1024)throw new HttpError(413,'Architecture planning context exceeds its bound');
     let runtimeFinished=false;
     let finish!:(result:Parameters<SessionCallbacks['finished']>[0])=>void;

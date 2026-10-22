@@ -1,3 +1,4 @@
+import {headlessChecks,headlessCheckFiles} from './headlessFlowVerification.ts';
 import {functionalRejectionEvidence} from './functionalRejection.ts';
 import {functionalRecoveryEvidence} from './functionalRecovery.ts';
 import crypto from 'node:crypto';
@@ -39,7 +40,7 @@ export function assertQualityPlan(content:DeliveryRecordContent,plan:ReleasePlan
   for(const row of q.checks){if(!('cases' in row))continue;
     const declared=checks.find(c=>c.id===row.checkId)!;
     if(declared.scenarioIds.filter(id=>content.taskPlan?.schemaVersion!==2||scenarios.some(s=>s.id===id)).some(id=>!row.cases.some(c=>c.scenarioId===id)))fail(`${row.checkId}: missing declared scenario binding`);
-    for(const c of row.cases){const scenario=scenarios.find(s=>s.id===c.scenarioId),test=plan.verification.scenarios.find(t=>t.name===c.testName);
+    for(const c of row.cases){const scenario=scenarios.find(s=>s.id===c.scenarioId),test=((plan.verification.headlessFlow?headlessChecks(plan.verification.headlessFlow):undefined)??plan.verification.scenarios).find(t=>t.name===c.testName);
       if(!scenario||!declared.scenarioIds.includes(c.scenarioId)||!test)fail(`${row.checkId}: unrelated scenario or executable test`);
       const category=scenario.kind==='denied'?'authorization':scenario.kind==='failure'?'error-handling':null;
       if(category?test.category!==category:!['journey','persistence'].includes(test.category))fail(`${row.checkId}: test category differs from declared scenario`);
@@ -88,7 +89,7 @@ export async function buildQualityIndex(plan:ReleasePlan,context:QualityContext,
     }else if(check.kind==='package')files=['solution-inventory.json','acceptance-scope.json'];
     else if(check.kind==='recovery')files=recoveryFiles;
     else if(check.kind==='documentation'){const file=qualityDocumentFile(check.checkId);validateQualityDocument(check.document,await read(file));files=[file];}
-    else{assertBrowserEvidence(plan,check.cases,context.observedAfter,raw);files=['independent-verification.json',...nativeFiles,...functionalNativeFiles,...(functional?recoveryFiles:[])];}
+    else{assertBrowserEvidence(plan,check.cases,context.observedAfter,raw);files=['independent-verification.json',...nativeFiles,...functionalNativeFiles,...(functional?recoveryFiles:[]),...(plan.verification.headlessFlow?check.cases.flatMap(c=>{return headlessCheckFiles(plan.verification.headlessFlow!,c.testName);}):[])];}
     const row={checkId:check.checkId,kind:check.kind,binding:check,artifacts:await Promise.all(files.map(artifact))};rows.push({...row,evidenceSha256:qualityHash(row)});
   }
   const {buildAttempts:_attempts,nativeStartedAt:_nativeStartedAt,nativeClaimRoot:_nativeClaimRoot,nativeCaptureLeaseSha256:_nativeCaptureLeaseSha256,functionalRecoveryCaptureRoot:_functionalRecoveryCaptureRoot,...identity}=context;

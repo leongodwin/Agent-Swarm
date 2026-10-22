@@ -45,7 +45,7 @@ const realRunner: TenancyRunner = {
     return new Promise((resolve, reject) => {
       try {
         const cmd = resolveTenancyCommand(name);
-        execFile(cmd.file, [...cmd.args, ...args], { encoding: 'utf8', windowsHide: true, timeout: 8000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        execFile(cmd.file, [...cmd.args, ...args], { encoding: 'utf8', windowsHide: true, timeout: name==='pac'&&args[0]==='org'&&args[1]==='select'?20000:8000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
           if (err) reject(new Error(`${name} CLI request failed`)); else resolve(stdout);
         });
       } catch (err) { reject(err); }
@@ -60,7 +60,10 @@ const realRunner: TenancyRunner = {
     child.stderr.on('data', (data: Buffer) => output(data.toString()));
     child.on('error', () => {processError=true;if(child.pid===undefined)finish('PAC could not start');else output('Error: PAC process error; waiting for confirmed native exit\n');});
     child.once('close', (code) => finish(code === 0&&!processError ? undefined : 'PAC authentication failed'));
-    return () => { child.kill(); };
+    return () => {
+      if(process.platform==='win32'&&child.pid)execFile('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true},error=>{if(error&&!done)output('Error: PAC process-tree cancellation failed; waiting for confirmed native exit\n');});
+      else child.kill();
+    };
   },
 };
 const disconnected = (): TenancyInfo => ({ tenantName: '', tenantDomain: '', tenantId: '', user: '', environments: [], isReal: false, status: 'disconnected' });
@@ -88,6 +91,7 @@ export function parsePacProfiles(output: string): TenancyInfo {
 export interface TenancyService {
   info(): Promise<TenancyInfo>;
   select(index: number): Promise<{ ok: boolean; message: string }>;
+  selectEnvironment?(environmentUrl:string,username:string):Promise<{ok:boolean;message:string}>;
   login(input: TenancyLoginInput): TenancyLogin;
   loginStatus(id: string): TenancyLogin;
   cancelLogin(id: string): void;
@@ -163,6 +167,20 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       try{close();}catch{/* The stop failure remains visible after native work settles. */}
       const settled=()=>{const local=localActivity();if(local.profileSelection||local.authenticationRequests||local.awaitingNativeExit||local.nativeCommands)return;idleWaiters.delete(settled);if(cleanupFailure)reject(cleanupFailure);else if(mutationView().status!=='clear')reject(new Error('Durable authentication ownership requires reconciliation'));else resolve();};
       idleWaiters.add(settled);settled();return shutdownWork;
+    },
+    async selectEnvironment(environmentUrl,username){
+      assertOpen();assertProfileIdle();const target=identityRoot(environmentUrl);
+      const observed=await info();assertOpen();assertProfileIdle();
+      if(demo||observed.status!=='connected'||observed.user.toLowerCase()!==username.toLowerCase())throw new HttpError(409,'Connect the intended existing account before selecting an environment');
+      const mutation=mutations?.begin('profile-selection');selecting=true;invalidate();let settled=false;
+      try{
+        try{await run('pac',['org','select','--environment',target]);}finally{settled=true;}
+        const active=currentEnvironment(parsePacProfiles(await run('pac',['auth','list'])));assertOpen();
+        const actual=parsePacIdentity(await run('pac',['org','who','--environment',target]));assertOpen();
+        const again=currentEnvironment(parsePacProfiles(await run('pac',['auth','list'])));assertOpen();
+        if(!active||!again||identityRoot(active.url)!==target||identityRoot(again.url)!==target||active.index!==again.index||active.user.toLowerCase()!==username.toLowerCase()||again.user.toLowerCase()!==username.toLowerCase()||actual.username.toLowerCase()!==username.toLowerCase()||actual.environmentUrl!==target)throw new HttpError(409,'Selected environment and executing account were not confirmed');
+        invalidate();return{ok:true,message:'Existing account and selected organization verified'};
+      }finally{const accepted=!settled||acknowledge(mutation,'profile-command-settled');selecting=false;notify();if(!accepted)throw new HttpError(409,'Environment selection ownership could not be acknowledged');}
     },
     async select(index) {
       assertOpen();assertProfileIdle();

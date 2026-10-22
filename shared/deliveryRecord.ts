@@ -4,6 +4,7 @@ import {z} from 'zod';
 import {governanceProfileSchema,governanceProfileBlockers} from './governanceProfile.ts';
 import {applicationSpecSchema,applicationSpecLinkErrors,applicationSpecBlockers} from './applicationSpec.ts';
 import {taskPlanSchema,taskPlanErrors} from './taskPlan.ts';
+import {executionEvidenceContractSchema} from './executionEvidence.ts';
 
 const text = z.string().trim().min(1).max(4000);
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
@@ -30,6 +31,7 @@ export const findingSchema = z.strictObject({
   id, area: z.enum(discoveryAreas), statement: text,
   status: z.enum(['observed', 'assumed', 'unresolved']), critical: z.boolean(),
   conclusion: z.enum(['ready','blocked','unknown','not-applicable']).optional(),
+  executionEvidence:executionEvidenceContractSchema.optional(),
   scope:z.discriminatedUnion('kind',[z.strictObject({kind:z.literal('canvas-source-sync'),taskIssue:z.number().int().positive()}),canvasOwnershipRecoveryScopeSchema]).optional(),
   owner: id, remedy: text,
   evidence: z.array(z.strictObject({reference: text, sha256, observedAt: z.iso.datetime(), expiresAt: z.iso.datetime()})).max(20),
@@ -59,6 +61,11 @@ export const deliveryRecordContentSchema = z.strictObject({
   const known = new Set(value.requirements.map(item => item.id));
   for (const linked of [...value.contracts, ...value.tasks, value.slice]) if (linked.requirementIds.some(ref => !known.has(ref)) || new Set(linked.requirementIds).size !== linked.requirementIds.length) fail('Requirement links must be unique and refer to declared requirements');
   for (const finding of value.findings) {
+    if(finding.executionEvidence){
+      if(!finding.critical||finding.scope||!value.applicationSpec?.components.length||value.applicationSpec.components.some(c=>c.platform!=='flow')||value.taskPlan?.schemaVersion!==2)fail('Execution evidence requires an explicit critical headless-only version-2 task contract');
+      const areas=finding.executionEvidence.probe==='private-report-acl'?['security','verification']:finding.executionEvidence.probe==='headless-authoring-rights'?['security','authoring']:['security','integrations','authoring'];
+      if(!areas.includes(finding.area))fail('Execution evidence probe does not cover this finding area');
+    }
     if(finding.scope){const task=value.taskPlan?.tasks.find(t=>t.issue===finding.scope!.taskIssue),components=task?.componentIds.map(id=>value.applicationSpec?.components.find(c=>c.id===id));if(finding.area!=='authoring'||!task||task.owner!==finding.owner||!components?.length||components.some(c=>!c||c.platform!=='canvas'||c.owner!==finding.owner))fail('Canvas prerequisite finding must belong to its Canvas-only author task');else if(finding.scope.kind==='canvas-ownership-recovery'&&!ownershipRecoveryScopeMatches(value.environmentUrl,task,finding.scope,finding.evidence))fail('Canvas ownership recovery must bind its task resource, owner, environment and exact release evidence');}
     if (finding.status === 'observed' && !finding.evidence.length) fail('Observed findings need evidence');
     for (const evidence of finding.evidence) if (Date.parse(evidence.expiresAt) <= Date.parse(evidence.observedAt)) fail('Evidence expiry must follow observation');
@@ -94,6 +101,10 @@ export function discoveryBlockers(record: DeliveryRecord, now = Date.now()): str
   if(record.content.applicationSpec)blockers.push(...applicationSpecBlockers(record.content.applicationSpec,findings,now));
   if(record.content.governanceProfile)blockers.push(...governanceProfileBlockers(record.content.governanceProfile,now));
   for (const finding of findings) {
+    // Approval covers this explicit fixed probe contract, not continued validity
+    // of historical observations. Actual operations require separate fresh,
+    // server-owned admission receipts. Unclassified findings remain strict.
+    if(finding.executionEvidence)continue;
     if (finding.critical && finding.status !== 'observed') blockers.push(`${finding.id}: ${finding.remedy} (owner: ${finding.owner})`);
     if (finding.critical && finding.status === 'observed' && !['ready','not-applicable'].includes(finding.conclusion??'unknown')) blockers.push(`${finding.id}: ${finding.remedy} (owner: ${finding.owner}; observed ${finding.conclusion??'unknown'})`);
     if (finding.critical && finding.status === 'observed' && finding.evidence.some(e => Date.parse(e.observedAt) > now + 60_000 || Date.parse(e.expiresAt) <= now)) blockers.push(`${finding.id}: refresh stale or future-dated evidence (owner: ${finding.owner})`);

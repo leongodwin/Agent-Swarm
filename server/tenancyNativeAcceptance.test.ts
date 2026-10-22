@@ -51,8 +51,13 @@ it.each([undefined, 12345])('does not accept a native process error with pid %s 
   expect(service.loginStatus(job.id)).toMatchObject({ status: 'failed', nativeCleanup: 'exited', ok: false }); expect(service.loginStatus(job.id).message).not.toContain('private native'); await service.shutdown();
 });
 it('sends stop to the native root, retains the cancelled reservation until exit and then settles shutdown', async () => {
-  const process = child(12345), service = make(), job = service.login({ interactive: true }); service.cancelLogin(job.id); expect(process.kill).toHaveBeenCalledOnce(); expect(service.activity().awaitingNativeExit).toBe(1);
+  const process = child(12345), service = make(), job = service.login({ interactive: true }); service.cancelLogin(job.id); if(globalThis.process.platform==='win32'){expect(native.execFile).toHaveBeenCalledWith('taskkill',['/PID','12345','/T','/F'],{windowsHide:true},expect.any(Function));expect(process.kill).not.toHaveBeenCalled();}else expect(process.kill).toHaveBeenCalledOnce(); expect(service.activity().awaitingNativeExit).toBe(1);
   const stopped = service.shutdown(); process.emit('close', 1); await stopped; expect(service.activity().awaitingNativeExit).toBe(0); expect(service.loginStatus(job.id).status).toBe('cancelled');
+});
+it('retains Windows authentication ownership after failed process-tree cancellation until native exit',async()=>{
+  const descriptor=Object.getOwnPropertyDescriptor(globalThis.process,'platform')!;Object.defineProperty(globalThis.process,'platform',{value:'win32'});
+  try{const proc=child(12345),service=make(),job=service.login({interactive:true});native.execFile.mockImplementation((_file,_args,_opts,cb)=>cb(new Error('synthetic taskkill failure')));service.cancelLogin(job.id);expect(service.loginStatus(job.id).nativeCleanup).toBe('awaiting-exit');expect(service.activity().awaitingNativeExit).toBe(1);let settled=false;const stopped=service.shutdown().then(()=>{settled=true;});await Promise.resolve();expect(settled).toBe(false);proc.emit('close',1);await stopped;expect(service.activity().awaitingNativeExit).toBe(0);expect(service.loginStatus(job.id).status).toBe('cancelled');}
+  finally{Object.defineProperty(globalThis.process,'platform',descriptor);}
 });
 it('quarantines displaced authentication acknowledgement and never certifies its native success', async () => {
   const root = home(), service = createTenancyService(false, undefined, root); services.push(service); const process = child(12345), job = service.login({ interactive: true });
@@ -78,7 +83,7 @@ it('bounds demo login history, has no native mutation effects and refuses unknow
   expect(() => service.loginStatus(first.id)).toThrow('not found'); expect(() => service.cancelLogin('missing')).toThrow('not found'); expect(service.activity().profileMutation?.status).toBe('clear'); expect(native.spawn).not.toHaveBeenCalled(); expect(native.execFile).not.toHaveBeenCalled(); await service.shutdown();
 });
 it('holds late closed native cleanup failures until its exit acknowledgement rather than resolving shutdown early', async () => {
-  const process = child(12345), service = make(); service.login({ interactive: true }); process.kill.mockImplementation(() => { throw new Error('Synthetic stop failed'); });
+  const process = child(12345), service = make(); service.login({ interactive: true }); if(globalThis.process.platform==='win32')native.execFile.mockImplementation(() => {throw new Error('Synthetic stop failed');});else process.kill.mockImplementation(() => { throw new Error('Synthetic stop failed'); });
   const failed = expect(service.shutdown()).rejects.toThrow('cleanup failed'); process.emit('close', 1); await failed; expect(service.activity().awaitingNativeExit).toBe(0);
 });
 it('marks cached identity stale during an independently reserved profile mutation', async () => {

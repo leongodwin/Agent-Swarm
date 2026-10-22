@@ -346,6 +346,7 @@ export class Swarm {
     publish();return {running:()=>change('running'),stopping:()=>change('stopping'),release:()=>{if(this.auxiliarySessions.get(jobId)!==reservation)return;this.auxiliarySessions.delete(jobId);publish();this.later(()=>this.schedule(),0);}};
   }
   capabilityFingerprint = () => '';
+  coordinatorEvidenceRead?: (input:unknown,guard:()=>void,repoIds:string[])=>Promise<unknown>;
   workerAdmissionContext: (repoIds: string[]) => string = () => '';
   capabilityStatus = () => '{}';
   capabilityPreflight: (repoId: string, cli: string) => Promise<string | null> = async () => { throw new Error('Capability service is not configured'); };
@@ -357,6 +358,7 @@ export class Swarm {
   deliveryRecordTool?: import('./ceo.ts').RecordToolHandler;
   requestRecordReview: (repoId:string) => Promise<string> = async () => {throw new Error('Delivery records unavailable');};
   deliveryWorkGate: (repoId:string,issue:number) => void = () => {};
+  executionEvidenceCheck:(repoId:string,issue:number,actor:string,attemptId:string,guard:()=>void)=>Promise<void>=async()=>{};
   deliveryTaskStage: (repoId:string,issue:number) => string|undefined = () => undefined;
   deliveryTaskFingerprint: (repoId:string,issue:number) => string = () => '';
   deliveryTaskContract:(repoId:string,issue:number)=>{owner:string;qaOwner:string;components:string[];resources:string[]}|null=()=>null;
@@ -423,6 +425,7 @@ export class Swarm {
    */
   private officeTools(authorize?: SessionAuthorization): OfficeTools {
     return createOfficeTools({
+      readDiscoveryEvidence:this.coordinatorEvidenceRead?input=>this.coordinatorEvidenceRead!(input,this.planningSessionGuard('ceo'),this.state.ceo.job?.repoId?[this.state.ceo.job.repoId]:this.state.repos.map(repo=>repo.id)):undefined,
       deliveryRecord: this.deliveryRecordTool,
       reviewDeliveryRecord: this.requestRecordReview,
       companyStatus: () => this.companyStatus(),
@@ -1098,6 +1101,17 @@ export class Swarm {
     this.broadcast({ type: 'repoRemoved', repoId: id });
     for (const r of this.state.repos) this.emitRepo(r);
     this.toast('info', repo.localPath ? `${repo.fullName} left the building. Your folder ${repo.localPath} is untouched.` : `${repo.fullName} disconnected (its clone stays on disk)`);
+  }
+
+  /** Adopt the already authenticated target only while idle. Existing record/release hashes remain unchanged. */
+  async refreshRepoTarget(id:string,expectedEnvironmentUrl:string|null,environmentUrl:string,username:string,externalGuard:()=>void=()=>{}){
+    const canonical=(url:string)=>{const value=new URL(url);if(value.protocol!=='https:'||value.username||value.password||value.port||value.pathname!=='/'||value.search||value.hash||!/^[a-z0-9-]+\.crm\d*\.dynamics\.com$/.test(value.hostname))throw new HttpError(400,'Expected an organization root URL');return value.origin;};
+    const target=canonical(environmentUrl),previous=expectedEnvironmentUrl===null?null:canonical(expectedEnvironmentUrl);
+    const guard=()=>{this.requireOpen();externalGuard();const repo=this.repo(id),usage=this.sessionUsage();if(usage.used||usage.blockedReason||this.state.ceo.job||this.backend.tenancy.activity().busy)throw new HttpError(409,'Wait for native work and authentication reconciliation before changing the project target');if((repo.targetTenancy?canonical(repo.targetTenancy.environmentUrl):null)!==previous)throw new HttpError(409,'Project target changed; refresh before retrying');return repo;};
+    guard();const info=await this.backend.tenancy.info();const selected=activeEnvironment(info);const repo=guard();
+    if(info.status!=='connected'||!info.isReal||!selected||canonical(selected.environmentUrl)!==target||selected.user.toLowerCase()!==username.toLowerCase()||(repo.targetTenancy&&repo.targetTenancy.user.toLowerCase()!==username.toLowerCase()))throw new HttpError(409,'The intended existing account and selected target are not confirmed');
+    repo.targetTenancy=selected;repo.autoAssign=false;repo.autoMerge=false;
+    this.save();this.emitRepo(repo);return this.repoView(repo);
   }
 
   updateRepo(
@@ -2194,10 +2208,15 @@ export class Swarm {
     const projects = [repo, ...this.linkedRepos(repo)];
     let refreshing: Promise<string | null> | undefined;
     const signal = this.taskStops.get(a.id)?.signal;
+    const executionAttemptId=this.executionAttempts.get(a.id)?.id??crypto.randomUUID();
     const authorizeTool: SessionAuthorization = async () => {
       const denied = authority(); if (denied) return denied;
       refreshing ??= this.projectReadiness(projects, how.cli ?? 'node', signal).finally(() => {refreshing = undefined;});
       const blocker = await refreshing;
+      if(!blocker&&deliveryIssue!==null&&!['discovery','design'].includes(this.deliveryTaskStage(repo.id,deliveryIssue)??'')){
+        try{await this.executionEvidenceCheck(repo.id,deliveryIssue,a.id,executionAttemptId,()=>{const denied=authority();if(denied)throw new Error(denied);});}
+        catch{return 'Fresh phase execution evidence is unavailable; authoring remains blocked';}
+      }
       return authority() ?? blocker;
     };
     this.emitAgent(a);
@@ -3066,6 +3085,10 @@ export class Swarm {
    * free developer is least needed elsewhere, so nobody sits idle while there is work that can start.
    */
   private startIssueWork(repo: PersistedRepo): boolean {
+    // Planning publishes scope/task revisions. Admit workers only after that
+    // transaction finishes; later scope drift still revokes their authority.
+    const planning=this.state.ceo.job;
+    if(planning&&['onboard','plan'].includes(planning.kind)&&'repoId' in planning&&planning.repoId===repo.id)return false;
     if (!repo.autoAssign || !this.mayStart('issue')) return false;
     const free = this.available(repo, 'dev');
     const ready = free.length ? this.readyIssues(repo).filter((item) => {

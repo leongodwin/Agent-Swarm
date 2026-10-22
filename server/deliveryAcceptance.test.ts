@@ -116,6 +116,8 @@ describe('independent delivery evidence acceptance', () => {
     await expect(f.service.start(f.repo, false, unapproved.id)).rejects.toThrow('Awaiting independent QA'); expect(f.service.view().runs).toHaveLength(0);
     await expect(f.service.start({ ...f.repo, id: 'unscoped/repo' })).rejects.toThrow('Create a scoped release');
   });
+  // Fixture creation uses real Git processes and fsynced journals. Windows CI
+  // can exceed the default 5s before reaching the unchanged admission checks.
   it.each(['clone', 'sync', 'target', 'open-issue'] as const)('blocks %s prerequisites before build or import', async reason => {
     const f = await fixture(); let repo = f.repo;
     if (reason === 'clone') repo = { ...repo, cloneStatus: 'error' };
@@ -124,7 +126,7 @@ describe('independent delivery evidence acceptance', () => {
     if (reason === 'open-issue') { const native = f.deps.run; f.deps.run = async (...args) => args[0].executable === 'gh' ? '{"state":"OPEN"}' : native(...args); }
     await expect(f.service.start(repo)).rejects.toThrow(reason === 'target' ? 'target differs' : reason === 'open-issue' ? 'still open' : 'sync errors');
     expect(f.calls).not.toContain('build'); expect(f.calls.some(c => c.includes('solution import'))).toBe(false); expect(f.service.view().blockers).toHaveLength(1);
-  });
+  }, 15000);
   it.each(['wrong-commit', 'stale', 'future', 'wrong-runbook', 'duplicate-record', 'missing-evidence', 'empty-runbook'] as const)('rejects %s recovery receipts without importing', async mode => {
     const f = await fixture(), native = f.deps.run;
     f.deps.run = async (...args) => { const result = await native(...args); if (args[0].executable !== 'build') return result;

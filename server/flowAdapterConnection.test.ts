@@ -3,7 +3,7 @@ import {afterEach,expect,it,vi} from 'vitest';
 const state=vi.hoisted(()=>({connect:vi.fn(),list:vi.fn(),call:vi.fn(),clientClose:vi.fn(),transportClose:vi.fn(),transport:null as null|{onclose?:()=>void;close():Promise<void>}}));
 vi.mock('./skillRegistry.ts',()=>({discoverSkills:()=>({skills:[]})}));
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js',()=>({StdioClientTransport:class{onclose?:()=>void;closed=false;constructor(){state.transport=this;}async close(){await state.transportClose();if(!this.closed){this.closed=true;this.onclose?.();}}}}));
-vi.mock('@modelcontextprotocol/sdk/client/index.js',()=>({Client:class{connect(...args:unknown[]){return state.connect(...args);}listTools(...args:unknown[]){return state.list(...args);}callTool(...args:unknown[]){return state.call(...args);}async close(){await state.clientClose();await state.transport?.close();}}}));
+vi.mock('@modelcontextprotocol/sdk/client/index.js',()=>({Client:class{getServerVersion(){return{name:'synthetic-flowagent',version:'1.0.0'};}connect(...args:unknown[]){return state.connect(...args);}listTools(...args:unknown[]){return state.list(...args);}callTool(...args:unknown[]){return state.call(...args);}async close(){await state.clientClose();await state.transport?.close();}}}));
 import {connectFlowAdapter} from './flowAdapter.ts';
 const names=['whoami','get_flow','get_flow_context','preflight_flow','publish_flow','disable_flow','get_run_history','get_run_details','get_run_actions','get_run_action_content'];
 const roots:string[]=[];
@@ -46,3 +46,4 @@ it('does not initialize a cancelled or unavailable runtime',async()=>{
 it.each(['{"success":false,"success":true}','{"identityMismatch":true,"identity\\u004Dismatch":false}','{"properties":{"connectionName":"private-binding","connectionName":"approved"}}'])('rejects duplicate provider fields without accepting or echoing them: %s',async text=>{
   const f=await fixture(),adapter=await f.connect();try{state.call.mockResolvedValue({content:[{type:'text',text}]});const error=await adapter.call('get_flow',{}).catch(error=>error);expect(error).toBeInstanceOf(Error);expect((error as Error).message).toContain('invalid JSON');expect((error as Error).message).not.toContain('private-binding');}finally{await adapter.close();}
 });
+it('rejects runtime bytes that change between launch and the authenticated MCP handshake',async()=>{const f=await fixture();state.list.mockImplementation(async()=>{await fs.appendFile(path.join(f.root,'synthetic.mjs'),'\n// changed during admission');return{tools:names.map(name=>({name}))};});await expect(f.connect()).rejects.toThrow('runtime changed');expect(state.call).not.toHaveBeenCalled();expect(state.clientClose).toHaveBeenCalledOnce();});
