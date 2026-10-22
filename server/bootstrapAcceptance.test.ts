@@ -81,6 +81,9 @@ describe('isolated office bootstrap acceptance',()=>{
    expect(await deps.observe('project-readiness',h.record,{issue:1},()=>{})).toMatchObject({passed:true,observedAt:at,expiresAt:until});h.capResult.checks[0].passed=false;expect((await deps.observe('project-readiness',h.record,{issue:1},()=>{})).passed).toBe(false);
    h.args.discoveryResult={observation:{data:{status:'observed',requiredGlobalPrivilegesPresent:true,protectedOwnerOnly:true}},evidence:{observedAt:at,expiresAt:until,sha256:'e'.repeat(64),reference:'synthetic-original'}};
    for(const probe of ['headless-authoring-rights','private-report-acl'])expect(await deps.observe(probe,h.record,{issue:1},()=>{})).toMatchObject({passed:true,sourceReference:'synthetic-original'});
+   h.args.discoveryResult.observation.data.status='unknown';expect((await deps.observe('headless-authoring-rights',h.record,{issue:1},()=>{})).passed).toBe(false);
+   h.args.discoveryResult.observation.data.status='observed';h.args.discoveryResult.observation.data.requiredGlobalPrivilegesPresent='true';h.args.discoveryResult.observation.data.protectedOwnerOnly='true';
+   for(const probe of ['headless-authoring-rights','private-report-acl'])expect((await deps.observe(probe,h.record,{issue:1},()=>{})).passed).toBe(false);
    h.services.capabilities.configuration.mockReturnValue(undefined);expect(()=>deps.configuration(h.record)).toThrow('missing');await expect(deps.observe('project-readiness',h.record,{},()=>{})).rejects.toThrow('missing');
   });
   it.each(['profile','approval','record','drain'])('rechecks %s mutations during phase admission and withholds worker authorization',async changed=>{

@@ -1,7 +1,8 @@
 import {it,expect} from 'vitest';
 import crypto from 'node:crypto';
-import {synthesisRecordContext,boundedSynthesisPrompt} from './synthesisContext.ts';
+import {synthesisRecordContext,synthesisCatalogueContext,boundedSynthesisPrompt} from './synthesisContext.ts';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
+import {phaseRecordFixture} from './testFixtures/phaseRecord.ts';
 it('retains current scope, critical findings and evidence while explicitly indexing omitted historical prose',()=>{
  const text='Historical proposal £ '.repeat(200),evidence=[{reference:'retained.json',sha256:'a'.repeat(64),observedAt:'2026-10-18T00:00:00Z',expiresAt:'2026-10-18T00:01:00Z'}];
  const record={id:'record',revision:93,sha256:'b'.repeat(64),content:{applicationSpec:{decisions:['unresolved']},taskPlan:{stopConditions:['fresh effective rights']},contracts:['full history required'],findings:[{id:'critical',critical:true,statement:text,remedy:text,evidence},{id:'historical',critical:false,statement:text,remedy:text,evidence}]}} as unknown as DeliveryRecord;
@@ -19,6 +20,7 @@ it('retains whole verified evidence when it fits and explicitly marks omitted ev
 it('blocks oversized current scope instead of omitting requirements or increasing the bound',()=>{
  expect(()=>boundedSynthesisPrompt({contracts:'x'.repeat(2000)},[],1000)).toThrow('scope exceeds');expect(synthesisRecordContext(undefined)).toBeNull();
 });
+it('retains complete catalogue text when no discovery record can supply a same-prompt reference',()=>{const row={id:'standalone',kind:'delivery-requirement' as const,text:'Complete standalone requirement without a captured discovery record',sourceSha256:'a'.repeat(64)};expect(synthesisCatalogueContext([row],undefined)).toEqual([row]);});
 it('does not refill saved history capacity with large evidence texts and retains their exact references',()=>{
  const refs=[{reference:'large-current-source',sha256:'a'.repeat(64),status:'captured',text:'x'.repeat(16*1024+1)},{reference:'small-contract',sha256:'b'.repeat(64),status:'captured',text:'Current exact contract'}];
  const value=JSON.parse(boundedSynthesisPrompt({contracts:'Current contracts stay whole'},refs));
@@ -31,7 +33,7 @@ it('keeps accumulated historical context within the existing bound and detects c
  expect(prompt.discoveryEvidence.content.findings).toHaveLength(160);
  const legacy=structuredClone(record);
  expect(()=>boundedSynthesisPrompt({discoveryEvidence:legacy},[])).toThrow('scope exceeds');
- expect(view.projection).toBe('planning-only-noncritical-finding-index-v3');
+ expect(view.projection).toBe('planning-only-explicit-execution-finding-index-v4');
  const before=view.content.findings[0] as {fullFindingSha256:string};
  expect(view.content.findings[0]).not.toHaveProperty('statement');expect(view.content.findings[0]).not.toHaveProperty('remedy');
  expect(view.content.findings[0].evidence).toEqual(record.content.findings[0].evidence);
@@ -43,4 +45,15 @@ it('keeps accumulated historical context within the existing bound and detects c
  expect(after.fullFindingSha256).not.toBe(before.fullFindingSha256);
  const critical={...record,content:{...record.content,findings:[{...record.content.findings[0],critical:true,statement:'x'.repeat(256*1024)}]}};
  expect(()=>boundedSynthesisPrompt({discoveryEvidence:synthesisRecordContext(critical)},[])).toThrow('scope exceeds');
+});
+it('indexes only explicitly typed execution prose while retaining contracts, claims, evidence and exact-byte provenance for QA',()=>{
+ const record=phaseRecordFixture(),finding=record.content.findings.find(f=>f.executionEvidence)!;
+ finding.statement='Historical narrow metadata claim '.repeat(4000);finding.remedy='Original remedy '.repeat(4000);
+ const original=JSON.stringify(record),view=synthesisRecordContext(record)!,indexed=view.content.findings.find(f=>f.id===finding.id)!;
+ expect(indexed).toMatchObject({critical:true,conclusion:'blocked',executionEvidence:finding.executionEvidence,evidence:finding.evidence,fullFindingSha256:crypto.createHash('sha256').update(JSON.stringify(finding)).digest('hex')});
+ expect(indexed).not.toHaveProperty('statement');expect(indexed).not.toHaveProperty('remedy');expect(JSON.stringify(record)).toBe(original);
+ expect(JSON.parse(boundedSynthesisPrompt({discoveryEvidence:view},[])).discoveryEvidence.content.findings).toHaveLength(record.content.findings.length);
+ expect(view.historyLimit).toContain('require future fresh server-owned checks');
+ (finding.executionEvidence as any).probe='arbitrary-command';expect(synthesisRecordContext(record)!.content.findings.find(f=>f.id===finding.id)).toEqual(finding);
+ delete finding.executionEvidence;expect(synthesisRecordContext(record)!.content.findings.find(f=>f.id===finding.id)).toEqual(finding);
 });

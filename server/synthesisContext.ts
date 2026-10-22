@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
 import type {SynthesisRequirement} from './synthesisTraceability.ts';
+import {isExecutionEvidence} from '../shared/executionEvidence.ts';
 
 /** Replace exact duplicate JSON with pointers into the same complete prompt.
  * The retained source, hashes and independent review remain authoritative. */
@@ -24,8 +25,8 @@ export function synthesisCatalogueContext(catalogue:readonly SynthesisRequiremen
  * is explicitly omitted with exact-byte provenance, never declared resolved. */
 export function synthesisRecordContext(record:DeliveryRecord|undefined){
  if(!record)return null;
- return {projection:'planning-only-noncritical-finding-index-v3',reference:{id:record.id,revision:record.revision,sha256:record.sha256},historyLimit:'Noncritical finding prose is not inspected by the model. These are retained noncritical findings, not resolved or approved findings. Independent QA must inspect the full retained record. Current critical findings and executable contracts remain whole.',content:{...record.content,findings:record.content.findings.map(f=>{
-  if(f.critical)return f;
+ return {projection:'planning-only-explicit-execution-finding-index-v4',reference:{id:record.id,revision:record.revision,sha256:record.sha256},historyLimit:'Noncritical finding prose and explicitly classified execution finding prose are not inspected by the model; do not infer their omitted contents. These are retained findings, not resolved or approved findings. Independent QA must inspect the full retained record and each classification. Unclassified critical findings and all executable contracts remain whole. Explicit execution contracts retain every original evidence identity, conclusion and expiry; they require future fresh server-owned checks and imply no live readiness.',content:{...record.content,findings:record.content.findings.map(f=>{
+  if(f.critical&&!isExecutionEvidence(f.executionEvidence))return f;
   const {statement,remedy,...identity}=f,bytes=Buffer.from(JSON.stringify(f));
   return {...identity,omittedFields:['statement','remedy'],fullFindingBytes:bytes.length,fullFindingSha256:crypto.createHash('sha256').update(bytes).digest('hex')};
  })}};
