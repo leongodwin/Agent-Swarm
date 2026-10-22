@@ -12,6 +12,8 @@ For the final email set `allowDispatch:true`, `dispatchKey:<delivery-record ID>`
 
 Trigger body fields are `mode`, `dispatch`, `recipient`, `correlationId`, `requestKey`. `contextAction` composes those exact values. `resultAction` reports actual derived results. The receipt action returns `{value:[{id,subject,toRecipients,receivedDateTime}]}` through Outlook Graph GET. Exactly one Inbox message must match the unpredictable correlation ID, owner recipient and run time. Include requestKey in the subject; use trigger concurrency1, same-request receipt deduplication and no send retries.
 
+For final dispatch, `receiptAction` must identify the native Office365 `HttpRequest` action itself, using GET at `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages`. Its provider action status must be Succeeded. A Compose action, an all-folders `/me/messages` query or a Sent Items lookup cannot establish Inbox receipt. Use bounded harmless waits/reads after the send as needed; send retries remain disabled. An uncertain final outcome retains the persistent no-resend claim for independent reconciliation.
+
 Only Outlook reads, owner-scoped Graph mail GET and pinned-organization AI Builder QuickTest are admitted. No arbitrary HTTP/code/write connectors. Exactly one SendEmailV2 must have literal owner-only To, empty Cc/Bcc and `inputs.retryPolicy:{type:"none"}`. Place it in the true branch of an If with this exact expression (substitute the approved owner):
 
 ```json
