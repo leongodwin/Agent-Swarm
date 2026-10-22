@@ -1103,10 +1103,10 @@ export class Swarm {
   }
 
   /** Adopt the already authenticated target only while idle. Existing record/release hashes remain unchanged. */
-  async refreshRepoTarget(id:string,expectedEnvironmentUrl:string|null,environmentUrl:string,username:string){
+  async refreshRepoTarget(id:string,expectedEnvironmentUrl:string|null,environmentUrl:string,username:string,externalGuard:()=>void=()=>{}){
     const canonical=(url:string)=>{const value=new URL(url);if(value.protocol!=='https:'||value.username||value.password||value.port||value.pathname!=='/'||value.search||value.hash||!/^[a-z0-9-]+\.crm\d*\.dynamics\.com$/.test(value.hostname))throw new HttpError(400,'Expected an organization root URL');return value.origin;};
     const target=canonical(environmentUrl),previous=expectedEnvironmentUrl===null?null:canonical(expectedEnvironmentUrl);
-    const guard=()=>{this.requireOpen();const repo=this.repo(id),usage=this.sessionUsage();if(usage.used||usage.blockedReason||this.state.ceo.job||this.backend.tenancy.activity().busy)throw new HttpError(409,'Wait for native work and authentication reconciliation before changing the project target');if((repo.targetTenancy?canonical(repo.targetTenancy.environmentUrl):null)!==previous)throw new HttpError(409,'Project target changed; refresh before retrying');return repo;};
+    const guard=()=>{this.requireOpen();externalGuard();const repo=this.repo(id),usage=this.sessionUsage();if(usage.used||usage.blockedReason||this.state.ceo.job||this.backend.tenancy.activity().busy)throw new HttpError(409,'Wait for native work and authentication reconciliation before changing the project target');if((repo.targetTenancy?canonical(repo.targetTenancy.environmentUrl):null)!==previous)throw new HttpError(409,'Project target changed; refresh before retrying');return repo;};
     guard();const info=await this.backend.tenancy.info();const selected=activeEnvironment(info);const repo=guard();
     if(info.status!=='connected'||!info.isReal||!selected||canonical(selected.environmentUrl)!==target||selected.user.toLowerCase()!==username.toLowerCase()||(repo.targetTenancy&&repo.targetTenancy.user.toLowerCase()!==username.toLowerCase()))throw new HttpError(409,'The intended existing account and selected target are not confirmed');
     repo.targetTenancy=selected;repo.autoAssign=false;repo.autoMerge=false;
