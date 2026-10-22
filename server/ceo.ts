@@ -25,6 +25,7 @@ export interface CeoJob {
 
 /** What the CEO's tools do. Implemented by the swarm; errors are returned to the CEO as tool errors. */
 export interface OfficeHandlers {
+  readDiscoveryEvidence?(input:unknown):Promise<unknown>;
   deliveryRecord?: RecordToolHandler;
   reviewDeliveryRecord?(repoId:string):Promise<string>;
   companyStatus(): string;
@@ -97,8 +98,8 @@ export function createOfficeTools(h: OfficeHandlers, authorize?: SessionAuthoriz
   let defs = [
     ...sourceTools(async input=>{
       const request=deliverySourceRequest.parse(input);
-      if(request.kind!=='office-document')throw new Error('Coordinator source reader admits approved office documents only');
-      const result=await readDeliverySource(request,{repoId:'__office__',sourceCommit:null,read:async()=>{throw new Error('Repository reader unavailable');},guard:()=>{}});
+      if(request.kind!=='office-document'&&(request.kind!=='discovery-evidence'||!h.readDiscoveryEvidence))throw new Error('Coordinator source reader admits approved office documents and server-bound discovery receipts only');
+      const result=request.kind==='discovery-evidence'?await h.readDiscoveryEvidence!(request):await readDeliverySource(request,{repoId:'__office__',sourceCommit:null,read:async()=>{throw new Error('Repository reader unavailable');},guard:()=>{}});
       const denied=authorize?await sessionAuthority(authorize):null;
       if(denied)throw new Error(denied.reason);
       return result;

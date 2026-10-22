@@ -346,6 +346,7 @@ export class Swarm {
     publish();return {running:()=>change('running'),stopping:()=>change('stopping'),release:()=>{if(this.auxiliarySessions.get(jobId)!==reservation)return;this.auxiliarySessions.delete(jobId);publish();this.later(()=>this.schedule(),0);}};
   }
   capabilityFingerprint = () => '';
+  coordinatorEvidenceRead?: (input:unknown,guard:()=>void,repoIds:string[])=>Promise<unknown>;
   workerAdmissionContext: (repoIds: string[]) => string = () => '';
   capabilityStatus = () => '{}';
   capabilityPreflight: (repoId: string, cli: string) => Promise<string | null> = async () => { throw new Error('Capability service is not configured'); };
@@ -423,6 +424,7 @@ export class Swarm {
    */
   private officeTools(authorize?: SessionAuthorization): OfficeTools {
     return createOfficeTools({
+      readDiscoveryEvidence:this.coordinatorEvidenceRead?input=>this.coordinatorEvidenceRead!(input,this.planningSessionGuard('ceo'),this.state.ceo.job?.repoId?[this.state.ceo.job.repoId]:this.state.repos.map(repo=>repo.id)):undefined,
       deliveryRecord: this.deliveryRecordTool,
       reviewDeliveryRecord: this.requestRecordReview,
       companyStatus: () => this.companyStatus(),

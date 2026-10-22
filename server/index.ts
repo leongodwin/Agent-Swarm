@@ -122,6 +122,14 @@ const sourceReaderFor=(agentId:string,repoId:string)=>async(input:unknown)=>{
   const request=deliverySourceRequest.parse(input);
   return readDeliverySource(request,{repoId,sourceCommit,guard,evidence:request.kind==='discovery-evidence'?{home:HOME_DIR,repoId,guard,record:()=>deliveryRecords.current(repoId),findingIds:deliveryEvidenceFindingIds(deliveryRecords.current(repoId),issue,agent.role==='qa'?'qa':'dev')}:undefined,read:file=>readPinnedBlob(async args=>{guard();const output=await deliveryCommands.run({executable:'git',args},context.checkoutPath,{},signal);guard();return output;},sourceCommit!,file)});
 };
+swarm.coordinatorEvidenceRead=async(input,session,repoIds)=>{
+ const request=deliverySourceRequest.parse(input);session();if(request.kind!=='discovery-evidence')throw new HttpError(403,'Coordinator receipt reader requires an exact discovery reference');
+ const matches=repoIds.map(repoId=>deliveryRecords.current(repoId)).filter(record=>record?.id===request.reference.id);
+ if(matches.length!==1||!matches[0])throw new HttpError(403,'Discovery record is outside the coordinator project scope');
+ const record=matches[0],repoId=record.repoId,context=recordContext(repoId);
+ const guard=()=>{recordDependencies.assertOpen();session();const current=deliveryRecords.current(repoId);if(!current||JSON.stringify(recordContext(repoId))!==JSON.stringify(context))throw new HttpError(409,'Coordinator discovery target changed');deliveryRecords.assertContext(current,context);};
+ guard();return readDeliverySource(request,{repoId,sourceCommit:record.content.sourceCommit,guard,evidence:{home:HOME_DIR,repoId,record:()=>deliveryRecords.current(repoId),guard},read:async()=>{throw new HttpError(403,'Coordinator repository reads are not admitted');}});
+};
 const recordHandler=(id:string,role:'ceo'|'dev'|'qa'|'manager',repoId?:string):import('./ceo.ts').RecordToolHandler=>async input=>{
   const agent=role==='manager'?undefined:swarm.snapshot().agents.find(agent=>role==='ceo'?agent.role==='ceo':agent.id===id&&agent.repoId===repoId);
   const assertSession=agent?swarm.planningSessionGuard(agent.id):undefined;
