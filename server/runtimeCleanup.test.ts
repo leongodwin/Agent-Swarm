@@ -198,8 +198,10 @@ it.each([{writers:2,count:20,delay:0},{writers:3,count:20,delay:10},{writers:3,c
   fs.writeFileSync(script,`import fs from 'node:fs';import {RuntimeCleanupStore} from ${JSON.stringify(module)};
     const flush=fs.fsyncSync;fs.fsyncSync=fd=>{if(${delay})Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${delay});return flush(fd);};
     const [file,prefix]=process.argv.slice(2);const store=new RuntimeCleanupStore(file);
-    process.send('ready');process.once('message',()=>{
-      for(let i=0;i<${count};i++)store.begin({id:prefix+'-'+i,agentId:prefix,cli:'codex',pid:process.pid,keeperInstance:null,requestedAt:i,state:'stopping'});
+    const write=i=>store.begin({id:prefix+'-'+i,agentId:prefix,cli:'codex',pid:process.pid,keeperInstance:null,requestedAt:i,state:'stopping'});
+    process.send('ready');process.on('message',step=>{
+      if(typeof step==='number'){write(step);process.send('round:'+step);return;}
+      if(step==='start')for(let i=0;i<${count};i++)write(i);
       store.confirmed(prefix+'-0');const view=store.view();
       if(view.unavailableReason){console.error(JSON.stringify({reason:view.unavailableReason,code:view.failureCode,systemCode:view.failureSystemCode,pid:process.pid,count:view.records.length}));process.exitCode=1;}
       process.disconnect();
@@ -209,7 +211,18 @@ it.each([{writers:2,count:20,delay:0},{writers:3,count:20,delay:10},{writers:3,c
   const exits=children.map(async child=>{let stderr='';child.stderr?.on('data',chunk=>{stderr+=chunk;});const [code]=await once(child,'exit');return {code,stderr};});
   try{
     await Promise.all(children.map(child=>once(child,'message')));
-    for(const child of children)child.send('start');
+    if(delay===0)for(const child of children)child.send('start');
+    else{
+      // Keep all writers competing in every round, while bounding outstanding
+      // delayed flushes. An unbounded burst may legitimately exhaust the
+      // production one-second quarantine budget on a busy Windows runner.
+      for(let round=0;round<count;round++){
+        const acknowledgements=children.map(child=>once(child,'message'));
+        for(const child of children)child.send(round);
+        expect(await Promise.all(acknowledgements)).toEqual(prefixes.map(()=>['round:'+round,undefined]));
+      }
+      for(const child of children)child.send('finish');
+    }
     expect(await Promise.all(exits)).toEqual(prefixes.map(()=>({code:0,stderr:''})));
     const view=new RuntimeCleanupStore(file).view();expect(view.unavailableReason).toBeUndefined();
     expect(view.records.map(row=>row.id).sort()).toEqual(prefixes.flatMap(prefix=>Array.from({length:count-1},(_,i)=>prefix+'-'+(i+1))).sort());
