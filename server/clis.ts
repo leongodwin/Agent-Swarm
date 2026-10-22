@@ -4,6 +4,7 @@ import {allowedRuntime,runtimeModelError,CODEX_REASONING_EFFORT} from '../shared
 import fs from 'node:fs';
 import path from 'node:path';
 import { run } from './exec.ts';
+import type {WorkerMcpServer} from './workerMcp.ts';
 import type { AgentCli, CliView, EffortLevel } from '../shared/types.ts';
 
 // The coding-agent CLIs an agent can run in its terminal, how to find them on this machine, and how to start one on
@@ -97,6 +98,8 @@ export async function detectClis(): Promise<CliView[]> {
 // ---------- starting one on a task ----------
 
 export interface LaunchContext {
+  coordinatorBrowser?:boolean;
+  platformServers?:Record<string,WorkerMcpServer>;
   prompt: string;
   systemAppend: string;
   model: string; // '' = the CLI's own default
@@ -107,7 +110,7 @@ export interface LaunchContext {
   role: 'dev' | 'qa' | 'ceo';
   additionalDirectories: string[];
   /** Files the office wrote for this session (settings, MCP config, instructions). */
-  files: { settings: string; mcp: string | null; system: string };
+  files: { settings: string; mcp: string | null; system: string; codexProfile?:string };
   /** Where the CLI's turn-complete signal goes (Codex notify, the OpenCode plugin). */
   notify: { script: string; url: string };
   /** Codex's hook program: forwards each hook to the office (notify.url). */
@@ -127,6 +130,9 @@ export interface Launch {
 
 /** Codex hooks the office listens to: its steps, and Esc interrupting a turn. Turn endings come from notify. */
 export const CODEX_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Interrupt'];
+// Native timeout must outlast the bridge's bounded 30-second request so a
+// structured denial reaches Codex before it abandons a slow hook.
+export const codexHookTimeout = (event:string) => event === 'Interrupt' ? 3 : 60;
 
 /**
  * The command Codex runs for each hook. It never changes (the office's address travels in CUBEFARM_HOOK_URL), so the
@@ -144,6 +150,7 @@ export function codexHookInvocation(script:string,event:string){
 
 export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
   const error=runtimeModelError(id,ctx.model);if(error)throw new Error(error);
+  if(id==='gemini'&&Object.keys(ctx.platformServers??{}).length)throw new Error('Gemini native platform MCP servers require a reviewed protected profile; no tools were silently omitted');
   switch (id) {
     case 'gemini': {
       const profile=geminiProfilePath(!!ctx.browser);
@@ -155,13 +162,20 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         '--no-alt-screen','--enable','hooks',
         '-c',
         `notify=[${[process.execPath, ctx.notify.script, ctx.notify.url].map(toml).join(',')}]`,
-        '-c',
-        `developer_instructions=${toml(ctx.systemAppend)}`,
+        ...(ctx.files.codexProfile?['--profile',ctx.files.codexProfile]:['-c',`developer_instructions=${toml(ctx.systemAppend)}`]),
         ...(ctx.model ? ['-m', ctx.model] : []),
         ...(ctx.effort ? ['-c', `model_reasoning_effort=${toml(CODEX_REASONING_EFFORT[ctx.effort])}`] : []),
-        ...(ctx.browser ? ['-c', `mcp_servers.playwright={command=${toml(ctx.browser.command)},args=[${ctx.browser.args.map(toml).join(',')}],startup_timeout_sec=60}`] : []),
-        ...(ctx.officeUrl ? ['-c', `mcp_servers.office={url=${toml(ctx.officeUrl)}}`] : []),
-        ...CODEX_HOOK_EVENTS.flatMap((e) => ['-c', `hooks.${e}=[{hooks=[{type="command",command=${toml(codexHookInvocation(ctx.codexHook,e))},timeout=${e === 'Interrupt' ? 3 : 10}}]}]`]),
+        // Browsing remains optional here: presence is not a reviewed task
+        // dependency. Browser operations still fail if its bridge is unavailable.
+        ...(ctx.browser ? ['-c', `mcp_servers.playwright={command=${toml(ctx.browser.command)},args=[${ctx.browser.args.map(toml).join(',')}],enabled=true,startup_timeout_sec=60}`] : ctx.coordinatorBrowser?['-c',`mcp_servers.playwright={command=${toml(process.execPath)},args=[],enabled=false}`]:[]),
+        ...(ctx.officeUrl ? ['-c', `mcp_servers.office={url=${toml(ctx.officeUrl)},enabled=true,required=true,startup_timeout_sec=30,tool_timeout_sec=120}`] : []),
+        // Disable only known duplicate aliases in this child session. Keep the
+        // user's global configuration intact and give hooks one stable name.
+        // Even a disabled MCP entry needs a valid transport in native Codex.
+        // Include the transport so an alias absent from global config still parses.
+        ...Object.entries(ctx.platformServers??{}).flatMap(([name,server])=>(name==='canvas_authoring'?['canvas-authoring']:name==='flowagent'?['swarm-flowagent','swarm_flowagent']:[]).flatMap(alias=>['-c',`mcp_servers.${alias}={command=${toml(server.command)},args=[${server.args.map(toml).join(',')}],enabled=false}`])),
+        ...Object.entries(ctx.platformServers??{}).flatMap(([name,server])=>['-c',`mcp_servers.${name}={command=${toml(server.command)},args=[${server.args.map(toml).join(',')}],${server.cwd?`cwd=${toml(server.cwd)},`:''}${server.env?`env={${Object.entries(server.env).map(([key,value])=>`${toml(key)}=${toml(value)}`).join(',')}},`:''}enabled=true,required=true,startup_timeout_sec=90}`]),
+        ...CODEX_HOOK_EVENTS.flatMap((e) => ['-c', `hooks.${e}=[{hooks=[{type="command",command=${toml(codexHookInvocation(ctx.codexHook,e))},timeout=${codexHookTimeout(e)}}]}]`]),
         // Like the manager's own Codex, but it can't stop to ask: no approvals and no sandbox (its sandbox can't reach
         // the credential store, so git and gh fail in it).
         '--dangerously-bypass-approvals-and-sandbox',
@@ -177,9 +191,10 @@ export function launchArgs(id: AgentCli, ctx: LaunchContext): Launch {
         instructions: [ctx.files.system],
         autoupdate: false, // several agents starting at once must not each reinstall it
         permission: { edit: 'allow', bash: 'allow', webfetch: 'allow' }, // it can't stop to ask either
-        ...((ctx.browser || ctx.officeUrl) ? { mcp: {
+        ...((ctx.browser || ctx.officeUrl || Object.keys(ctx.platformServers??{}).length) ? { mcp: {
           ...(ctx.browser ? { playwright: { type: 'local', command: [ctx.browser.command, ...ctx.browser.args], enabled: true } } : {}),
           ...(ctx.officeUrl ? { office: { type: 'remote', url: ctx.officeUrl, enabled: true } } : {}),
+          ...Object.fromEntries(Object.entries(ctx.platformServers??{}).map(([name,server])=>[name,{type:'local',command:[server.command,...server.args],enabled:true,...(server.env?{environment:server.env}:{})}])),
         } } : {}),
       };
       // No project argument: it starts in its terminal's folder, and a desk path in its command line would make the
@@ -260,7 +275,8 @@ export function hookReviewKey(screen: string): 'enter' | 'down' | null {
  * instead?", Codex: "Conversation interrupted"). Esc fires no hook in Claude Code, so a new one is how the office
  * knows the manager stopped the turn from the terminal.
  */
-export function interruptions(screen: string): number {
+export function interruptions(screen: string,cli?:AgentCli): number {
+  if(cli==='gemini')return screen.split('\n').filter(line=>/^\s*(?:ℹ\s*)?(?:User cancelled the request|Request cancelled)\.\s*$/.test(line)).length;
   return screen.split('\n').filter((l) => /\binterrupted\b/i.test(l)).length;
 }
 
@@ -283,7 +299,7 @@ process.stdin.on('end', async () => {
     const out = await res.json();
     process.stdout.write(String(out.statusLine ?? ''));
   } catch {
-    process.stdout.write('cubefarm');
+    process.stdout.write('Agent Swarm');
   }
 });
 `;
@@ -300,7 +316,7 @@ if (event.type === 'agent-turn-complete') {
   fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hook_event_name: 'TurnComplete', session_id: event['thread-id'] ?? null, last_assistant_message: event['last-assistant-message'] ?? '', input }),
+    body: JSON.stringify({ hook_event_name: 'TurnComplete', session_id: event['thread-id'] ?? null, turn_id:event['turn-id']??null, last_assistant_message: event['last-assistant-message'] ?? '', input }),
     signal: AbortSignal.timeout(3000),
   }).catch(() => {});
 }
@@ -318,28 +334,37 @@ const chunks = [];let inputBytes=0;
 process.stdin.on('data', (c) => {inputBytes+=c.length;if(inputBytes<=1024*1024)chunks.push(c);});
 process.stdin.on('end', async () => {
   let body = {};
+  let stage = 'input';
   try {
     if(inputBytes>1024*1024)throw new Error('Hook input exceeds its bound');
     body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    stage = 'identity';
     const actualHash=require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync(__filename)).digest('hex');
     if(expectedEvent&&body.hook_event_name!==expectedEvent)throw new Error('Hook event identity changed');
     if(expectedHash&&expectedHash!==actualHash)throw new Error('Hook source identity changed');
     body.bridgeSha256=actualHash;
+    stage = 'endpoint';
     if (!url) throw new Error('Office hook URL unavailable');
     const endpoint = new URL(url);
     if (endpoint.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) throw new Error('Office hook must use loopback');
-    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+    // Persisted governance decisions can outlast five seconds under native
+    // startup/disk load. Stay bounded within the configured 60-second native hook budget.
+    stage = 'transport';
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+    stage = 'response';
     if (!response.ok) throw new Error('Office hook unavailable');
     const answer = await response.json();
+    stage = 'decision';
     if (body.hook_event_name === 'PreToolUse' && !['allow', 'deny'].includes(answer?.hookSpecificOutput?.permissionDecision)) throw new Error('No verified pre-tool decision');
     // Codex retains its native permission rules. Claude's existing unattended
     // mode explicitly opts into approval after the office safeguard succeeds.
     const preservePermissions = !process.argv.includes('--approve-governed');
     process.stdout.write(JSON.stringify(preservePermissions && body.hook_event_name === 'PreToolUse' && answer?.hookSpecificOutput?.permissionDecision === 'allow' ? {} : answer));
-  } catch {
+  } catch (error) {
     if ((expectedEvent??body.hook_event_name) === 'PreToolUse') {
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Office governance unavailable; execution denied' } }));
-      process.stderr.write('Office governance unavailable; execution denied.');
+      const reason = 'Office governance unavailable at ' + stage + (error?.name === 'TimeoutError' ? ' (timeout)' : '') + '; execution denied';
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
+      process.stderr.write(reason + '.');
       // Native Codex reliably honors a successful structured denial; an error exit can be treated as a failed hook.
       process.exitCode = 0;
     } else process.stdout.write('{}');
@@ -399,13 +424,22 @@ export default async function CubefarmPlugin({ client } = {}) {
       const reply=messages.filter(m=>m?.info?.role==='assistant').pop();
       if(!user||!reply||user.info.sessionID!==id||reply.info.sessionID!==id||typeof user.info.id!=='string'||!user.info.id||typeof reply.info.id!=='string'||!reply.info.id||reply.info.id===user.info.id||currentUser&&currentUser!==user.info.id||reply.info.parentID!==user.info.id)throw new Error();
       if(!Number.isFinite(user.info.time?.created)||user.info.time.created<0||!Number.isFinite(reply.info.time?.created)||!Number.isFinite(reply.info.time?.completed)||reply.info.time.created<user.info.time.created||reply.info.time.completed<reply.info.time.created)throw new Error();
-      if(Object.prototype.hasOwnProperty.call(reply.info,'error'))return {failed:true,...nativeFailure(reply.info.error)};
+      // OpenCode AssistantMessage native per-message work counters; unknown shapes stay unknown.
+      const usage=(()=>{try{
+        const current=messages.slice(messages.indexOf(user)+1);if(!current.length||current.some(m=>m.info.role!=='assistant'||m.info.parentID!==user.info.id||!Number.isFinite(m.info.time?.completed)||m.info.time.completed<m.info.time.created))return undefined;
+        const count=v=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;
+        let inputTokens=0,outputTokens=0,costUsd=0,costKnown=true;
+        for(const m of current){const t=m.info.tokens;if(!t||![t.input,t.output,t.reasoning,t.cache?.read,t.cache?.write].every(count))return undefined;inputTokens+=t.input+t.cache.read+t.cache.write;outputTokens+=t.output+t.reasoning;if(typeof m.info.cost==='number'&&Number.isFinite(m.info.cost)&&m.info.cost>=0)costUsd+=m.info.cost;else costKnown=false;}
+        if(!Number.isSafeInteger(inputTokens)||!Number.isSafeInteger(outputTokens)||!Number.isFinite(costUsd))return undefined;
+        return {schemaVersion:1,source:'opencode-message-v1',sampleId:user.info.id,inputTokens,outputTokens,costUsd:costKnown?costUsd:null};
+      }catch{return undefined;}})();
+      if(Object.prototype.hasOwnProperty.call(reply.info,'error'))return {failed:true,...nativeFailure(reply.info.error),...(usage?{usage}:{})};
       if(!Array.isArray(reply.parts)||reply.parts.length>200||reply.parts.some(p=>p?.sessionID!==id||p?.messageID!==reply.info.id))throw new Error();
       const textParts=reply.parts.filter(p=>p?.type==='text');
       if(textParts.some(p=>typeof p.text!=='string'))throw new Error();
       const text=textParts.map(p=>p.text).join('\n').trim();
       if(!text||Buffer.byteLength(text)>256*1024)throw new Error();
-      return {failed:false,last_assistant_message:text};
+      return {failed:false,last_assistant_message:text,...(usage?{usage}:{})};
     } catch {
       return {failed:true,error:'Current OpenCode message completion could not be verified'};
     } finally {
@@ -416,7 +450,10 @@ export default async function CubefarmPlugin({ client } = {}) {
     'tool.execute.before': authorize,
     'tool.execute.after': async (input,output) => {
       const {name}=normalize(input.tool,input.args??{});
-      await post({hook_event_name:'PostToolUse',tool_name:name,tool_use_id:input.callID,session_id:input.sessionID,tool_response:{content:[{type:'text',text:String(output.output??'').slice(0,16000)}]}});
+      const text=typeof output.output==='string'?output.output:JSON.stringify(output.output??'');
+      const body={hook_event_name:'PostToolUse',tool_name:name,tool_use_id:input.callID,session_id:input.sessionID,tool_response:{content:[{type:'text',text}]}};
+      const complete=Buffer.byteLength(text,'utf8')<=768*1024&&Buffer.byteLength(JSON.stringify(body),'utf8')<=900*1024;
+      await post(complete?body:{hook_event_name:'PostToolUseFailure',tool_name:name,tool_use_id:input.callID,session_id:input.sessionID,tool_response:{isError:true,error:'Tool evidence exceeds the complete-output bound'}});
     },
     event: async ({ event }) => {
       const props = event?.properties ?? {};
@@ -430,7 +467,7 @@ export default async function CubefarmPlugin({ client } = {}) {
       if (event?.type === 'session.idle') {
         const outcome=await lastReply(root,userMessage);
         if(epoch!==turnEpoch)return;
-        await post({ hook_event_name: 'TurnComplete', session_id: root, ...(failure?{failed:true,...failure}:outcome) });
+        await post({ hook_event_name: 'TurnComplete', session_id: root, ...(failure?{failed:true,...failure,...(outcome.usage?{usage:outcome.usage}:{})}:outcome) });
       }
       if (event?.type === 'session.error'&&epoch===turnEpoch) await post({ hook_event_name: 'TurnError', session_id: root, ...failure });
     },

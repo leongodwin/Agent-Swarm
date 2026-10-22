@@ -350,7 +350,7 @@ function SimulatedReleasePipelineModal({ onClose }: { onClose?: () => void }) {
                               ✅ Solution v{pipeline.currentProdVersion} Live in Production
                             </div>
                             <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
-                              Signed off by {pipeline.approvedBy || 'Leon van Zyl'}
+                              Signed off by {pipeline.approvedBy || 'Leon Godwin'}
                             </div>
                             <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
                               <a

@@ -10,6 +10,7 @@ describe('untrusted QA reports', () => {
     expect(parseQaReport(result(failure))?.verdict).toBe('fail');
     expect(parseQaReport(result({...report(), verdict: 'fail', fixInstructions: 'Fix the observed incorrect response.'}))?.verdict).toBe('fail');
     expect(QA_SCHEMA.additionalProperties).toBe(false);
+    expect(QA_SCHEMA.allOf).toEqual([{if:{properties:{verdict:{const:'pass'}},required:['verdict']},then:{properties:{checks:{items:{properties:{result:{const:'pass'}}}}}}}]);
   });
   it.each([
     null, [], false, {}, {...report(), summary: ''}, {...report(), summary: 4}, {...report(), summary: ' '},
@@ -38,5 +39,11 @@ describe('untrusted QA reports', () => {
     expect(parseQaReport(result(undefined, 'x'.repeat(1024 * 1024 + 1)))).toBeNull();
     expect(parseQaReport(result(undefined, 'No report available'))).toBeNull();
     expect(parseQaReport(result(undefined, '```json\n{bad json}\n```'))).toBeNull();
+  });
+  it('rejects a native pass with an out-of-scope skipped browser check without rewriting the independent verdict',()=>{
+    const native={...report(),summary:'Task5 source accepted; Canvas and runtime belong to later tasks.',checks:[...report().checks,{name:'Browser and screenshots',result:'skip',details:'No Canvas changes in this PR.'}]};
+    expect(parseQaReport(result(undefined,'```json\n'+JSON.stringify(native)+'\n```'))).toBeNull();
+    // Only an independently authored, internally consistent replacement is usable.
+    expect(parseQaReport(result({...report(),summary:native.summary}))).toMatchObject({verdict:'pass',checks:[{name:'Acceptance',result:'pass'}]});
   });
 });

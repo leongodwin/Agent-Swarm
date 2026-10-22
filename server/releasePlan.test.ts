@@ -1,3 +1,5 @@
+import {functionalFixture} from './testFixtures/functionalShowcase.ts';
+import {verificationNavigationUrl,verificationScenario} from './browserVerificationContext.ts';
 import { expect, it } from 'vitest';
 import { releasePlanSchema, acceptanceScope } from './releasePlan.ts';
 const states = ['loading', 'empty', 'validation', 'failure', 'recovery', 'success'];
@@ -34,4 +36,14 @@ it('requires distinct live conversation cases, published channels and multiple a
   expect(releasePlanSchema.safeParse(input).success).toBe(true);
   input.verification.copilotChecks[0].cases[5].scenario = states[0];
   expect(releasePlanSchema.safeParse(input).success).toBe(false);
+});
+function functionalPlan(){
+ const f=functionalFixture(),input=plan();return{...input,acceptanceProfile:'functional-development',quality:{maxTaskDurationMs:120000,maxVerificationDurationMs:1800000,maxSeriousAccessibilityIssues:0},verification:{browserSession:'connected-extension',baseUrl:'https://apps.powerapps.com/play/e/Default-'+f.tenantId+'/a/'+f.flowId,functionalShowcase:f.config,identities:[{id:'writer',expectedUser:'leon@example.test',userSelector:'#user'},{id:'restricted',expectedUser:'leon@example.test',userSelector:'#user'}],scenarios:[['Loading','loading','journey'],['Empty','empty','journey'],['Invalid','validation','error-handling'],['Success','success','journey'],['Duplicate','success','error-handling'],['Failure','failure','error-handling'],['Recovery','recovery','persistence'],[f.config.rejection.testName,'failure','authorization']].map(([name,state,category])=>({name,states:[state],category,identity:category==='authorization'?'restricted':'writer',criterion:0,steps:[{action:'press',selector:'#result',key:'Tab'},...(category==='persistence'?[{action:'reload'}]:[]),{action:'text',selector:'#result',contains:'Observed actual state'}]}))}};
+}
+it('admits only explicit functional showcase limits with ordered independent positive and rejection cases',()=>{
+ const parsed=releasePlanSchema.parse(functionalPlan());expect(acceptanceScope(parsed).limitations.join(' ')).toContain('complete historical absence');expect(acceptanceScope(parsed).limitations.join(' ')).toContain('solution rollback');
+ for(const mode of ['production','suite-missing','suite-short','target','old-native','missing-recovery','duplicate-order']){const value:any=functionalPlan();if(mode==='production')value.acceptanceProfile='production';if(mode==='suite-missing')delete value.quality.maxVerificationDurationMs;if(mode==='suite-short')value.quality.maxVerificationDurationMs=1000;if(mode==='target')value.verification.functionalShowcase.recovery.target={...value.verification.functionalShowcase.recovery.target,listId:functionalFixture().flowId};if(mode==='old-native')value.verification.nativeDeniedChecks=[];if(mode==='missing-recovery')value.verification.scenarios=value.verification.scenarios.filter((s:any)=>s.name!=='Recovery');if(mode==='duplicate-order')value.verification.scenarios.reverse();expect(releasePlanSchema.safeParse(value).success,mode).toBe(false);}
+});
+it('binds only a runner UUID to the same approved application and retains it on subsequent navigation',()=>{
+ const parsed=releasePlanSchema.parse(functionalPlan()),f=functionalFixture(),url=new URL(verificationNavigationUrl(parsed,{runId:f.context.runId}));expect(url.searchParams.get('qaRunId')).toBe(f.context.runId);expect(()=>verificationNavigationUrl(parsed)).toThrow('runner-owned');expect(()=>verificationNavigationUrl(parsed,{runId:'not-a-run'})).toThrow();const scenario=parsed.verification.scenarios[0],withGoto={...scenario,steps:[{action:'goto' as const,path:url.pathname},...scenario.steps]};expect(verificationScenario(parsed,{runId:f.context.runId},withGoto).steps[0]).toMatchObject({path:url.pathname+'?qaRunId='+f.context.runId});expect(()=>verificationScenario(parsed,{runId:f.context.runId},{...withGoto,steps:[{action:'goto',path:'/another-app'}]})).toThrow('exact approved app');
 });

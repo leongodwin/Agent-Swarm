@@ -5,7 +5,7 @@ import {connectFlowAdapter} from './flowAdapter.ts';
 it('launches an owned real MCP stdio fixture without unrelated credentials or Node preload injection',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-flow-env-mcp-')),entry=path.join(root,'fixture.mjs');
   const source=`import {createInterface} from 'node:readline';
-const tools=['whoami','get_flow','get_flow_context','preflight_flow','publish_flow','disable_flow','get_run_history','get_run_action_content'];
+const tools=['whoami','get_flow','get_flow_context','preflight_flow','publish_flow','disable_flow','get_run_history','get_run_details','get_run_actions','get_run_action_content'];
 const lines=createInterface({input:process.stdin});
 lines.on('line',line=>{const req=JSON.parse(line);if(req.id===undefined)return;let result;
 if(req.method==='initialize')result={protocolVersion:req.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'owned-env-fixture',version:'1'}};

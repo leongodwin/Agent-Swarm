@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import crypto from 'node:crypto';
 import {ZipFile} from 'yazl';import {afterEach,expect,it} from 'vitest';
+import {assertSharepointPackage} from './sharepointPackage.ts';
 import {inspectSolutionPackage,type ArchiveLimits} from './packageInventory.ts';
 const roots:string[]=[];afterEach(async()=>{await Promise.all(roots.splice(0).map(root=>fs.rm(root,{recursive:true,force:true})));});
 const id='11111111-1111-4111-8111-111111111111';
@@ -72,4 +73,27 @@ it('preserves supported flow nesting when JSON containers exceed the settings-fi
   const definition=JSON.parse(flow());let actions=definition.properties.definition.actions;
   for(let depth=0;depth<32;depth++)actions={branch:{type:'Switch',cases:{named:{case:'Synthetic',actions}}}};
   definition.properties.definition.actions=actions;const {file}=await fixture({'solution.xml':solution(),'customizations.xml':custom(),'Workflows/flow.json':JSON.stringify(definition)});const report=await inspectSolutionPackage(file);expect(report.archiveComplete).toBe(true);expect(report.resourceInventoryComplete).toBe(true);expect(report.resources[0].operations).toHaveLength(34);
+});
+
+const spList='22222222-2222-4222-8222-222222222222',spSite='https://example.sharepoint.com/sites/probe';
+function spContract(){return {plan:{schemaVersion:1,tenantId:id,username:'maker@example.test',siteUrl:spSite,siteCollectionId:id,webId:id,resources:[{key:'Requests',displayName:'Probe Requests',template:'genericList',columns:[{name:'Status',kind:'choice',required:true,choices:['New','Processed']}]}]},bindings:[{key:'Requests',listId:spList}]};}
+async function spCanvas(source:Record<string,unknown>){return fixture({'solution.xml':solution('<RootComponent type="300" schemaName="exp_app"/>'),'customizations.xml':'<ImportExportXml><CanvasApps><CanvasApp><Name>exp_app</Name><DocumentUri>/CanvasApps/app.msapp</DocumentUri></CanvasApp></CanvasApps></ImportExportXml>','CanvasApps/app.msapp':await zip({'References/DataSources.json':JSON.stringify({DataSources:[source]}),'Properties.json':'{}'})});}
+const spSource=()=>({Type:'ConnectedDataSourceInfo',Name:'Requests',DatasetName:spSite,TableName:spList,ApiId:'/providers/Microsoft.PowerApps/apis/shared_sharepointonline'});
+it('reads genuine-shaped nested Canvas SharePoint bindings while retaining formula and runtime blockers',async()=>{
+ const {file}=await spCanvas(spSource()),inventory=await inspectSolutionPackage(file);expect(inventory.archiveComplete).toBe(true);expect(inventory.resourceInventoryComplete).toBe(false);
+ expect(inventory.resources[0]).toMatchObject({kind:'canvas',complete:false,tables:[],connectors:['shared_sharepointonline'],sharepointSources:[{siteUrl:spSite,listId:spList,sourceName:'Requests'}]});
+ expect(assertSharepointPackage(inventory,spContract()).sources).toHaveLength(1);
+});
+it.each(['site','list','invalid-list','missing-app','missing-binding','missing-source'] as const)('rejects packaged SharePoint %s before deployment',async mode=>{
+ const source=spSource();if(mode==='site')source.DatasetName='https://other.sharepoint.com/sites/probe';if(mode==='list')source.TableName=id;if(mode==='invalid-list')source.TableName='@parameters(list)';
+ const {file}=await spCanvas(source),inventory=await inspectSolutionPackage(file);if(mode==='missing-app')inventory.resources=[];if(mode==='missing-binding')inventory.resources[0].sharepointSources=[{siteUrl:spSite,listId:id,sourceName:'Other'}];if(mode==='missing-source')delete inventory.resources[0].sharepointSources;
+ expect(()=>assertSharepointPackage(inventory,spContract())).toThrow();
+});
+it('derives literal SharePoint flow targets and rejects wrong-site imports',async()=>{
+ const body=JSON.parse(flow('OpenApiConnection','shared_sharepointonline'));body.properties.connectionReferences={sp:{api:{name:'shared_sharepointonline'},connection:{connectionReferenceLogicalName:'exp_sp'}}};const action=body.properties.definition.actions.query;action.inputs.host.connectionName='sp';action.inputs.parameters={dataset:spSite,table:spList};
+ const {file}=await fixture({'solution.xml':solution(),'customizations.xml':custom().replaceAll('exp_dataverse','exp_sp').replaceAll('shared_commondataserviceforapps','shared_sharepointonline'),'Workflows/flow.json':JSON.stringify(body)}),inventory=await inspectSolutionPackage(file);
+ expect(()=>assertSharepointPackage(inventory,spContract(),[{kind:'canvas',logicalName:'exp_missing'}])).toThrow('Expected Canvas');
+ expect(assertSharepointPackage(inventory,spContract()).sources[0]).toMatchObject({listId:spList,siteUrl:spSite});
+ const mixed=structuredClone(body);mixed.properties.definition.actions.unresolved=structuredClone(action);mixed.properties.definition.actions.unresolved.inputs.parameters.table='@parameters(list)';const other=await fixture({'solution.xml':solution(),'customizations.xml':custom().replaceAll('exp_dataverse','exp_sp').replaceAll('shared_commondataserviceforapps','shared_sharepointonline'),'Workflows/flow.json':JSON.stringify(mixed)});const unresolved=await inspectSolutionPackage(other.file);expect(unresolved.resources[0].sharepointSources).toHaveLength(1);expect(()=>assertSharepointPackage(unresolved,spContract())).toThrow('explicit site/list');
+ inventory.resources[0].sharepointSources![0].siteUrl='https://other.sharepoint.com/sites/probe';expect(()=>assertSharepointPackage(inventory,spContract())).toThrow('approved target');
 });

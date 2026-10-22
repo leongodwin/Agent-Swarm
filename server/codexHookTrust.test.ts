@@ -38,3 +38,40 @@ it.each(['disabled-feature','managed-only','unknown-policy','missing-version','w
    return result;
  };await expect(establishCodexHookTrust(f.rpc,cwd,[spec],f.source)).rejects.toThrow();
 });
+
+it.each(['null-policy','invalid-policy','feature-denial','outside-cwd','inventory-errors','ambiguous','wrong-handler','profile-only','missing-file','missing-version-type','write-failure','readback-key','readback-untrusted'] as const)('denies uncertain authority without granting verified hook readiness: %s',async mode=>{
+ const f=fixture(),request=f.rpc.request;let inventories=0;
+ f.rpc.request=async(method,params)=>{
+  const result=await request(method,params);
+  if(method==='configRequirements/read'){
+   if(mode==='null-policy')return null;
+   if(mode==='invalid-policy')return {requirements:{allowManagedHooksOnly:'unknown'}};
+   if(mode==='feature-denial')return {requirements:{allowManagedHooksOnly:null,featureRequirements:{hooks:false}}};
+  }
+  if(method==='hooks/list'){
+   inventories++;
+   if(mode==='outside-cwd')result.data[0].cwd='C:/synthetic/foreign';
+   if(mode==='inventory-errors')result.data[0].errors=['native inventory unavailable'];
+   if(mode==='ambiguous')result.data[0].hooks.push({...f.hook});
+   if(mode==='wrong-handler')result.data[0].hooks[0].handlerType='prompt';
+   if(inventories===2&&mode==='readback-key')result.data[0].hooks[0].key='replacement';
+   if(inventories===2&&mode==='readback-untrusted')result.data[0].hooks[0].trustStatus='untrusted';
+  }
+  if(method==='config/read'){
+   if(mode==='profile-only')result.layers[0].name.profile='other';
+   if(mode==='missing-file')delete result.layers[0].name.file;
+   if(mode==='missing-version-type')result.layers[0].version=1;
+  }
+  if(method==='config/value/write'&&mode==='write-failure')return {status:'error'};
+  return result;
+ };
+ await expect(establishCodexHookTrust(f.rpc,cwd,[spec],f.source)).rejects.toThrow();
+ expect(f.writes).toHaveLength(['write-failure','readback-key','readback-untrusted'].includes(mode)?1:0);
+});
+it.each(['','*','.*'])('accepts native unrestricted matcher %j while requiring exact source and hash',async matcher=>{
+ const f=fixture();f.hook.matcher=matcher;expect(await establishCodexHookTrust(f.rpc,cwd,[spec],f.source)).toEqual({verified:1,hashes:[hash]});expect(f.writes).toHaveLength(1);
+});
+it('rejects a changed source at the write boundary before persisting trust',async()=>{
+ const f=fixture();f.source.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Source changed before write'));
+ await expect(establishCodexHookTrust(f.rpc,cwd,[spec],f.source)).rejects.toThrow('Source changed before write');expect(f.writes).toEqual([]);
+});

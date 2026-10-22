@@ -22,7 +22,9 @@ jobs:
         # Windows and macOS too: people run the office on both (paths, child processes, terminals, git worktrees).
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # The expanded native/IPC suite is serialized on all three platforms.
+    # Allow Windows process startup plus dependency installation to finish.
+    timeout-minutes: 30
     env:
       # Never let anything in CI look at a real office's state or ports.
       SWARM_HOME: ${{ github.workspace }}/.ci-swarm-home
@@ -39,8 +41,10 @@ jobs:
       - run: npm run typecheck
       # The backend verification tests launch Chromium, not just the E2E job.
       - run: npx playwright install --with-deps chromium
-      - run: npm test
+      # Native fsync/IPC fixtures contend internally; avoid unrelated test-file I/O contention.
+      # Crash-recovery acceptance launches the real built production server.
       - run: npm run build
+      - run: npm test -- --maxWorkers=1
       # The npm package as users get it: packed, installed into an empty folder and booted in demo mode.
       - run: node scripts/smoke-package.mjs
 
@@ -56,6 +60,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      # Coverage includes the real built launcher crash-recovery acceptance.
+      - run: npm run build
       - run: npm run test:coverage
       - if: always()
         uses: actions/upload-artifact@v4
@@ -67,8 +73,13 @@ jobs:
 
   # The built app in a real browser: a demo office boots, renders, and its panels open (e2e/, Playwright).
   e2e:
+    name: e2e (shard ${{ matrix.shard }}/3)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
@@ -89,12 +100,14 @@ jobs:
       - run: npx playwright install --with-deps chromium
 
       # playwright.config.ts builds the app and boots a demo office on a test port with a temp SWARM_HOME.
-      - run: npm run test:e2e
+      # Each shard boots its own isolated office; keep the single-worker WebGL budget.
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/3 --reporter=line,github,html
+        timeout-minutes: 17
 
-      - if: failure()
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/

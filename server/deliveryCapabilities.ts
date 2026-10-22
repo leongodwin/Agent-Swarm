@@ -9,7 +9,7 @@ export function deliveryCapabilitiesPrompt(task = '') {
   return [`Office delivery reference: ${guide}`,
     `Both Codex and office agents can use installed Power Platform skills. Catalogue fingerprint: ${catalogue.fingerprint}.`,
     `Installed platforms: ${[...new Set(catalogue.skills.map((skill) => skill.platform))].join(', ') || 'none discovered'}.`,
-    'Use installed_skills to discover task-specific workflows. Read applicable SKILL.md instructions before authoring. Verify actual MCP/CLI tools, active plugin version, caller and target inside this worker session; installation alone is not readiness.',
+    'Use installed_skills to discover task-specific workflows; unresolved matches require discovery without task and an explicit guidance decision. Read exact guidance with read_skill(id, sha256) before authoring or QA. Verify actual MCP/CLI tools, active plugin version, caller and target inside this worker session; installation alone is not readiness.',
     'Record selected skill IDs, versions/content hashes and verified tools in task evidence. Reuse discovery only while target, authentication and configuration remain unchanged. Missing Copilot Studio lifecycle tools are a blocker; code-app Copilot integration is not a lifecycle adapter.',
     ...selected.map((skill) => `${skill.id} (${skill.version ?? 'shared'}, sha256 ${skill.sha256}): ${skill.file}`), ...catalogue.warnings].join('\n');
 }

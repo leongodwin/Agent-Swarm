@@ -449,6 +449,7 @@ export function createDemoBackend(): Backend {
       const r = repos.get(fullName);
       const pr = r?.pulls.find((p) => p.number === number);
       if (!r || !pr) throw new Error('Unknown PR');
+      if (pr.state !== 'OPEN') throw new Error('Pull request is not open');
       if (headSha && pr.headSha !== headSha) throw new Error('Head branch was modified. Review and try the merge again.');
       mergedSinceSync.set(fullName, (mergedSinceSync.get(fullName) ?? 0) + 1);
       pr.state = 'MERGED';
@@ -764,8 +765,9 @@ const demoPreviews: PreviewBackend = {
         stopped = true;
         cb.failed(`Could not listen on port ${job.port}: ${err.message}`);
       });
-      server.listen(job.port, '127.0.0.1', () => {
-        if (stopped) return void server?.close();
+      const listeningServer = server;
+      listeningServer.listen(job.port, '127.0.0.1', () => {
+        if (stopped) return void listeningServer.close();
         later(500, () => {
           cb.log([`  ➜  Local:   http://localhost:${job.port}/`]);
           cb.status('running');

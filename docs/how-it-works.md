@@ -1,6 +1,12 @@
-# How cubefarm works
+# How Agent Swarm works
 
 The details behind the office: how an issue becomes a merged pull request, who does what, and what agents are allowed to do on your machine. For getting started, see the [README](../README.md).
+
+## From a brief to a deployed slice
+
+Open **Manager's console → Delivery plan** and ask the CEO to plan discovery. The shared record holds the brief, outcomes, requirements, scope, owners, contracts, findings and linked issues. Discovery must have current evidence before design approval. Independent QA reviews the design; the first slice must be deployed and independently accepted, with QA saving `accept_slice`, before wider implementation can start. Source, scope or target changes require fresh review. See [the delivery contract](DELIVERY.md) for the tools and exact gates.
+
+Licence availability is assessed for the actual tenant and affected users. Reviewed manual controls can satisfy the declared development baseline; optional automation is not a purchase requirement. Known policy or schema conflicts still block. The [completed backend pilot](BACKEND-PILOT-COMPLETION.md) demonstrates this narrow path; it does not establish full-app or production readiness.
 
 ## How an issue flows through the office
 
@@ -8,8 +14,6 @@ The details behind the office: how an issue becomes a merged pull request, who d
    - An issue that says `Depends on #N` waits until #N is closed. Of the rest, the ones that hold up the longest chain of other issues go first, then the oldest.
    - A `swarm:<specialty>` label is a preference, not a lock. A free specialist gets first pick, and otherwise the issue goes to whichever free developer is least needed for their own specialty.
    - If a session fails, its issue goes back on the board for someone else, and the agent gets new work after a two-minute cooldown. An issue that fails twice waits for you to assign it by hand.
-   - If Claude turns a session away because your usage limit is reached, the office starts no new work until the limit resets.
-   - Before that, when Claude warns that usage is getting high, the office paces itself until the window resets (an hour if Claude doesn't say): QA, fixes and CEO jobs start as usual, but new issues only start while fewer sessions than **Sessions while pacing** (manager's console → Settings, default 3) are running. Your phone gets a message when pacing starts and when it ends.
 2. **In progress.** The server fetches the repo and creates a git worktree for that developer on the branch `swarm/issue-<n>-<agent>`, branched from the default branch. The developer's coding agent starts there with the issue text. The developer implements the change, runs the project's checks, pushes the branch and opens a PR with `gh pr create` that says `Closes #<n>`.
 3. **In QA.** The PR is handed to the floor's QA lab. A free QA tester checks out the PR head in their own worktree; when every tester is busy, a free developer who didn't write the PR covers for them, `testing` specialists first. The tester then:
    - reads the PR and the linked issue to work out the acceptance criteria
@@ -41,15 +45,17 @@ You can message an agent at any time. While they're working, the message is inje
 - QA testers use the same model and effort settings as everyone else. Their instructions tell them not to push, comment on, review, merge or edit PRs or issues: the office posts their report for them.
 - QA is automatic for every PR from a `swarm/` branch, whether or not auto-assign is on.
 
-## Copilot Swarm & Interactive 3D Stations
+## Interactive 3D stations
+
+These surfaces are not deployment evidence: Copilot chat, flow telemetry/resubmission and demo ALM interactions are simulated. Architecture scans inspect supported checkout artifacts; local DLP heuristics do not certify tenant policy. Use Solution delivery and its retained native evidence for real deployment decisions. The following describes the visual station experience.
 
 In addition to traditional coding agent terminals, the office environment includes dedicated interactive enterprise stations:
 
-- **Copilot Studio Kiosks**: Stations located on office floors and in the lobby. Approach and press `E` to open the full Copilot test canvas overlay with live generative chat, suggested enterprise prompts, topic triggering, and source citation inspection.
+- **Copilot Studio Kiosks**: Stations located on office floors and in the lobby. Approach and press `E` to open the full Copilot test canvas overlay with simulated chat, suggested enterprise prompts and illustrative topic/citation displays.
 - **Solution Architecture Visualizer**: Mounted on the floor's east wall. Press `E` to inspect interactive architecture diagrams mapping Copilot Studio triggers, Power Automate cloud flows, Dataverse tables, and enterprise ERP/CRM connectors.
-- **Power Automate Flow Run History**: West wall telemetry board providing live run logs, execution durations, run IDs, and instant retry triggers for failed automations.
+- **Power Automate Flow Run History**: West wall board showing simulated run history and resubmission interactions; these do not establish a real flow run.
 - **Dataverse Schema Monitor**: Live entity relationship and schema monitor displaying table attributes, primary columns, and row counts.
-- **Microsoft Entra & DLP Policy Kiosk**: Lobby checkpoint displaying active Data Loss Prevention policies, connector classification (Business vs. Non-Business), and tenant security posture.
+- **Microsoft Entra & DLP Policy Kiosk**: Lobby checkpoint for local policy heuristics and illustrative connector classification; it does not certify active tenant policies or enforcement.
 - **Multi-Agent War Room & Swarm Ideator**: A glass-enclosed boardroom in the lobby. Interacting with the conference table launches the Swarm Ideator workshop tool to generate multi-agent fusion architecture proposals.
 - **Teams Toast Feed**: Real-time Microsoft Teams style status notifications and alerts for deployment, flow runs, and agent task milestones.
 - **Visual Portfolio & CV**: Displayed in the manager's office for reviewing enterprise credentials and architecture leadership highlights.
@@ -60,28 +66,25 @@ Agents get names from a pool of computing pioneers (developers) and fictional de
 
 ## Models and usage
 
-- Developers, QA and the CEO default to **GitHub Copilot CLI**. In the manager's console, Settings sets the default worker coding agent, model and effort; the Team tab overrides them per agent. The default model belongs to the default coding agent: an agent on another one uses that agent's own default unless you name a model for them. The CEO has its own model and effort settings.
-- Agents use the subscription or account their CLI is signed into. The office launches Copilot CLI in non-interactive mode with the CEO's office tools configured over MCP. Claude Code, Codex and OpenCode are also available; Claude usage pacing applies only to Claude Code sessions.
+- Developers, QA and the CEO default to **Codex CLI**. In the manager's console, Settings sets the default worker coding agent, model and effort; the Team tab overrides them per agent. The default model belongs to the default coding agent: an agent on another one uses that agent's own default unless you name a model for them. The CEO has its own model and effort settings.
+- Permitted runtimes are Codex, Gemini and OpenCode. Each requires its own authentication and verified governance bridge; Gemini also requires its protected system profile. Claude and GitHub Copilot CLI are excluded from execution. `npx cubefarm login` signs in to Codex.
 - Agents using the same coding-agent CLI share its subscription usage limits. By default every agent with work runs at once; set a **Session limit** in the manager's console to cap it. When a limit is hit, the agent's terminal shows it.
 
 ## Agents' terminals
 
 By default (manager's console → Settings → **How agents run: Real terminals**) every agent is the actual coding CLI running in its own pseudo-terminal on your machine. Open a desk to watch it live; click the terminal to type into it (while it has focus, `Esc` goes to the agent, which interrupts its turn: the office then counts the agent as stopped, the way the Stop button does, and what you type next at its prompt is a follow-up). The office keeps a copy of each agent's screen and scrollback, so a terminal opened late shows everything so far, and it's saved to `<SWARM_HOME>/terminals/` so it survives a restart. The message box under the terminal types into it for you, or, when the agent isn't running, resumes their session.
 
-- **GitHub Copilot CLI** (the default) runs each task in non-interactive prompt mode, streams its final response into the office, and resumes CEO conversations by session ID. It receives the same task instructions as the other agents and the CEO's MCP tools when needed. Manager messages can't be injected into a worker's running prompt; send a follow-up after it finishes. Install Copilot CLI separately and sign in with `npx cubefarm login`.
-- **Claude Code**, **Codex** and **OpenCode** run if installed: pick one for everyone (Settings → *Default coding agent*) or per worker (Team). Claude Code reports every tool call and the end of each turn through hooks. Codex and OpenCode report turn endings; Codex can also report steps after the manager trusts its hooks (`/hooks`, then `t`). Codex and OpenCode browser screenshots are collected from their Playwright output folder. These CLIs run in their own terminal and use their own sign-in.
+- **Codex** is the default. **Gemini** and **OpenCode** are alternatives when their runtime prerequisites pass. Select the default in Settings or override it per worker in Team. Runtime availability, authentication and governance readiness are separate checks. Codex and OpenCode receive session-scoped office MCP tools on fresh and resumed CEO launches.
 - A session is finished when the CLI's turn ends and it doesn't pick up another prompt within 3 seconds. A developer's CLI then stays at its prompt for 30 minutes: type into it and the office takes it on as a follow-up, and the message box (or the office itself, e.g. to fix QA findings) continues in the same CLI. QA testers' and the CEO's CLIs close. After that, a follow-up resumes the session in a new CLI (only the CLI that made a session can resume it).
 - The office answers the folder-trust question for its own worktrees (moving to "Yes" first where the CLI selects "No"). Anything else a CLI asks before it starts (sign in, first-run screens) waits for you in its terminal, and the agent's log says so.
 - **Agents keep working while the office restarts** (an update, a code change during development, a crash). The CLIs run in the office's *terminal keeper* (`server/ptyHost.ts`), a small process of its own that the office starts and talks to over a local socket (a named pipe on Windows, `<SWARM_HOME>/pty.sock` elsewhere, with a secret in `<SWARM_HOME>/pty.secret`). Their hooks go to the keeper too, which holds each one while the office is away, so none fails and nothing is lost. When the office is back it takes each CLI into its agent's terminal again (what it printed meanwhile, then a redraw) and follows the busy ones' sessions. The CEO's session is resumed instead, since its office tools live in the office. When the office quits for good (Ctrl+C) the CLIs stop with it, and a keeper that no office comes back to for 10 minutes stops them itself. If the keeper can't start, terminals run inside the office and stop when it restarts, as before.
-- **Agent SDK** runs Claude Code through the SDK instead, shown as a log of its steps: the office's original runtime.
+- Historical Claude SDK and Copilot implementation paths are not supported execution choices under the current runtime policy.
 
 ## Safety model
 
-Agents behave like the coding agents you run in your own terminal: they load your setup (user and project settings, `CLAUDE.md`, skills, plugins, MCP servers and claude.ai connectors; Codex and OpenCode their own config), and nothing runs in a sandbox. On top of that the office adds its hooks, its Playwright server when a floor tests in a browser, the office tools for the CEO, and its instructions.
+Agents run locally with their runtime configuration, installed skills and available tools. CLI execution does not provide filesystem or account isolation. The office adds scoped tools and supported authorization hooks; these are not a sandbox for arbitrary external commands.
 
-Nobody may be watching to answer a permission question, so CLI agents run without interactive approval prompts (Copilot CLI with `--allow-all`, Claude Code through its PreToolUse hook, Codex with `--dangerously-bypass-approvals-and-sandbox`, OpenCode through its permission config). The office's workflow is in each agent's instructions, not enforced: push your own branch and open a PR, never push to the default branch, force-push or merge (the office merges after QA), and, for QA testers, leave GitHub alone because the office posts their report. `AskUserQuestion` and plan mode stay off for Claude Code: agents decide and record their assumptions in the PR (you can still type into any agent's terminal).
-
-Agents can do anything your own coding agent in a terminal can. Run the office where you'd run those.
+Shared-record stage checks gate new assignments and supported pre-tool authorization. Release execution requires pinned source, target, evidence and independent QA. The office merges only the reviewed commit after required checks. These controls do not revoke platform requests already issued or physically contain tools outside trusted hooks. Missing governance evidence blocks the relevant operation; a passing local heuristic is not tenant policy certification. See [delivery](DELIVERY.md) and [tool governance](TOOL-GOVERNANCE.md) for boundaries and recovery requirements.
 
 ## Where things live
 

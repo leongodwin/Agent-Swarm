@@ -1,7 +1,7 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import crypto from 'node:crypto';
 const cli=vi.hoisted(()=>({gh:vi.fn(),ghJson:vi.fn()}));vi.mock('./exec.ts',()=>cli);
-import {listPulls,prFiles,issueState,prDiff,uploadEvidence,EVIDENCE_BRANCH} from './github.ts';
+import {prDetails,listPulls,prFiles,issueState,prDiff,uploadEvidence,EVIDENCE_BRANCH} from './github.ts';
 afterEach(()=>vi.resetAllMocks());
 const head='a'.repeat(40),repo='synthetic/repo';
 const pull=(statusCheckRollup:unknown)=>({number:1,title:'Synthetic',url:'https://example.test/pr/1',headRefName:'swarm/test',headRefOid:head,state:'OPEN',isDraft:false,mergeable:'MERGEABLE',mergeStateStatus:'CLEAN',reviewDecision:null,closingIssuesReferences:null,createdAt:'2026-10-14T00:00:00Z',mergedAt:null,additions:1,deletions:0,statusCheckRollup});
@@ -93,4 +93,10 @@ it('rejects unsafe scan identity before invoking GitHub',async()=>{for(const nam
 it('bounds accumulated selected-file bytes rather than accepting many individually permitted files',async()=>{
   const f=scanFixture(Buffer.from('x'.repeat(5_000_000))),original=cli.ghJson.getMockImplementation()!;cli.ghJson.mockImplementation(async(args:string[])=>args.includes('--slurp')?[Array.from({length:7},(_,index)=>({...f.entry,filename:`src/large${index}.ts`}))]:original(args));
   await expect(prFiles(repo,1,head)).rejects.toThrow('accumulated scan bound');
+});
+
+it('reads the real merged commit and target branch for dependency receipts',async()=>{
+  cli.ghJson.mockResolvedValueOnce({...pull([]),state:'MERGED',baseRefName:'main',mergeCommit:{oid:'b'.repeat(40)}});
+  expect(await prDetails(repo,1)).toMatchObject({headSha:head,mergeCommitSha:'b'.repeat(40),baseRefName:'main',state:'MERGED'});
+  expect(cli.ghJson.mock.calls[0][0].at(-1)).toContain('mergeCommit,baseRefName');
 });

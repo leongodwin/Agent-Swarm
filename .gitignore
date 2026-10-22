@@ -8,3 +8,11 @@ test-results
 coverage/
 .swarm-*
 .swarm-home
+
+# Local verification output, backups and build scratch files
+output/
+.flowagent/
+.presentation-build/
+__pycache__/
+# Standalone Sites projects are separate repositories.
+sites/

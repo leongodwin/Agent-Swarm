@@ -14,7 +14,7 @@ async function runOffice(home: string, port: number, stopWhenReady = false, insp
   let observationError:unknown;
   const capture = (data: Buffer) => {
     output += data.toString();
-    if (stopWhenReady && output.includes('cubefarm on http://localhost:')) {
+    if (stopWhenReady && output.includes('Agent Swarm on http://localhost:')) {
       stopWhenReady = false;
       void (async()=>{
         try{await inspectReady?.();}catch(error){observationError=error;}
@@ -68,7 +68,7 @@ it('refuses actual startup with malformed maintenance without repairing away the
   const home=await fs.mkdtemp(path.join(os.tmpdir(),'office-maintenance-corrupt-'));
   try{
     const file=path.join(home,'demo-maintenance.json');await fs.writeFile(file,'{"version":1,"draining":"false"}');
-    const result=await runOffice(home,0);expect(result.code).toBe(1);expect(result.output).not.toContain('cubefarm on http://localhost:');
+    const result=await runOffice(home,0);expect(result.code).toBe(1);expect(result.output).not.toContain('Agent Swarm on http://localhost:');
     expect(await fs.readFile(file,'utf8')).toBe('{"version":1,"draining":"false"}');
   }finally{await fs.rm(home,{recursive:true,force:true});}
 },30000);

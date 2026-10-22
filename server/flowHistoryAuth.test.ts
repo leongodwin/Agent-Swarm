@@ -1,0 +1,12 @@
+import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';
+import {afterEach,it,expect,vi} from 'vitest';import {acquirePowerPlatformHistorySilent} from './sharepointRestAuth.ts';
+const roots:string[]=[];afterEach(async()=>{for(const root of roots.splice(0))await fs.rm(root,{recursive:true,force:true});});
+async function fixture(){
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'flow-history-auth-'));roots.push(root);const cacheFile=path.join(root,'cache.json');await fs.writeFile(cacheFile,'{}');
+ const config={provider:'msal-silent',tenantId:'11111111-1111-4111-8111-111111111111',clientId:'22222222-2222-4222-8222-222222222222',subject:'33333333-3333-4333-8333-333333333333',username:'leon@example.test',homeAccountId:'exact',cacheFile};
+ const account={tenantId:config.tenantId,localAccountId:config.subject,username:config.username,homeAccountId:config.homeAccountId};const silent=vi.fn(async(_request:any)=>({account,accessToken:'h.'+Buffer.from(JSON.stringify({appid:config.clientId})).toString('base64url')+'.s'}));
+ const factory=vi.fn(()=>({getTokenCache:()=>({deserialize:()=>{},getAllAccounts:async()=>[account]}),acquireTokenSilent:silent})),controller=new AbortController();return{config,account,silent,factory,controller,read:()=>acquirePowerPlatformHistorySilent(config,controller.signal,async()=>{},factory as any)};
+}
+it('requests only the separate Power Platform API audience from the exact existing account and leaves the cache unchanged',async()=>{const f=await fixture(),before=await fs.readFile(f.config.cacheFile);await f.read();expect(f.silent).toHaveBeenCalledExactlyOnceWith({account:f.account,scopes:['https://api.powerplatform.com/.default']});expect(await fs.readFile(f.config.cacheFile)).toEqual(before);});
+it('never silently grants consent or chooses an alternate identity when the API audience needs interaction',async()=>{const f=await fixture();f.silent.mockRejectedValue(Object.assign(Error('AADSTS65001: SECRET'),{errorCode:'consent_required'}));const error=await f.read().catch(e=>e);expect(error.category).toBe('interaction-required');expect(error.providerCode).toBe('65001');expect(String(error)).not.toContain('SECRET');expect(f.silent).toHaveBeenCalledOnce();});
+it('rejects account drift before API token acquisition',async()=>{const f=await fixture();f.account.localAccountId=f.config.clientId;await expect(f.read()).rejects.toThrow('account-unavailable');expect(f.silent).not.toHaveBeenCalled();});

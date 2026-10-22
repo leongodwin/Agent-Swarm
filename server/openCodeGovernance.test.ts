@@ -83,5 +83,14 @@ it('forwards normalized writes without mutating native arguments and admits only
 it('retains the Copilot pause for native MCP tool names and reports bounded tool outcomes',async()=>{
   endpoint();const bodies:any[]=[];vi.stubGlobal('fetch',vi.fn(async(_url,options)=>{const body=JSON.parse(options.body);bodies.push(body);return {ok:true,json:async()=>hookDecision(evaluateToolRequest(body.tool_name,body.tool_input??{},true))};}));const hooks=await plugin();
   await expect(hooks['tool.execute.before']({tool:'office_copilot_studio_publish'},{args:{}})).rejects.toThrow('execution denied');
-  await hooks['tool.execute.after']({tool:'write',callID:'tool-1',args:{}},{output:'x'.repeat(20000)});expect(bodies[1]).toMatchObject({hook_event_name:'PostToolUse',tool_name:'Write',tool_use_id:'tool-1'});expect(bodies[1].tool_response.content[0].text).toHaveLength(16000);
+  await hooks['tool.execute.after']({tool:'write',callID:'tool-1',args:{}},{output:'x'.repeat(20000)});expect(bodies[1]).toMatchObject({hook_event_name:'PostToolUse',tool_name:'Write',tool_use_id:'tool-1'});expect(bodies[1].tool_response.content[0].text).toHaveLength(20000);
+  await hooks['tool.execute.after']({tool:'write',callID:'oversized',args:{}},{output:'x'.repeat(800*1024)});expect(bodies[2]).toMatchObject({hook_event_name:'PostToolUseFailure',tool_response:{isError:true}});expect(JSON.stringify(bodies[2])).not.toContain('xxxx');
 });
+
+it.each([false,true])('collects per-current-prompt native message work, including failures (%s)',async failed=>{
+ const bodies=captureOutcomes(),messages:any[]=completedMessages();messages[1].info.tokens={input:10,output:4,reasoning:2,cache:{read:3,write:1}};messages[1].info.cost=0.2;
+ if(failed)messages[1].info.error={name:'APIError',data:{message:'Synthetic failure',statusCode:500,isRetryable:true}};
+ const hooks=await plugin(async()=>({data:messages}));await observeUser(hooks);await hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});
+ expect(bodies.at(-1)).toMatchObject({failed,usage:{schemaVersion:1,source:'opencode-message-v1',sampleId:'msg_user',inputTokens:14,outputTokens:6,costUsd:0.2}});
+});
+it('keeps native usage unknown when its message counters are missing',async()=>{const bodies=captureOutcomes(),hooks=await plugin(async()=>({data:completedMessages()}));await observeUser(hooks);await hooks.event({event:{type:'session.idle',properties:{sessionID:'root'}}});expect(bodies.at(-1)).not.toHaveProperty('usage');});

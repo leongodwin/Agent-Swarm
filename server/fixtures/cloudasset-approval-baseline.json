@@ -1,0 +1,2259 @@
+{
+  "brief": "Build and deploy an isolated Cloud Asset Modernisation Programme showcase in GraspAI tenant5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c as leon@graspai.co.uk, using ONLY standard Microsoft365 Business Premium end-user entitlements. Deliver a published Canvas app, SharePoint structures and two live standard-connector flows. No Dataverse app data, premium/custom connectors, AI Builder or Azure runtime dependencies. Local Agent Swarm inference is a separate infrastructure cost. Use this private demo repo and dedicated AS-E2E test resources. Preserve existing expense apps, paused Copilot, existing sites/flows/connections and global CLI profiles. Discover actual identities, licences, DLP, site/team/channel, connections and Canvas tools first; unknowns block signoff.\n\nSharePoint Swarm Projects list: Title, BusinessArea choice Cloud Engineering/Workplace/Security/Data, EstimatedValue GBP currency, SwarmStatus choice New/Architect Synthesis/Engineering Build/QA Testing/Completed/Blocked, TechnicalSummary plain multiline. Swarm Run Logs list: Title runID, ProjectLookup to Projects.Title, AgentRole choice CEO Coordinator/Solution Architect/Fullstack Engineer/QA Lead/Delivery Gate, StepDescription plain multiline, TokensConsumed number, ExecutionDurationSeconds number, OutputStatus Success/Warning/Failure. Engineering Artifacts library: folders High Level Designs, Code & Solution Manifests, Deployment Evidence; ProjectReference text, VersionTag text, SignOffStatus Draft/Pending Review/Approved. Document minimal extra correlation/idempotency/approval fields.\n\nFlow1 SharePoint item created/modified only when Architect Synthesis: deterministic requirements summary without paid AI, adaptive card to dedicated Agent Swarm Operations test channel, idempotent per-project artifact folder creation, status Engineering Build, correlated initial log. Prevent recursive/duplicate dispatch; retain observable failures. Flow2 evidence-file creation: validate matching project/run and genuine QA evidence, request owner Teams approval with links, status QA Testing while pending; Completed ONLY after Approved. Rejected/missing evidence never completes. Never impersonate or silently autoapprove a human. QA may test card/request and refusal paths; genuine independent signoff needs reviewer evidence.\n\nSingle responsive tablet screen: left navigation Active Swarm Pipelines/Architecture Vault/Run Telemetry; centre active Projects gallery/status chips and selected metadata/technical summary/document links; right correlated recent logs with concise action summaries (not private thoughts), actual token/duration metrics or labelled unknowns, bounded polling/refresh timestamp; Trigger New Initiative form with persisted receipt; Download Evidence Pack with real archive/link and access checks. No mocked runtime data as production proof.\n\nSeed two labelled SYNTHETIC DEMO projects: Legacy File Share to SharePoint Migration Tool, Completed, GBP28000; Automated Tenant Security Baseline Audit, Architect Synthesis, GBP45000. Seed five linked illustrative logs spanning CEO/architect/QA with labelled synthetic metrics; two mock HLD.md and QA report files explicitly NOT acceptance evidence. Exclude synthetic seed from live dispatch/completion/signoff.\n\nUse Agent Swarm normal discovery/design/task/review/deploy gates, relevant skills and verified MCP contracts. Commit architecture, schema, flows, Canvas source, seeds, operations/rollback/licensing docs. Acceptance requires happy/denied/missing/duplicate/retry/error paths, actual SharePoint writes/reload, live flow run/action evidence, Canvas connected sync/compile/App checker/real msapp/runtime and evidence download. Independent QA verifies exact release/target. Report blockers honestly, bounded retries and measured token use. No user questions: choose reversible scoped defaults from evidence, pause only dependent unauthenticated/unsafe work and continue other useful work.",
+  "outcome": "An authorised GraspAI user can run and observe an isolated Cloud Asset Modernisation initiative in a published Canvas app using only standard-M365 SharePoint/Teams flows, with genuine QA and human completion approval.",
+  "successMeasure": "The smallest real initiative is created through Canvas, persists after reload, dispatches once through Flow1 and exposes correlated real artifacts/logs and an access-checked evidence link; independent QA accepts the exact approved runner release before expansion.",
+  "users": [
+    "Authorised AS-E2E showcase operator",
+    "Authorised showcase viewer",
+    "Independent QA reviewer",
+    "Owner/approver leon@graspai.co.uk",
+    "Denied-access real test identity",
+    "Delivery administrator"
+  ],
+  "scope": [
+    "Complete manager brief retained; first milestone is a deployed independently accepted non-synthetic initiative/Flow1/Canvas/evidence-link slice.",
+    "Discovery and evidence-grounded design first; source/target/identity/entitlements/DLP/resources/tools and supported adapters verified before dependent work.",
+    "Full Flow2 human approval, labelled synthetic seeds and expanded polished workspace remain gated by accepted deployed first slice."
+  ],
+  "exclusions": [
+    "Dataverse app data; premium/custom connectors; AI Builder; Azure runtime; activating paused Copilot.",
+    "Existing expense apps, sites, flows, connections or global CLI profile changes; resources outside the recorded dedicated AS-E2E allowlist.",
+    "Other tenants/environments or production authorisation; inferred human approval; mocked runtime acceptance; unsupported adapter substitutes."
+  ],
+  "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+  "qaOwner": "d7e4eeb5-4147-4619-8f63-0afd2127c96e",
+  "applicationSpec": {
+    "schemaVersion": 1,
+    "journeys": [
+      {
+        "id": "initiate",
+        "actor": "Authorised showcase operator",
+        "outcome": "Create one real initiative and observe one correlated dispatch",
+        "requirementIds": [
+          "initiative-dispatch"
+        ],
+        "scenarios": [
+          {
+            "id": "initiate-happy",
+            "kind": "happy",
+            "given": "Approved dedicated app, site and standard connections are available",
+            "when": "Submit valid non-synthetic Architect Synthesis initiative",
+            "then": "Persisted receipt survives reload and exactly one Flow1 run creates its card, folder, summary and correlated log"
+          },
+          {
+            "id": "initiate-denied",
+            "kind": "denied",
+            "given": "A real test identity lacks dedicated app/data write access",
+            "when": "Attempt the same submission",
+            "then": "Access is denied and no project or flow dispatch is created"
+          },
+          {
+            "id": "initiate-failure",
+            "kind": "failure",
+            "given": "Validation fails or an observed connector error interrupts dispatch",
+            "when": "Submit invalid data or exercise the reviewed failure case",
+            "then": "No false success or duplicate dispatch appears; retained correlation/error permits bounded recovery"
+          }
+        ]
+      },
+      {
+        "id": "approve",
+        "actor": "Genuine QA reviewer and owner Leon",
+        "outcome": "Review genuine evidence and explicitly approve completion",
+        "requirementIds": [
+          "evidence-approval"
+        ],
+        "scenarios": [
+          {
+            "id": "approve-happy",
+            "kind": "happy",
+            "given": "Immutable real QA evidence matches a non-synthetic project/run",
+            "when": "QA submits evidence and Leon genuinely approves the linked request",
+            "then": "QA Testing persists while pending; observed Approved response alone permits Completed"
+          },
+          {
+            "id": "approve-denied",
+            "kind": "denied",
+            "given": "Evidence submitter lacks approval rights or synthetic evidence is supplied",
+            "when": "Attempt approval or completion",
+            "then": "No impersonation, autoapproval or Completed transition occurs"
+          },
+          {
+            "id": "approve-failure",
+            "kind": "failure",
+            "given": "Evidence is missing, mismatched, rejected or replayed",
+            "when": "Flow2 processes the evidence event",
+            "then": "Project never completes; observable refusal/failure and safe retry semantics are retained"
+          }
+        ]
+      },
+      {
+        "id": "monitor",
+        "actor": "Authorised showcase viewer",
+        "outcome": "Use responsive navigation and honest correlated telemetry",
+        "requirementIds": [
+          "tablet-workspace"
+        ],
+        "scenarios": [
+          {
+            "id": "monitor-happy",
+            "kind": "happy",
+            "given": "Real authorised Projects and Run Logs exist",
+            "when": "Use all three sections and select a project at desktop/mobile sizes",
+            "then": "Metadata, status, document links, correlated concise logs and measured/unknown metrics are readable with refresh timestamp"
+          },
+          {
+            "id": "monitor-denied",
+            "kind": "denied",
+            "given": "Viewer lacks access to a project or its documents",
+            "when": "Open its link or telemetry",
+            "then": "Denied resources and sensitive contents are not exposed"
+          },
+          {
+            "id": "monitor-failure",
+            "kind": "failure",
+            "given": "Data is empty, stale or unavailable",
+            "when": "Refresh or navigate during an observed failure",
+            "then": "Loading/empty/error/recovery/success states and bounded polling remain usable without false metrics"
+          }
+        ]
+      },
+      {
+        "id": "download",
+        "actor": "Authorised evidence consumer",
+        "outcome": "Retrieve the real correlated evidence pack",
+        "requirementIds": [
+          "evidence-pack"
+        ],
+        "scenarios": [
+          {
+            "id": "download-happy",
+            "kind": "happy",
+            "given": "A real pack/link and manifest exist for the selected run",
+            "when": "Download/open through the app",
+            "then": "Content is real, correlated and accessible after reload"
+          },
+          {
+            "id": "download-denied",
+            "kind": "denied",
+            "given": "A real test identity lacks pack access",
+            "when": "Request the same pack/link",
+            "then": "Access is denied with no content leak"
+          },
+          {
+            "id": "download-failure",
+            "kind": "failure",
+            "given": "Pack is missing or stale",
+            "when": "Request the pack",
+            "then": "Actionable failure appears without fabricated archive or success"
+          }
+        ]
+      },
+      {
+        "id": "demo",
+        "actor": "Demo viewer",
+        "outcome": "Inspect clearly labelled illustrative resources safely",
+        "requirementIds": [
+          "synthetic-demo"
+        ],
+        "scenarios": [
+          {
+            "id": "demo-happy",
+            "kind": "happy",
+            "given": "Dedicated labelled seeds have been created through the reviewed path",
+            "when": "Inspect both projects, five logs and two mock files",
+            "then": "Exact required values and synthetic labels are visible; files explicitly are not acceptance evidence"
+          },
+          {
+            "id": "demo-denied",
+            "kind": "denied",
+            "given": "A synthetic seed or mock QA report is presented as genuine",
+            "when": "Attempt dispatch, approval or release signoff",
+            "then": "Synthetic records/files cannot cause dispatch, completion or acceptance"
+          },
+          {
+            "id": "demo-failure",
+            "kind": "failure",
+            "given": "Seed loading is retried after partial failure",
+            "when": "Reconcile deterministic seed identities",
+            "then": "No duplicate seed records or misleading success metrics are introduced"
+          }
+        ]
+      },
+      {
+        "id": "govern",
+        "actor": "Delivery administrator and independent QA",
+        "outcome": "Deliver only within verified standard-M365 scope",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "independent-delivery"
+        ],
+        "scenarios": [
+          {
+            "id": "govern-happy",
+            "kind": "happy",
+            "given": "Exact approved target, entitlement/DLP/resource evidence and supported runner contracts exist",
+            "when": "Run independently reviewed scoped release",
+            "then": "Only dedicated AS-E2E resources change and runner-owned exact-release evidence, URLs and handover support acceptance"
+          },
+          {
+            "id": "govern-denied",
+            "kind": "denied",
+            "given": "Target/identity/entitlement is wrong or an adapter is unsupported",
+            "when": "Request authoring/deployment/acceptance",
+            "then": "Dependent work is blocked with specific owner/remedy; no premium fallback or governance bypass"
+          },
+          {
+            "id": "govern-failure",
+            "kind": "failure",
+            "given": "Deployment, native compile, flow action, download or recovery verification fails",
+            "when": "Inspect retained evidence and reconcile the attempt",
+            "then": "No completion is claimed; bounded repair retains evidence and protects existing resources"
+          }
+        ]
+      }
+    ],
+    "decisions": [
+      {
+        "id": "brief-boundary",
+        "question": "What target, entitlement and approval boundaries govern delivery?",
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "material": true,
+        "status": "answered",
+        "answer": "Use only the exact requested GraspAI tenant/Leon/organization endpoint and standard Business Premium end-user rights; preserve existing resources, never impersonate human approval and do not bypass unsupported gates.",
+        "answerSource": "Manager brief and unattended continuation message in this session."
+      },
+      {
+        "id": "slice-default",
+        "question": "What is the smallest milestone before full approval-flow and demo expansion?",
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "requirementIds": [
+          "initiative-dispatch",
+          "tablet-workspace",
+          "evidence-pack",
+          "independent-delivery"
+        ],
+        "material": false,
+        "status": "answered",
+        "answer": "One real non-synthetic initiative from Canvas write/reload through exactly-one Flow1 dispatch and a real access-checked artifact/evidence link, including denied and failure paths. Full Flow2 and seeded demo expansion waits for independent deployed slice acceptance.",
+        "answerSource": "Coordinator scoped reversible default from the manager's smallest-real-vertical-slice instruction; pending independent design assessment."
+      },
+      {
+        "id": "target-mapping",
+        "question": "Which actual environment, SharePoint site, team/channel, connections and test identities map to the approved organization endpoint?",
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "independent-delivery"
+        ],
+        "material": true,
+        "status": "open"
+      },
+      {
+        "id": "supported-delivery",
+        "question": "Which verified runner contracts support SharePoint target mapping, native Canvas runtime/denied access and standard-only packaging/recovery in this target?",
+        "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+        "requirementIds": [
+          "initiative-dispatch",
+          "tablet-workspace",
+          "evidence-pack",
+          "independent-delivery"
+        ],
+        "material": true,
+        "status": "open"
+      }
+    ],
+    "assumptions": [
+      {
+        "id": "standard-path-feasible",
+        "statement": "All required actual operations and intended users can be served under standard Business Premium without relying on owner premium/trials.",
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "requirementIds": [
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval"
+        ],
+        "critical": true,
+        "status": "unverified",
+        "findingIds": [
+          "target-and-licensing",
+          "flow-contracts"
+        ]
+      },
+      {
+        "id": "runner-support",
+        "statement": "A genuine supported deployment/independent-verification path exists for the SharePoint-backed native Canvas first slice.",
+        "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+        "requirementIds": [
+          "initiative-dispatch",
+          "tablet-workspace",
+          "evidence-pack",
+          "independent-delivery"
+        ],
+        "critical": true,
+        "status": "unverified",
+        "findingIds": [
+          "runner-adapters",
+          "independent-verification"
+        ]
+      },
+      {
+        "id": "manual-refresh-default",
+        "statement": "Manual Refresh with visible last-success timestamp is the reversible baseline; foreground polling will be added only within a discovered bounded standard-connector contract.",
+        "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+        "requirementIds": [
+          "tablet-workspace"
+        ],
+        "critical": false,
+        "status": "unverified",
+        "findingIds": [
+          "journey-contract"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "id": "sp-data",
+        "platform": "other",
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "contractIds": [
+          "target-boundary",
+          "sharepoint-contract",
+          "release-contract"
+        ],
+        "dependsOn": [],
+        "findingIds": [
+          "sharepoint-data",
+          "runner-adapters"
+        ]
+      },
+      {
+        "id": "dispatch-flow",
+        "platform": "flow",
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "requirementIds": [
+          "initiative-dispatch",
+          "standard-entitlements",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "contractIds": [
+          "target-boundary",
+          "sharepoint-contract",
+          "flow-contract",
+          "release-contract"
+        ],
+        "dependsOn": [
+          "sp-data"
+        ],
+        "findingIds": [
+          "flow-contracts"
+        ]
+      },
+      {
+        "id": "approval-flow",
+        "platform": "flow",
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "requirementIds": [
+          "evidence-approval",
+          "standard-entitlements",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "contractIds": [
+          "target-boundary",
+          "sharepoint-contract",
+          "flow-contract",
+          "release-contract"
+        ],
+        "dependsOn": [
+          "sp-data",
+          "dispatch-flow"
+        ],
+        "findingIds": [
+          "flow-contracts",
+          "independent-verification"
+        ]
+      },
+      {
+        "id": "showcase-canvas",
+        "platform": "canvas",
+        "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+        "requirementIds": [
+          "initiative-dispatch",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "contractIds": [
+          "canvas-contract",
+          "sharepoint-contract",
+          "release-contract"
+        ],
+        "dependsOn": [
+          "sp-data",
+          "dispatch-flow"
+        ],
+        "findingIds": [
+          "canvas-session",
+          "runner-adapters"
+        ]
+      },
+      {
+        "id": "release-evidence",
+        "platform": "other",
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "contractIds": [
+          "release-contract"
+        ],
+        "dependsOn": [
+          "sp-data",
+          "dispatch-flow",
+          "showcase-canvas"
+        ],
+        "findingIds": [
+          "runner-adapters",
+          "independent-verification"
+        ]
+      }
+    ],
+    "securityBoundaries": [
+      {
+        "id": "as-e2e-operator",
+        "actor": "Authorised dedicated AS-E2E operator",
+        "allowed": "Create/read only the reviewed dedicated project data, artifacts and correlated telemetry using verified standard rights.",
+        "denied": "Existing apps/sites/flows/connections; any outside-target resource; unapproved grants; premium/custom/AI runtime.",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "tablet-workspace",
+          "evidence-pack"
+        ],
+        "findingIds": [
+          "target-and-licensing",
+          "sharepoint-data"
+        ]
+      },
+      {
+        "id": "human-approval",
+        "actor": "Genuine independent QA reviewer and owner Leon",
+        "allowed": "QA supplies genuine immutable project/run evidence; Leon explicitly approves or rejects with retained real identity and links.",
+        "denied": "Author self-signoff, synthetic acceptance evidence, impersonation, silent autoapproval or Completed on missing/rejected evidence.",
+        "requirementIds": [
+          "evidence-approval",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "findingIds": [
+          "flow-contracts",
+          "independent-verification"
+        ]
+      },
+      {
+        "id": "denied-test-user",
+        "actor": "Real test identity lacking relevant AS-E2E rights",
+        "allowed": "Exercise reviewed denial scenarios without broad grants or impersonation.",
+        "denied": "Project writes, protected documents/downloads, approval or content leakage beyond assigned permissions.",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "findingIds": [
+          "target-and-licensing",
+          "independent-verification"
+        ]
+      }
+    ],
+    "checks": [
+      {
+        "id": "connected-compile",
+        "kind": "compile",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Runner command receipts and actual native Canvas sync/control/schema discovery/zero-error compile/App checker plus real flow validate/preflight output; schema consistency is not live proof."
+      },
+      {
+        "id": "real-package",
+        "kind": "package",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Exact committed manifest, actual msapp/flows/schema/seeds, package digest/inventory, supported target mappings and connection identities; SharePoint remains other until a genuine typed adapter is supported."
+      },
+      {
+        "id": "runtime-matrix",
+        "kind": "runtime",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [
+          "initiate-happy",
+          "initiate-denied",
+          "initiate-failure",
+          "approve-happy",
+          "approve-denied",
+          "approve-failure",
+          "monitor-happy",
+          "monitor-denied",
+          "monitor-failure",
+          "download-happy",
+          "download-denied",
+          "download-failure",
+          "demo-happy",
+          "demo-denied",
+          "demo-failure",
+          "govern-happy",
+          "govern-denied",
+          "govern-failure"
+        ],
+        "expectedEvidence": "Independent real desktop/mobile Canvas observations, actual SharePoint write/reload, correlated flow run/action histories, real download bytes/manifest, duplicate/retry/missing/error paths and genuine human response only where available. No predetermined passing reports."
+      },
+      {
+        "id": "access-matrix",
+        "kind": "access",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [
+          "initiate-denied",
+          "approve-denied",
+          "monitor-denied",
+          "download-denied",
+          "demo-denied",
+          "govern-denied"
+        ],
+        "expectedEvidence": "Two authenticated appropriate real test identities, observed denied writes/documents/download/approval and correct target/rights; owner/admin login alone cannot establish isolation."
+      },
+      {
+        "id": "data-preserving-recovery",
+        "kind": "recovery",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Reviewed runbook, prior dedicated-resource inventory and real bounded rehearsal preserving records/links/ownership. No destructive rollback or second tenant/environment inferred as authorised."
+      },
+      {
+        "id": "user-handover",
+        "kind": "documentation",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Substantive distinct committed docs/user-guide.md with exact required headings, actual configured IDs/links or honest unknowns, relevant error/access/recovery/licensing limitations, retained from pinned commit and individually reviewed by Sherlock."
+      },
+      {
+        "id": "administrator-handover",
+        "kind": "documentation",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Substantive distinct committed docs/administrator-guide.md with exact required headings, actual configured IDs/links or honest unknowns, relevant error/access/recovery/licensing limitations, retained from pinned commit and individually reviewed by Sherlock."
+      },
+      {
+        "id": "operations-handover",
+        "kind": "documentation",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Substantive distinct committed docs/operations-guide.md with exact required headings, actual configured IDs/links or honest unknowns, relevant error/access/recovery/licensing limitations, retained from pinned commit and individually reviewed by Sherlock."
+      },
+      {
+        "id": "architecture-handover",
+        "kind": "documentation",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data",
+          "dispatch-flow",
+          "approval-flow",
+          "showcase-canvas",
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Substantive distinct committed docs/architecture-guide.md with exact required headings, actual configured IDs/links or honest unknowns, relevant error/access/recovery/licensing limitations, retained from pinned commit and individually reviewed by Sherlock."
+      },
+      {
+        "id": "author-local-5",
+        "kind": "compile",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "tablet-workspace",
+          "evidence-pack",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "sp-data"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Independent review of actual pinned component source and component-local validation receipts for task #5. Excludes integrated downstream runtime/package/access gates, which belong to integration QA; not live acceptance."
+      },
+      {
+        "id": "author-local-6",
+        "kind": "compile",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "dispatch-flow"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Independent review of actual pinned component source and component-local validation receipts for task #6. Excludes integrated downstream runtime/package/access gates, which belong to integration QA; not live acceptance."
+      },
+      {
+        "id": "author-local-7",
+        "kind": "compile",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "tablet-workspace",
+          "evidence-pack",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "showcase-canvas"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Independent review of actual pinned component source and component-local validation receipts for task #7. Excludes integrated downstream runtime/package/access gates, which belong to integration QA; not live acceptance."
+      },
+      {
+        "id": "author-local-8",
+        "kind": "compile",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "tablet-workspace",
+          "evidence-pack",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Independent review of actual pinned component source and component-local validation receipts for task #8. Excludes integrated downstream runtime/package/access gates, which belong to integration QA; not live acceptance."
+      },
+      {
+        "id": "author-local-9",
+        "kind": "compile",
+        "requirementIds": [
+          "isolation",
+          "standard-entitlements",
+          "initiative-dispatch",
+          "evidence-approval",
+          "tablet-workspace",
+          "evidence-pack",
+          "synthetic-demo",
+          "independent-delivery"
+        ],
+        "componentIds": [
+          "approval-flow",
+          "sp-data",
+          "release-evidence"
+        ],
+        "scenarioIds": [],
+        "expectedEvidence": "Independent review of actual pinned component source and component-local validation receipts for task #9. Excludes integrated downstream runtime/package/access gates, which belong to integration QA; not live acceptance."
+      }
+    ]
+  },
+  "taskPlan": {
+    "schemaVersion": 2,
+    "integrationQa": [
+      {
+        "id": "independent-slice-qa",
+        "owner": "d7e4eeb5-4147-4619-8f63-0afd2127c96e",
+        "purpose": "slice",
+        "runner": "delivery",
+        "dependsOn": [
+          5,
+          6,
+          7,
+          8
+        ],
+        "checkIds": [
+          "connected-compile",
+          "real-package",
+          "runtime-matrix",
+          "access-matrix",
+          "data-preserving-recovery",
+          "user-handover",
+          "administrator-handover",
+          "operations-handover",
+          "architecture-handover",
+          "author-local-5",
+          "author-local-6",
+          "author-local-7",
+          "author-local-8"
+        ],
+        "cases": [
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "initiate-happy",
+            "testName": "showcase-slice-initiate-happy",
+            "criterion": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "initiate-denied",
+            "testName": "showcase-slice-initiate-denied",
+            "criterion": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch.",
+            "nativeAssertion": {
+              "adapter": "native-denied-create-v1",
+              "operation": "create-project",
+              "assertions": [
+                "authenticated-403",
+                "no-correlated-write",
+                "no-correlated-dispatch"
+              ],
+              "observationWindowMs": 10000,
+              "pollIntervalMs": 1000
+            }
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "initiate-failure",
+            "testName": "showcase-slice-initiate-failure",
+            "criterion": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "monitor-happy",
+            "testName": "showcase-slice-monitor-happy",
+            "criterion": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "monitor-denied",
+            "testName": "showcase-slice-monitor-denied",
+            "criterion": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "monitor-failure",
+            "testName": "showcase-slice-monitor-failure",
+            "criterion": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "download-happy",
+            "testName": "showcase-slice-download-happy",
+            "criterion": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "download-denied",
+            "testName": "showcase-slice-download-denied",
+            "criterion": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "download-failure",
+            "testName": "showcase-slice-download-failure",
+            "criterion": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "govern-happy",
+            "testName": "showcase-slice-govern-happy",
+            "criterion": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "govern-denied",
+            "testName": "showcase-slice-govern-denied",
+            "criterion": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "govern-failure",
+            "testName": "showcase-slice-govern-failure",
+            "criterion": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "initiate-denied",
+            "testName": "showcase-slice-initiate-denied",
+            "criterion": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch.",
+            "nativeAssertion": {
+              "adapter": "native-denied-create-v1",
+              "operation": "create-project",
+              "assertions": [
+                "authenticated-403",
+                "no-correlated-write",
+                "no-correlated-dispatch"
+              ],
+              "observationWindowMs": 10000,
+              "pollIntervalMs": 1000
+            }
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "monitor-denied",
+            "testName": "showcase-slice-monitor-denied",
+            "criterion": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "download-denied",
+            "testName": "showcase-slice-download-denied",
+            "criterion": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "govern-denied",
+            "testName": "showcase-slice-govern-denied",
+            "criterion": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+          }
+        ],
+        "maxTaskDurationMs": 120000,
+        "stopConditions": [
+          "Do not execute before all exact scoped author merge receipts and current independent release/architecture approvals. Expansion also requires independently accepted first slice.",
+          "Bind actual executable browser/native scenarios, target identities and command/quality receipts through the existing delivery runner; missing selectors/adapters/commands/rights are blocked, never a simulated pass.",
+          "Stop on source/target/contract/merge drift, unknown or failed assertions, missing denied-identity or persistent reload evidence, timeout/interruption or unverified cleanup. No self-approval or author-owned integration evidence.",
+          "Native denied initiation requires the exact create-project denial contract, two distinct authenticated native subjects and complete historical correlated write/dispatch observations. Installed recent FlowAgent summaries and current list counts are insufficient; no production native adapter is configured. Missing target/rights/identity/coverage means blocked before any test write."
+        ]
+      },
+      {
+        "id": "independent-expansion-qa",
+        "owner": "d7e4eeb5-4147-4619-8f63-0afd2127c96e",
+        "purpose": "expansion",
+        "runner": "delivery",
+        "dependsOn": [
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "checkIds": [
+          "connected-compile",
+          "real-package",
+          "runtime-matrix",
+          "access-matrix",
+          "data-preserving-recovery",
+          "user-handover",
+          "administrator-handover",
+          "operations-handover",
+          "architecture-handover",
+          "author-local-5",
+          "author-local-6",
+          "author-local-7",
+          "author-local-8",
+          "author-local-9"
+        ],
+        "cases": [
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "initiate-happy",
+            "testName": "showcase-expansion-initiate-happy",
+            "criterion": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "initiate-denied",
+            "testName": "showcase-expansion-initiate-denied",
+            "criterion": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch.",
+            "nativeAssertion": {
+              "adapter": "native-denied-create-v1",
+              "operation": "create-project",
+              "assertions": [
+                "authenticated-403",
+                "no-correlated-write",
+                "no-correlated-dispatch"
+              ],
+              "observationWindowMs": 10000,
+              "pollIntervalMs": 1000
+            }
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "initiate-failure",
+            "testName": "showcase-expansion-initiate-failure",
+            "criterion": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "approve-happy",
+            "testName": "showcase-expansion-approve-happy",
+            "criterion": "Matching genuine evidence requests approval with links and remains QA Testing while pending; only an observed Approved human response completes. Rejected, missing, mismatched, duplicate or synthetic evidence never completes and no identity is impersonated."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "approve-denied",
+            "testName": "showcase-expansion-approve-denied",
+            "criterion": "Matching genuine evidence requests approval with links and remains QA Testing while pending; only an observed Approved human response completes. Rejected, missing, mismatched, duplicate or synthetic evidence never completes and no identity is impersonated."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "approve-failure",
+            "testName": "showcase-expansion-approve-failure",
+            "criterion": "Matching genuine evidence requests approval with links and remains QA Testing while pending; only an observed Approved human response completes. Rejected, missing, mismatched, duplicate or synthetic evidence never completes and no identity is impersonated."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "monitor-happy",
+            "testName": "showcase-expansion-monitor-happy",
+            "criterion": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "monitor-denied",
+            "testName": "showcase-expansion-monitor-denied",
+            "criterion": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "monitor-failure",
+            "testName": "showcase-expansion-monitor-failure",
+            "criterion": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "download-happy",
+            "testName": "showcase-expansion-download-happy",
+            "criterion": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "download-denied",
+            "testName": "showcase-expansion-download-denied",
+            "criterion": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "download-failure",
+            "testName": "showcase-expansion-download-failure",
+            "criterion": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "demo-happy",
+            "testName": "showcase-expansion-demo-happy",
+            "criterion": "Legacy File Share to SharePoint Migration Tool is Completed GBP28000 and Automated Tenant Security Baseline Audit is Architect Synthesis GBP45000; five synthetic-metric logs and two mock files are linked and visibly labelled, excluded from live dispatch/completion/signoff."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "demo-denied",
+            "testName": "showcase-expansion-demo-denied",
+            "criterion": "Legacy File Share to SharePoint Migration Tool is Completed GBP28000 and Automated Tenant Security Baseline Audit is Architect Synthesis GBP45000; five synthetic-metric logs and two mock files are linked and visibly labelled, excluded from live dispatch/completion/signoff."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "demo-failure",
+            "testName": "showcase-expansion-demo-failure",
+            "criterion": "Legacy File Share to SharePoint Migration Tool is Completed GBP28000 and Automated Tenant Security Baseline Audit is Architect Synthesis GBP45000; five synthetic-metric logs and two mock files are linked and visibly labelled, excluded from live dispatch/completion/signoff."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "govern-happy",
+            "testName": "showcase-expansion-govern-happy",
+            "criterion": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "govern-denied",
+            "testName": "showcase-expansion-govern-denied",
+            "criterion": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+          },
+          {
+            "checkId": "runtime-matrix",
+            "scenarioId": "govern-failure",
+            "testName": "showcase-expansion-govern-failure",
+            "criterion": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "initiate-denied",
+            "testName": "showcase-expansion-initiate-denied",
+            "criterion": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch.",
+            "nativeAssertion": {
+              "adapter": "native-denied-create-v1",
+              "operation": "create-project",
+              "assertions": [
+                "authenticated-403",
+                "no-correlated-write",
+                "no-correlated-dispatch"
+              ],
+              "observationWindowMs": 10000,
+              "pollIntervalMs": 1000
+            }
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "approve-denied",
+            "testName": "showcase-expansion-approve-denied",
+            "criterion": "Matching genuine evidence requests approval with links and remains QA Testing while pending; only an observed Approved human response completes. Rejected, missing, mismatched, duplicate or synthetic evidence never completes and no identity is impersonated."
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "monitor-denied",
+            "testName": "showcase-expansion-monitor-denied",
+            "criterion": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "download-denied",
+            "testName": "showcase-expansion-download-denied",
+            "criterion": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "demo-denied",
+            "testName": "showcase-expansion-demo-denied",
+            "criterion": "Legacy File Share to SharePoint Migration Tool is Completed GBP28000 and Automated Tenant Security Baseline Audit is Architect Synthesis GBP45000; five synthetic-metric logs and two mock files are linked and visibly labelled, excluded from live dispatch/completion/signoff."
+          },
+          {
+            "checkId": "access-matrix",
+            "scenarioId": "govern-denied",
+            "testName": "showcase-expansion-govern-denied",
+            "criterion": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+          }
+        ],
+        "maxTaskDurationMs": 120000,
+        "stopConditions": [
+          "Do not execute before all exact scoped author merge receipts and current independent release/architecture approvals. Expansion also requires independently accepted first slice.",
+          "Bind actual executable browser/native scenarios, target identities and command/quality receipts through the existing delivery runner; missing selectors/adapters/commands/rights are blocked, never a simulated pass.",
+          "Stop on source/target/contract/merge drift, unknown or failed assertions, missing denied-identity or persistent reload evidence, timeout/interruption or unverified cleanup. No self-approval or author-owned integration evidence.",
+          "Native denied initiation requires the exact create-project denial contract, two distinct authenticated native subjects and complete historical correlated write/dispatch observations. Installed recent FlowAgent summaries and current list counts are insufficient; no production native adapter is configured. Missing target/rights/identity/coverage means blocked before any test write."
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "issue": 5,
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "componentIds": [
+          "sp-data"
+        ],
+        "dependsOn": [],
+        "resources": [
+          "graspai_5e9bd5a8_as_e2e_sharepoint_schema",
+          "graspai_5e9bd5a8_as_e2e_projects_logs_artifacts",
+          "SwarmProjects",
+          "SwarmRunLogs",
+          "EngineeringArtifacts"
+        ],
+        "inputs": [
+          "Committed cubefarm.sharepoint.json and docs/delivery/SCHEMA-BOOTSTRAP.md at source c95564e56eda031965fea9bea9797dfd3bf8950f",
+          "sharepoint-plan-sha256:5abd1e7c88d94d9224c656ff37eb243a95b8f00e04c56312a58b760183d5ccfc",
+          "Existing exact parent site/web IDs, fresh configured-writer permission observation and separate expiring full-plan operator approval. New list/library/field IDs are creation/readback outputs, not inputs.",
+          "Only the fixed schema executor may use separate independent schema-bootstrap architecture/task approval. Ordinary coding workers and the full application remain gated; future Canvas/flow/runtime/denied-user results are not asserted by this grant.",
+          "Explicit retained first-parent reconciliation requires exact original journal/lease/plan/source/marker/resource-ID/full-metadata commitments, stopped original owner and two fresh metadata reads; preserve original marker. New independent and operator approval must include reconcile-owned-schema and create-schema.",
+          "Explicit applied continuation binds immutable applied migration receipt, unchanged verified-parent-only journal, original handoff lease and observed released lease/guard state, stopped prior process and two fresh metadata readbacks. New independent/operator continue-applied-schema plus create-schema scope authorizes retained execution identity; never replay original migration."
+        ],
+        "outputs": [
+          "Commit schema/provision/reconcile and supported mapping definitions, including lookup/internal names, durable correlation and concurrency guard; preserve unrelated data.",
+          "If and only if the supported gated stage permits, provision/reconcile approved dedicated resources; retain real inventory/IDs/version/hash receipts. Existing GraspAI site/Documents remain protected unless a separately verified dedicated scope is approved.",
+          "Commit data contract and admin/recovery inputs; defer actual synthetic seeding to approval expansion.",
+          "Component acceptance uses only author-local-5 against these owned components. Cross-component package/runtime/access/recovery and handover checks execute later under independent integration QA; no prerequisite acceptance waits for downstream implementation."
+        ],
+        "checkIds": [
+          "author-local-5"
+        ],
+        "stopConditions": [
+          "Stop before lease/POST without exact independent schema-bootstrap approval and operator approval bound to current record/task/source/plan/configuration/implementation/evidence. This does not authorize generic worker admission.",
+          "Stop on wrong tenant/caller/site/writer, name conflict, unknown outcome, readback mismatch, changed inputs or expired evidence. Retain shared history/lease after dispatch; no automatic retry, deletion, rollback or name-based adoption; only the exact independently approved first-parent outcome reconciliation is allowed.",
+          "No folders, seeds, content, permissions, Teams messages, flow/Canvas authoring or release authority in this schema step. Preserve all other application requirements and independent acceptance gates. DLP implementation is excluded."
+        ]
+      },
+      {
+        "issue": 6,
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "componentIds": [
+          "dispatch-flow"
+        ],
+        "dependsOn": [
+          5
+        ],
+        "resources": [
+          "graspai_5e9bd5a8_as_e2e_flow1",
+          "graspai_5e9bd5a8_as_e2e_dispatch_claims",
+          "graspai_5e9bd5a8_as_e2e_teams_channel"
+        ],
+        "inputs": [
+          "Independently accepted merged data task #5 outputs and exact reviewed architecture/task hash; no authoring until normal design/task gates pass.",
+          "Verified standard SharePoint trigger/read/claim/folder/update and Teams card operation details, DLP, exact dedicated connections/site/team/channel, permitted identities; no guessed IDs or connector JSON.",
+          "Agreed stable project/run keys, concurrency/version preconditions, synthetic exclusions, effect receipts and bounded retry/reconciliation contract from existing #3."
+        ],
+        "outputs": [
+          "Commit actual Flow1 definition/bindings, deterministic summary template and operations/error contracts; use supported starter after guidance/tool verification.",
+          "For non-synthetic Architect Synthesis only, claim once, reconcile folder/card/log effects, record IDs and Engineering Build transition; prevent recursive/duplicate dispatch and blind replay after ambiguous sends.",
+          "Retain real correlated trigger/run/action and duplicate/retry/error evidence through supported QA/runner paths; static validation is separately labelled.",
+          "Component acceptance uses only author-local-6 against these owned components. Cross-component package/runtime/access/recovery and handover checks execute later under independent integration QA; no prerequisite acceptance waits for downstream implementation."
+        ],
+        "checkIds": [
+          "author-local-6"
+        ],
+        "stopConditions": [
+          "Stop before authoring or activation if #5 lacks exact merged independent acceptance, or current design/task/target authorization is missing.",
+          "Stop for unavailable standard trigger/conditional claim/folder/card/run-evidence contracts, DLP/connection rights, non-dedicated resources, uncertain concurrency or unsupported non-solution flow delivery.",
+          "On ambiguity retain correlation and failure, never replay notifications blindly, broaden rights, complete synthetic runs or invent exactly-once proof.",
+          "If the office's bounded task context exceeds 24 KiB or lacks real input artifacts/receipts, stop; do not silently truncate evidence or start authoring. A revised plan needs fresh architecture/review."
+        ]
+      },
+      {
+        "issue": 7,
+        "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+        "componentIds": [
+          "showcase-canvas"
+        ],
+        "dependsOn": [
+          5,
+          6
+        ],
+        "resources": [
+          "graspai_5e9bd5a8_as_e2e_canvas_studio",
+          "graspai_5e9bd5a8_as_e2e_canvas_source"
+        ],
+        "inputs": [
+          "Exact independently accepted merged data #5 and dispatch #6 receipts/commits, reviewed source/data/flow interfaces and stable saved receipt/run IDs.",
+          "Explicit approved dedicated existing app/environment mapping and local authoring ownership; genuine Studio SharePoint data-source insertion and observed schemas/control/API contracts. No blank or expense app session.",
+          "Verified standard intended-user rights, real authorised/denied identities, evidence-link manifest/content/access contract and supported native export/publication/browser/recovery tooling; unknowns remain blocked."
+        ],
+        "outputs": [
+          "Commit connected .pa.yaml source, real exported .msapp and concise experience documentation from the dedicated app, using sync before edits, discovered schemas/controls and zero-error native compilation.",
+          "One responsive screen with Active Swarm Pipelines, Architecture Vault, Run Telemetry; actual projects/status/details/links and correlated concise logs; metrics measured or Unknown, manual refresh/last-success time, bounded evidenced polling.",
+          "Persist initiative receipt only after real save and reload; open/download actual correlated evidence link with authorised/denied/missing/stale feedback. Cover loading, empty, success, validation, denied and error/recovery plus keyboard/focus/contrast/touch at desktop/mobile.",
+          "Retain real App checker/accessibility, publish/share and native runtime evidence without self-approval; synthetic display expansion stays gated.",
+          "Component acceptance uses only author-local-7 against these owned components. Cross-component package/runtime/access/recovery and handover checks execute later under independent integration QA; no prerequisite acceptance waits for downstream implementation."
+        ],
+        "checkIds": [
+          "author-local-7"
+        ],
+        "stopConditions": [
+          "Stop if data/flow prerequisite acceptance/commits, exact independent design/task approval, dedicated ownership/session, schema, licence/DLP or test identities are absent.",
+          "No authoring without acquiring local dedicated ownership and sync to its own absolute YAML-only directory; never sync into expense app or README root.",
+          "Missing supported Studio insertion/save/export/publish/share, real msapp, native Canvas/iframe/denied-user or recovery adapter blocks connected delivery; no mocked collections or same-origin web substitute.",
+          "Stop for false success after save error, leaked documents, unknown metrics represented as measured or changed source/target binding.",
+          "If the office's bounded task context exceeds 24 KiB or lacks real input artifacts/receipts, stop; do not silently truncate evidence or start authoring. A revised plan needs fresh architecture/review."
+        ]
+      },
+      {
+        "issue": 8,
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "componentIds": [
+          "release-evidence"
+        ],
+        "dependsOn": [
+          5,
+          6,
+          7
+        ],
+        "resources": [
+          "graspai_5e9bd5a8_as_e2e_release_manifest",
+          "graspai_5e9bd5a8_as_e2e_release_evidence",
+          "graspai_5e9bd5a8_as_e2e_delivery_target"
+        ],
+        "inputs": [
+          "Exact independently QA-accepted merged #5/#6/#7 commits, actual schema/flow/app artifacts and current immutable architecture/task/record hashes.",
+          "Real supported standard-M365 deployment/mapping/package/recovery and native Canvas/denied-user verification contracts plus approved dedicated resources/target/identities; unsupported platforms stay blocked.",
+          "Sherlock supplies/owns executable live assertions and later per-check decisions; Ada integrates independently reviewed artifacts, never writes self-approval or a predetermined success report."
+        ],
+        "outputs": [
+          "Commit cubefarm.delivery.json, actual target/component mapping, QA-owned scripts/live verification files supplied through the supported independent QA path, real package inputs and distinct substantive docs/user-guide.md, docs/administrator-guide.md, docs/operations-guide.md, docs/architecture-guide.md.",
+          "Bind firstSlice happy/denied/failure checks and qualityEvidence compile/package/runtime/access/recovery/documentation to actual executable commands/test names, native artifacts and real identity labels. Commit unchanged architecture JSON/Markdown for the exact returned docId/artifact hash.",
+          "When all real gates pass, prepare scoped slice create_release plan pinned to merged source/record/target; request Sherlock review_release for plan approval and a fresh visual/recovery session. Retain runner-owned URLs/evidence and accepted slice receipt only after runner complete.",
+          "Document remaining blockers and local inference costs/unknown usage honestly; full Flow2 and synthetic seed expansion remain excluded from slice acceptance.",
+          "Component acceptance uses only author-local-8 against these owned components. Cross-component package/runtime/access/recovery and handover checks execute later under independent integration QA; no prerequisite acceptance waits for downstream implementation."
+        ],
+        "checkIds": [
+          "author-local-8"
+        ],
+        "stopConditions": [
+          "Stop if any required source/task acceptance, target, manifest input, supported SharePoint/Canvas adapter, standard-only package contract or real authorised/denied identity is missing.",
+          "No release execution before independent architecture/task/release approval, all applicable findings ready, real URL/mappings and data-preserving recovery authority exist; no alternate target or production inferred.",
+          "Missing actual QA scripts/artifacts/hash-bound checks or incomplete four-role docs blocks acceptance; do not fabricate docIds, evidence, PR/issue completion or runner status.",
+          "Do not claim delivery until current approved release runner reports complete and supplies real app/site URLs plus independent evidence; degraded health is an incident.",
+          "If the office's bounded task context exceeds 24 KiB or lacks real input artifacts/receipts, stop; do not silently truncate evidence or start authoring. A revised plan needs fresh architecture/review."
+        ]
+      },
+      {
+        "issue": 9,
+        "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+        "componentIds": [
+          "approval-flow",
+          "sp-data",
+          "release-evidence"
+        ],
+        "dependsOn": [
+          5,
+          6,
+          7,
+          8
+        ],
+        "resources": [
+          "graspai_5e9bd5a8_as_e2e_flow2",
+          "graspai_5e9bd5a8_as_e2e_approval_claims",
+          "graspai_5e9bd5a8_as_e2e_seed_records",
+          "graspai_5e9bd5a8_as_e2e_projects_logs_artifacts",
+          "graspai_5e9bd5a8_as_e2e_release_manifest",
+          "graspai_5e9bd5a8_as_e2e_release_evidence"
+        ],
+        "inputs": [
+          "Independently QA-accepted merged #5/#6/#7/#8 receipts/commits plus office-owned exact-release complete/accept_slice and quality evidence; an issue closure or package check is insufficient.",
+          "Reviewed genuine immutable QA-evidence project/run/source/target/version/hash manifest and real Leon approval identity; exact standard Approvals/Teams/SharePoint contracts, permitted connections and DLP/rights.",
+          "Manager's exact labelled synthetic seeds and exclusion rules, existing first-slice source/schema/flow/Canvas interfaces and safe idempotent reconciliation contract; no new access boundary or environment."
+        ],
+        "outputs": [
+          "Commit Flow2 evidence validation and real human request/response binding: QA Testing while pending, Completed only on genuine observed Approved; retain rejection/missing/mismatch/replay/synthetic/error and timeout outcomes. Never impersonate or silently approve.",
+          "Idempotently seed only dedicated allowlisted resources: Legacy File Share to SharePoint Migration Tool, Completed, GBP28000; Automated Tenant Security Baseline Audit, Architect Synthesis, GBP45000; five linked labelled illustrative logs and two mock HLD/QA files explicitly NOT acceptance evidence. Exclude seeds/files from both flows and signoff.",
+          "Update full-scope manifest, evidence and four-role handover with actual versions/links and supported expansion plan/quality mappings; Sherlock independently verifies exact source/target and genuine approval/denied/error/duplicate/retry/download/seed cases.",
+          "Reuse Linus's accepted Canvas contracts without reauthoring his component. If expansion requires a changed Canvas interface/implementation, stop for a separately reviewed scope/task revision and new bound architecture rather than assuming Ada owns it.",
+          "Component acceptance uses only author-local-9 against these owned components. Cross-component package/runtime/access/recovery and handover checks execute later under independent integration QA; no prerequisite acceptance waits for downstream implementation."
+        ],
+        "checkIds": [
+          "author-local-9"
+        ],
+        "stopConditions": [
+          "No wider implementation before office-owned independent first-slice acceptance, current design/task approval and all exact prerequisite merge receipts.",
+          "Missing genuine human approval is pending, never fabricated Completed; absent/mutable/mismatched/replayed/synthetic QA evidence cannot authorise completion.",
+          "Stop on unsupported approval/evidence immutability, standard connector/licensing/DLP, identities, packaging/recovery or independent runtime contract; no premium/Dataverse fallback or role escalation.",
+          "Stop on seed collision with unrelated data, changed target/source/contract, missing native Canvas evidence or new cross-owner component work; retain exact owner/remedy without unchanged retries.",
+          "If the office's bounded task context exceeds 24 KiB or lacks real input artifacts/receipts, stop; do not silently truncate evidence or start authoring. A revised plan needs fresh architecture/review."
+        ]
+      }
+    ]
+  },
+  "sourceCommit": "c95564e56eda031965fea9bea9797dfd3bf8950f",
+  "environmentUrl": "https://org0efd6060.crm4.dynamics.com",
+  "requirements": [
+    {
+      "id": "isolation",
+      "description": "Use only the approved GraspAI tenant, caller and dedicated AS-E2E resources; preserve all existing resources and profiles.",
+      "acceptance": "Exact tenant/caller/environment and resource allowlist are observed; unrelated expense apps, paused Copilot, sites, flows, connections and global profiles remain unchanged."
+    },
+    {
+      "id": "standard-entitlements",
+      "description": "Use only verified Microsoft 365 Business Premium end-user entitlements and standard connectors, with no Dataverse app data or paid runtime features.",
+      "acceptance": "Assigned service-plan, connector-operation, DLP and intended-user access evidence supports every deployed operation without premium/trial dependence; local inference cost is separately reported."
+    },
+    {
+      "id": "initiative-dispatch",
+      "description": "Persist a new initiative in the specified SharePoint Projects schema and run Flow1 only for non-synthetic Architect Synthesis projects with deterministic summary, card, folders and correlated log.",
+      "acceptance": "Actual Canvas write survives reload; one eligible run creates the deterministic summary, dedicated-channel card, idempotent project artifact folder and initial correlated log, transitions to Engineering Build, and exposes duplicate/retry/error outcomes without recursive dispatch."
+    },
+    {
+      "id": "evidence-approval",
+      "description": "Flow2 validates genuine immutable project/run QA evidence and obtains real owner Teams approval.",
+      "acceptance": "Matching genuine evidence requests approval with links and remains QA Testing while pending; only an observed Approved human response completes. Rejected, missing, mismatched, duplicate or synthetic evidence never completes and no identity is impersonated."
+    },
+    {
+      "id": "tablet-workspace",
+      "description": "Deliver the responsive single-screen pipeline, architecture vault and telemetry experience with honest measured or unknown metrics.",
+      "acceptance": "Live desktop/mobile UX supports the requested navigation, selected metadata/summary/document links, correlated concise logs, bounded refresh timestamp and six observable UX states with usable keyboard/focus and no serious accessibility failures."
+    },
+    {
+      "id": "evidence-pack",
+      "description": "Provide a real accessible project/run evidence archive or download link.",
+      "acceptance": "An authorised user opens/downloads the real correlated archive/link and verifies manifest/content; a denied user cannot obtain it, and missing/stale evidence produces actionable feedback."
+    },
+    {
+      "id": "synthetic-demo",
+      "description": "Seed the exact two labelled synthetic projects, five linked illustrative logs and explicitly non-acceptance mock HLD/QA files.",
+      "acceptance": "Legacy File Share to SharePoint Migration Tool is Completed GBP28000 and Automated Tenant Security Baseline Audit is Architect Synthesis GBP45000; five synthetic-metric logs and two mock files are linked and visibly labelled, excluded from live dispatch/completion/signoff."
+    },
+    {
+      "id": "independent-delivery",
+      "description": "Commit architecture/schema/flows/Canvas/seeds/manifest/QA scripts and substantive handover; independently verify the exact approved release and target.",
+      "acceptance": "Current approved runner release reports complete with real app/site URLs, genuine Canvas sync/compile/App checker/msapp/publication/runtime, flow run/action evidence, persistence/access/failure/recovery evidence and individual hash-bound Sherlock QA decisions."
+    }
+  ],
+  "findings": [
+    {
+      "id": "repository-baseline",
+      "area": "repository",
+      "statement": "Actual discovery worker inspected committed source054d9893da8b78252dc55b961b5f78477d566021 and read the complete schema plan and bootstrap document. Exactly three tracked files, no tracked working changes. Existing untracked artifacts remain untouched. Repository pin is established; this does not establish tenant writes or runtime.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "ready",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Use this exact source for independent design/task review; preserve untracked artifacts.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\435e789fe6fc27242f1437070333fe59a413617435dff32cd4865014603d94a1.json",
+          "sha256": "435e789fe6fc27242f1437070333fe59a413617435dff32cd4865014603d94a1",
+          "observedAt": "2026-10-18T08:47:58.931Z",
+          "expiresAt": "2026-10-19T08:47:58.943Z"
+        }
+      ]
+    },
+    {
+      "id": "journey-contract",
+      "area": "user-journey",
+      "statement": "The manager brief defines observable outcomes; SharePoint write/dispatch/evidence and genuine approval prerequisites need evidence-grounded contracts.",
+      "status": "unresolved",
+      "critical": true,
+      "conclusion": "unknown",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Inspect source and actual supported standard connector operations; record happy/denied/missing/duplicate/retry/error scenarios and reversible defaults.",
+      "evidence": []
+    },
+    {
+      "id": "independent-verification",
+      "area": "verification",
+      "statement": "No runner-owned firstSlice/qualityEvidence, real test identities, live evidence download or independent runtime observations exist.",
+      "status": "unresolved",
+      "critical": true,
+      "conclusion": "unknown",
+      "owner": "d7e4eeb5-4147-4619-8f63-0afd2127c96e",
+      "remedy": "Define QA-owned executable assertions and provenance; independently inspect exact source/target/evidence, all six UX states, denied/failure paths, recovery and four handover roles.",
+      "evidence": []
+    },
+    {
+      "id": "canvas-session",
+      "area": "authoring",
+      "statement": "Issue #2 executing-worker discovery: office.read_skill successfully read canvas-apps:canvas-app 3.1.0 at 0ac110901eb10b2c67e4c0eeaef3d29f5d013bb0e4b4c501977b91b0292c73c3 and canvas-apps:add-data-source package 3.1.0/frontmatter 1.0.0 at cd82bf5d245322960dec3e6c97219426bc6914c4c9f82ec991ca1fa9009b2a8e. Runtime metadata exposes get_appchecker_errors({}) and get_accessibility_errors({}), not skill prose check_app/check_accessibility. This resolves available names only, not functional equivalence or applied-app diagnostics. list_accounts({}) was attempted once and blocked by PreToolUse read-only discovery guard; no connect or sync performed. Active binary/version, caller, tenant authentication, environment GUID and dedicated app ID remain unknown. Future path after independent design approval: pin actual approved target/app -> office canvas_authoring_acquire({app,owner}) -> connect({environment_id,app_id,login_hint,tenant_id}) with explicit existing dedicated app -> sync_canvas({directoryPath:absolute dedicated YAML-only directory}) before edits -> list_controls/describe_control and list_data_sources/get_data_source_schema plus list_apis/describe_api -> source-backed edits -> compile_canvas({directoryPath}) until zero errors -> applied-app diagnostics using actual runtime names. Studio insertion of SharePoint data sources is required; no exposed add-binding tool. Save/close Studio, actual msapp export, publish and share have no callable Canvas MCP contracts in this worker; require approved Studio/delivery adapter and real evidence. Release local ownership only after save/close via canvas_authoring_release({token}); no remote unlock or close-session tool observed. Never sync into README repo or expense app. No platform writes made. Evidence timestamps denote recording time of this worker observation, not skill installation time. Runtime contract content hash and active plugin binary version are unknown; catalogue fingerprint 98e74c23e0c2f64b0b97ae3ed1fb4c7258a6babe952468212016c36f1dd3a666 is not runtime proof.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+      "remedy": "Ada/office infrastructure owner provides approved read-only probes, exact active version/caller/target and dedicated app evidence; Studio-capable owner adds actual approved SharePoint data sources in later authorised session. Linus verifies returned schemas and diagnostics; Sherlock independently reviews. Retry only after prerequisites change.",
+      "evidence": [
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\canvas-apps\\3.1.0\\skills\\canvas-app\\SKILL.md",
+          "sha256": "0ac110901eb10b2c67e4c0eeaef3d29f5d013bb0e4b4c501977b91b0292c73c3",
+          "observedAt": "2026-10-16T12:56:48.893Z",
+          "expiresAt": "2026-10-16T13:56:48.893Z"
+        },
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\canvas-apps\\3.1.0\\skills\\add-data-source\\SKILL.md",
+          "sha256": "cd82bf5d245322960dec3e6c97219426bc6914c4c9f82ec991ca1fa9009b2a8e",
+          "observedAt": "2026-10-16T12:56:48.893Z",
+          "expiresAt": "2026-10-16T13:56:48.893Z"
+        }
+      ]
+    },
+    {
+      "id": "runner-adapters",
+      "area": "deployment",
+      "statement": "Issue #2 first-slice feasibility matrix (record revision 6 + exposed metadata; not runtime proof): isolation/standard-entitlements: BLOCKED, actual environment GUID, dedicated site/team/channel/connection IDs, worker caller, DLP and real denied identity unobserved (Ada/issue1). sp-data/initiative-dispatch: BLOCKED, no genuine typed SharePoint provision/reconcile/mapping/read-write runner observed; platform other cannot be relabelled Dataverse (Ada + office infrastructure). connected-compile: contracts AVAILABLE, execution BLOCKED pending authenticated dedicated Studio and schema discovery (Linus). dispatch-flow: BLOCKED pending Ada standard connector/run/action and idempotency evidence. real-package: BLOCKED, actual msapp/export/publish/share and standard-only packaging/solution-metadata contract not observed; no dummy site or Dataverse app data. runtime/access: BLOCKED, no genuine native Canvas/iframe + SharePoint submit/reload + real denied-user runner contract exposed (office infrastructure; Sherlock owns independent verification). evidence-pack: BLOCKED pending real allowed-site file/link, correlated manifest and authorised/denied/missing/stale downloads with actual bytes. recovery: BLOCKED pending supported bounded rehearsal preserving dedicated data/links/ownership; no second target authorised. independent-delivery: BLOCKED, delivery_status absent from tool catalogue, cannot call it. capability_status called; project reports ready checkedAt 2026-10-16T12:56:25.519Z/expiresAt 12:57:25.519Z, configHash a2c0cd9dc6bfdc7496b67b9dedeaa429f6027ec7dc596a7c80c3e8b43d665a42, generic Live probe passed results. This does not expose target IDs or establish active Studio/native acceptance. No assignments or approvals issued. Docs DELIVERY/APPLICATION-SPECIFICATION/FIRST-SLICE/QUALITY-EVIDENCE and raw runtime capability evidence could not be freshly read: approved read adapter missing; node_repl local-read attempt denied by discovery guard, no shell workaround. Same-origin DOM limitations and missing SharePoint firstSlice mappings are issue/shared-record reports, not newly verified source facts. inspect_repository with expected_revision=4 succeeded and captured inventory SHA256 82eb7c51199f21954ccd598112ace16783cc7b84a22fb31acb2cf319d421e2ff at 2026-10-16T12:55:43.679Z; source semantics remain unread. list_accounts was guard-denied once; no connect/sync. Clock and resource-list calls denied. One inspect retry after revision reload; finding validation refusals retained, corrected inputs only. No unchanged platform retry. Token use/overall duration, active server version/hash and raw probe hashes unknown. Discovery is not implementation/release approval.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+      "remedy": "Ada/delivery owner routes office infrastructure to expose exact reviewed read-only probes and document/raw-evidence access, delivery_status, typed SharePoint mapping/provisioning, native Canvas/iframe/denied-identity verifier, standard-only packaging and scoped recovery contracts. Linus rechecks after changed prerequisites; Sherlock independently reviews exact source/target/release. No unrelated office code in showcase repo.",
+      "evidence": [
+        {
+          "reference": "delivery_record:5b414b3c-c576-4b0e-b56e-a0bcbc62834e/revisions/6",
+          "sha256": "1e190dec4a8a1aff4b3e776cbab4861fe9437fea05f05ad71d6f29686e0daf9b",
+          "observedAt": "2026-10-16T12:56:49.659Z",
+          "expiresAt": "2026-10-16T13:58:07.573Z"
+        }
+      ]
+    },
+    {
+      "id": "canvas-experience-feasibility",
+      "area": "user-journey",
+      "statement": "Issue #2 draft constraints derived from current requirements/contracts, not authored platform design or tested UI. Tablet/desktop: one screen, left Active Swarm Pipelines/Architecture Vault/Run Telemetry navigation, centre project gallery/status chips and selected project metadata/plain technical summary/document links, right selected project/run recent logs. Narrow mobile: same single-screen sections stack in reading order, navigation remains reachable; exact responsive controls/variants/breakpoints await list_controls/describe_control. Retain selection by real stable project ID; correlate logs/documents by discovered lookup/run IDs, never by title alone. Logs show concise action summaries only; metric absence is Unknown, never zero or synthetic measured proof. Manual Refresh is baseline; last successful completion time remains visible with stale/error feedback; bounded foreground polling awaits observed connector limits. Six proposed observable UX states: loading, empty, populated/success, validation feedback, denied, connector/error with retry/recovery. Sherlock must confirm exact state/scenario mapping against quality contract; submission pending and refresh stale variants are included in these states. Do not claim App checker covers runtime keyboard/focus, responsive behavior or access. Keyboard order follows navigation->project selection->details/actions->telemetry, visible focus, labelled controls/status beyond colour, adequate contrast/touch targets and focus return after form close/error; validate actual discovered controls on desktop/mobile with independent evidence. Initiative form validates required fields and GBP value, prevents repeated pending submission, and displays success only after persisted response; receipt needs actual project ID + correlation/run and persisted server fields, then reload verification. Form retry must reconcile idempotency with Ada; no optimistic dispatch/completion success. Selected evidence action requires real project/run-correlated manifest and existing permitted file/link; missing/stale/denied states cannot return synthetic success. Evidence-pack standard-rights conclusion UNKNOWN: record permits real archive OR link; a permission-enforced link to actual SharePoint evidence is a candidate requiring no invented archive service, but same-tenant site access, intended-user standard entitlements, DLP, actual connector operations, download bytes and denied-user behavior remain unobserved. Automatic ZIP/archive support is not established; do not add premium/custom/Azure fallback. UI cannot establish authorisation by button visibility or a guessed URL. First slice is one real non-synthetic submit/reload/Flow1 dispatch/evidence link with authorised+denied+failure cases. Full Flow2 and synthetic seed expansion wait for runner-owned independent slice acceptance. No YAML, verifier, msapp, commits, platform writes or deployment produced.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+      "remedy": "Ada supplies actual internal field/correlation/idempotency/permission and standard operation contracts. Linus converts these constraints only after reviewed design and dedicated Studio readiness. Sherlock independently validates six states, keyboard/focus/accessibility, desktop/mobile, persistence, denied access and real evidence contents against exact release. Office infrastructure must provide native runner support; link/archive feasibility remains open.",
+      "evidence": [
+        {
+          "reference": "delivery_record:5b414b3c-c576-4b0e-b56e-a0bcbc62834e/revisions/7",
+          "sha256": "476d89346951f3c202b1512970efaf0f63222bce1ea324bf4178c2551963c8cf",
+          "observedAt": "2026-10-16T12:58:08.809Z",
+          "expiresAt": "2026-10-16T13:58:34.120Z"
+        }
+      ]
+    },
+    {
+      "id": "flow-contracts",
+      "area": "integrations",
+      "statement": "Issue #3: exact office.read_skill reads succeeded for power-automate:build-flow and manage-flows package 3.2.1 (hashes attached), plus pinned Canvas skills. implementation_templates(flow) returned recipe version 1: templates -> operation details/real refs -> validate/preflight -> create/activate/real runs only in authorised stages. Actual local list_templates({}) returned sharepoint-item-flow (created polling/splitOn/get item/condition/email) and approval-notification (manual/approval/wait/outcome notification); neither proves required flows. No scaffold or definition authored. Guidance candidates PostCardToConversation and StartAndWaitForAnApproval are not target-verified operations; guidance requires get_operation_details for actionType, params/types/enums and distinguishes OpenApiConnectionWebhook approvals. Available metadata exposes mcp__swarm_flowagent__get_connector({connector,env?,query?}), get_operation_details({connector,operation,env?}), list_connections({connector?,env?}), list_connectors({env?,query?,top?}); availability is not execution proof. UNSUPPORTED CONTRACT ONCE: supplied reviewed preflight scope is Built-in read-only local discovery; no platform readiness, skills:[], probes:[]. No owner-reviewed external probe arguments/authorization or actual env GUID supplied. Do not invent env-less probes or change probes. External operation indexes, exact trigger/approval/action contracts, bindings, standard tier/DLP, effective caller/target, active server version/hash are UNKNOWN. Consume issue #1 target/licensing/resource discovery and #2 Canvas/runner findings; do not repeat them. capability_status reports ready/configHash a2c0cd9dc6bfdc7496b67b9dedeaa429f6027ec7dc596a7c80c3e8b43d665a42 at 2026-10-16T13:00:54.287Z expiring 13:01:54.287Z, generic Live probe passed only. delivery_status absent from exposed tools, cannot call. Initial node_repl read returned DELIVERY.md finding schema and relevant memory; later bounded local read denied once: Read-only discovery cannot authorize shell execution, authoring or QA approval. Tool: mcp__node_repl__js. No unchanged retry/shell workaround. No external operation calls, writes, approvals, resources, activation, Git mutations or platform authoring. Template/index/runtime raw content hashes, total tokens/duration unknown; skill hashes are actual guidance digests, not runtime proof. Finding statement length refusal corrected by splitting findings; no effect replay.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Ada/office infrastructure supply exact owner-reviewed read-only probes and raw sanitized evidence with hashes/times, verify caller/target/active version, operation indexes and full details, bindings and DLP/standard rights from #1. Sherlock independently reviews; retry only after prerequisites change.",
+      "evidence": [
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\build-flow\\SKILL.md",
+          "sha256": "17aa71ae0c81400177cd635d53d1b6944f0b4be166b18023f4c343e404db125a",
+          "observedAt": "2026-10-16T13:02:13.882Z",
+          "expiresAt": "2026-10-16T14:02:13.884Z"
+        },
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\manage-flows\\SKILL.md",
+          "sha256": "30bc64b04365f0e17db528ee4237449c48422910f31fe387d9ba20582b6467bd",
+          "observedAt": "2026-10-16T13:02:13.882Z",
+          "expiresAt": "2026-10-16T14:02:13.884Z"
+        }
+      ]
+    },
+    {
+      "id": "sharepoint-data",
+      "area": "data",
+      "statement": "Issue #3 proposed data contract derived from manager requirements, NOT observed SharePoint schema and not yet agreed/reviewed. Preserve Projects fields Title; BusinessArea choices Cloud Engineering/Workplace/Security/Data; EstimatedValue GBP currency; SwarmStatus New/Architect Synthesis/Engineering Build/QA Testing/Completed/Blocked; TechnicalSummary plain multiline. Run Logs: Title runID; ProjectLookup lookup to Projects.Title (join actual lookup ID, never title text); AgentRole CEO Coordinator/Solution Architect/Fullstack Engineer/QA Lead/Delivery Gate; StepDescription plain multiline; nullable numeric TokensConsumed and ExecutionDurationSeconds; OutputStatus Success/Warning/Failure. Artifacts: folders High Level Designs, Code & Solution Manifests, Deployment Evidence; ProjectReference text carrying stable project key, VersionTag text, SignOffStatus Draft/Pending Review/Approved. Actual internal names/lookup representation, constraints, permissions, versioning and IDs remain unknown; no fabricated column schemas.\nMinimal conceptual additions, names/types to be discovered/agreed by Ada: Projects unique InitiativeKey for create/retry receipt; CurrentRunId; explicit IsSynthetic; durable DispatchKey/DispatchState and effect receipts (folder identity, channel-message ID), last failure/attempt; optimistic revision uses discovered server ETag/version rather than invented atomicity. Logs: unique EventKey (run+logical step), IsSynthetic, actual attempt/start/end/error reference; nullable metrics with provenance/status distinguishing Unknown/Measured/Synthetic. Artifacts: RunId, IsSynthetic, EvidenceKind/readiness, immutable version identity and SHA256, exact release/source/target reference; genuine reviewer identity/time/result; ApprovalKey/RequestId/state and responder/time/outcome, pack-manifest reference. Persist these on appropriate existing list items/manifest where possible; do not add another store without reviewed need. Approval audit and effect receipts may use structured manifest, subject to real supported read/write and concurrency contract. SharePoint item version is not an immutable evidence guarantee; verify version-addressed content and effective edit/delete controls, or block genuine signoff.\nOwnership proposal: operator/Canvas creates initial initiative and requests Architect Synthesis only; Flow1 owns claim/summary/Engineering Build; QA supplies genuine review evidence; Flow2 owns QA Testing/Completed after real Leon approval; delivery owner controls explicit Blocked/reconciliation. Enforce through real permissions, not UI or self-asserted AgentRole. Current-run change invalidates old approval; no human-wait lock. Exactly-once claim requires proven conditional write/unique-key semantics across flows/retries; single trigger concurrency does not suffice. Append-only logs and synthetic provenance need effective rights; truth of role/metrics cannot derive from editable labels. Ada must establish a supported standard operation for every additional invariant. No schema/resource creation performed.",
+      "status": "assumed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Ada agrees conceptual additions and transition ownership, maps exact discovered fields/IDs and standard operations from #1, proves permissions/uniqueness/conditional writes/version protection. Linus consumes the reviewed map; Sherlock challenges concurrency and genuine evidence invariants before authoring.",
+      "evidence": [
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\build-flow\\SKILL.md",
+          "sha256": "17aa71ae0c81400177cd635d53d1b6944f0b4be166b18023f4c343e404db125a",
+          "observedAt": "2026-10-16T13:02:13.882Z",
+          "expiresAt": "2026-10-16T14:02:13.884Z"
+        },
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\manage-flows\\SKILL.md",
+          "sha256": "30bc64b04365f0e17db528ee4237449c48422910f31fe387d9ba20582b6467bd",
+          "observedAt": "2026-10-16T13:02:13.882Z",
+          "expiresAt": "2026-10-16T14:02:13.884Z"
+        }
+      ]
+    },
+    {
+      "id": "flow-reconciliation-contract",
+      "area": "integrations",
+      "statement": "Issue #3 proposed flow behavior for independent review; no definitions authored or runtime behavior proven. Flow1 re-reads authoritative current non-synthetic Architect Synthesis project; missing synthetic marker fails closed. Claim stable logical dispatch key/current run before effects using proven conditional update/uniqueness. Deterministic summary uses recorded requirements only, no AI. Reconcile stable project artifact folder identity; never overwrite unrelated content. Use verified dedicated-channel adaptive card operation; persist actual returned message ID. Complete Engineering Build only after required folder/card/summary/correlated initial log effects are reconciled. Repeated trigger/status writes must no-op without recursive dispatch. Duplicate and partial retry reuse same run/effect receipts and produce observable reconciliation logs. Proposed budget <=3 transient attempts per recoverable effect respecting discovered Retry-After/backoff; exact settings await connector evidence. Timeout after card send without receipt is ambiguous: no blind repost; retain Needs reconciliation and use proven lookup/idempotency or Ada intervention. Failure retains correlated action/attempt/times/sanitized error and never claims successful dispatch. Trigger concurrency 1 is only a mitigation, not exactly-once proof.\nFlow2 file-created event does not prove upload metadata/readiness complete. Require explicit ready manifest; non-synthetic current project/run; exact source/release/target; genuine independent QA identity/results; immutable file identity/version and independently computed SHA256. A hash alone is not reviewer provenance or immutability. Validate content/version at request and response; changed/replaced content requires fresh QA and approval. Unique approval key binds project/run/evidence version/hash. Prefer persist real request ID before wait if exact supported operations permit. Assign genuine request to verified Leon identity with version-specific evidence links. A Teams card click is not authenticated approval unless exact discovered contract proves identity/audit equivalence. Set/retain QA Testing while valid approval is pending; no cross-run lock held across human wait. On response re-read and conditionally match current run/version/hash/request before Completed. Only observed authenticated Approved response for that request/evidence can complete; record actual responder/time/outcome. Missing/mismatched/rejected/replayed/stale/synthetic/unverified evidence, wrong responder, timeout/cancellation/error/unknown outcome never complete. Keep QA Testing with explicit pending/rejection reason or use reviewed Blocked failure policy. Replayed approval cannot approve a new run/version. Lost create/wait response must reconcile existing request; never autoapprove or duplicate request blindly. Standard approvals service prerequisites, supported create/wait/status/timeouts/retention and ability to preserve immutable audit are unresolved; no Dataverse app-data fallback.\nFull approval flow and seed expansion remain gated by runner-owned independent first-slice acceptance; first slice is real Canvas submission/reload -> Flow1 once -> real evidence link, including denied/failure. This proposal is requirements analysis, not agreement, design approval or executable implementation.",
+      "status": "assumed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Ada proves operations support durable claims, effect reconciliation and authenticated evidence-bound approvals under standard rights, agrees failure transitions and bounded retries. Sherlock independently reviews exact design and later live run/action evidence; no self-approval.",
+      "evidence": [
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\build-flow\\SKILL.md",
+          "sha256": "17aa71ae0c81400177cd635d53d1b6944f0b4be166b18023f4c343e404db125a",
+          "observedAt": "2026-10-16T13:02:13.882Z",
+          "expiresAt": "2026-10-16T14:02:13.884Z"
+        },
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\manage-flows\\SKILL.md",
+          "sha256": "30bc64b04365f0e17db528ee4237449c48422910f31fe387d9ba20582b6467bd",
+          "observedAt": "2026-10-16T13:02:13.882Z",
+          "expiresAt": "2026-10-16T14:02:13.884Z"
+        }
+      ]
+    },
+    {
+      "id": "flow-evidence-acceptance",
+      "area": "verification",
+      "statement": "Issue #3 proposed evidence/seed/acceptance contract, not live proof. Smallest candidate: real permission-enforced SharePoint file/manifest link. ZIP support UNKNOWN; no premium/custom/Azure fallback. Manifest binds stable project/current run, exact source/release/target, actual file identities/versioned links, sizes/SHA256, genuine reviewer/results/time/provenance. Compute hashes from actual bytes through supported independent tooling; mutable latest links cannot substitute reviewed version. Any later archive needs real bytes/hash and content-matching manifest. Preserve permissions: no anonymous/broadened links, privileged tokens or owner-access proxy. Button visibility does not prove access; authorised and denied real identities test same resource. Missing/deleted/changed/stale pack yields explicit failure. Persisted receipt needs real saved project ID/InitiativeKey/run and reload confirmation. Absent token/duration metrics display Unknown/null, never zero. Real duration uses defined run/action timestamps, units and scope; real tokens require measured source/provenance. No-AI deterministic summary does not justify invented token count. Manual Refresh and visible last-success UTC timestamp baseline; optional foreground polling needs reviewed bounded interval/backoff/one in-flight and background stop. On failure keep stale/error label and prior timestamp.\nSynthetic proposal: deterministic unique seed keys and IsSynthetic true on projects/logs/files; visible SYNTHETIC DEMO titles/content, illustrative metrics, mock HLD/QA explicitly NOT acceptance evidence. Preserve exact projects: Legacy File Share to SharePoint Migration Tool Completed GBP28000; Automated Tenant Security Baseline Audit Architect Synthesis GBP45000; five linked CEO/architect/QA logs and two mock HLD/QA files. Retry reconciles stable keys, never title-only matching or real-record overwrite. Both flows exclude synthetic project AND artifact/evidence; unknown/mixed provenance rejects. Seed Completed is display-only and never approval/signoff proof. Seeds wait independent first-slice acceptance.\nLater Sherlock-owned cases: HAPPY actual Canvas write/reload, non-synthetic run, one card/folder/log, Engineering Build and real link; full Flow2 retains QA Testing pending and only real Leon Approved completes. DENIED real write-denied identity creates nothing; same pack link denied; wrong responder cannot complete. MISSING invalid fields/metadata/upload/evidence/pack causes no false success. DUPLICATE simultaneous project/evidence events and self-status writes produce one logical dispatch/request/effect set; seed retry no duplicates. RETRY partial-effect restarts/transient errors reuse run/receipts; ambiguous card/request timeout reconciles without blind replay. ERROR folder/card/log/status/connector failure, rejection/cancel/timeout, mismatched project/run/hash/version/source/target, replay/synthetic/mixed evidence and stale links cannot complete; retain correlated sanitized error/action/attempt/time for bounded repair.\nGenuine reviewer prerequisites: Sherlock distinct from implementer; exact approved source/target/release and native runner; real authorised/denied identities; real SharePoint write/reload/download bytes; actual flow run/action status/input/output/time evidence; genuine Leon approval, never impersonation. Retain sanitized evidence digests, observedAt/expiresAt and owners. Templates/static validation/seed reports are not live gates. Missing native adapters/test identities/browser evidence blocks signoff. Ada delivery owner; Linus Canvas consumer; Sherlock independent reviewer. No self-review/issue closure/PR. First submission/reload/dispatch/link slice must pass independent runner acceptance before full Flow2 or seed expansion.",
+      "status": "assumed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Ada agrees manifest/link/seed contracts and proves standard operations, permissions, immutable evidence and runner prerequisites. Sherlock owns independent scenario verification and signoff. Linus consumes reviewed contracts. Archive capability, immutability, genuine reviewer/test identities and live operation evidence remain unresolved.",
+      "evidence": [
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\build-flow\\SKILL.md",
+          "sha256": "17aa71ae0c81400177cd635d53d1b6944f0b4be166b18023f4c343e404db125a",
+          "observedAt": "2026-10-16T13:02:13.882Z",
+          "expiresAt": "2026-10-16T14:02:13.884Z"
+        },
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\manage-flows\\SKILL.md",
+          "sha256": "30bc64b04365f0e17db528ee4237449c48422910f31fe387d9ba20582b6467bd",
+          "observedAt": "2026-10-16T13:02:13.882Z",
+          "expiresAt": "2026-10-16T14:02:13.884Z"
+        }
+      ]
+    },
+    {
+      "id": "flow-discovery-refresh",
+      "area": "integrations",
+      "statement": "Issue #3 executing-worker refresh, read-only. Reused delivery record revision 14 sha256 63b9cdeb5a3c5b03950e2be937dd356d0d7ed9a00da1e6b2f06cfaf60f936317 and existing flow-contracts/sharepoint-data/flow-reconciliation-contract/flow-evidence-acceptance findings; #1 owns target/licensing/resources, #2 owns Canvas/native runner. Existing record already logs unsupported external discovery authorization once; supplied preflight still has skills:[] and probes:[], local-only/no platform readiness. No external probe attempted or invented; retry only after owner-reviewed inputs change. Issue scope came from user-provided issue text; GitHub issue/source semantics and DELIVERY.md were not freshly read because approved document/raw-evidence reader is absent. Earlier recorded local-read denial not retried; memory registry unavailable through permitted readers.\nFresh exact office.read_skill reads succeeded: power-automate build-flow/manage-flows package 3.2.1 and pinned Canvas guidance (digests attached). Catalogue fingerprint 98e74c23e0c2f64b0b97ae3ed1fb4c7258a6babe952468212016c36f1dd3a666, configured/toolStatus unverified. implementation_templates(flow) recipe v1 read: template selection, exact operation details/real refs, validation/preflight and later authorised lifecycle/run evidence. Bundle/raw runtime hashes UNKNOWN. Guidance candidates are not observed operations. Build guidance mandates exact get_operation_details actionType/parameters; do not infer OpenApiConnection/Webhook or current operation IDs. No scaffold/definitions authored; paid AI/Dataverse app-data guidance not applicable to this brief. Add-data-source package 3.1.0/frontmatter 1.0.0 requires Studio insertion; no programmatic binding claimed.\nMetadata inspection only: get_connector({connector,env?,query?}) indexes; get_operation_details({connector,operation,env?}) exact contracts; list_connectors({env?,query?,top?}) reported tier; list_connections({connector?,env?}) summaries; get_run_details({flow,run,env?}) and get_run_actions({flow,run,env?,includeSizes?}) later run evidence. These are available names/contracts, not execution proof. Actual indexes/parameters/trigger polling or webhook behavior, approval prerequisites/outcomes/timeouts, caller/target/active version, connection IDs and DLP/licence classification remain UNKNOWN. Template/static validity never proves live behavior.\nExisting conceptual schema additions, transition ownership, durable claim/effect receipts, <=3 proposed transient attempts with ambiguous sends requiring reconciliation, evidence-version/hash/request binding and real Leon approval, permission-enforced manifest/link candidate, unknown metrics/manual refresh, synthetic seed exclusions and happy/denied/missing/duplicate/retry/error cases remain proposed, not Ada agreement or Sherlock approval. Exactly-once/immutable content/archive support unproven. No authority to close issue or approve design. Full Flow2/seeds wait independently accepted first slice.\ncapability_status rechecked: project ready checkedAt 2026-10-16T13:10:15.226Z/expiresAt 13:11:15.226Z, configHash a2c0cd9dc6bfdc7496b67b9dedeaa429f6027ec7dc596a7c80c3e8b43d665a42; generic Live probe passed only, no raw target/contract evidence. __office__ blocked because saved observation expired. delivery_status absent from callable catalogue, cannot call. No new assignments/review/approval. No shell, repository/platform writes, Canvas session, resource creation, activation or deployment. Measured total tokens/duration UNKNOWN; no unchanged external retry.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Ada/delivery owner supplies approved exact read-only probes and sanitized raw evidence with hashes/times; confirms actual standard operations, schema/bindings, DLP/entitlements and protected resource map from #1; agrees correlation/concurrency/evidence contracts. Office infrastructure exposes document/raw-evidence reader and delivery_status and refreshes expired readiness. Linus consumes reviewed contracts; Sherlock independently reviews exact source/target/release, genuine reviewer/denied identities and native live evidence. Discovery is not implementation readiness.",
+      "evidence": [
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\build-flow\\SKILL.md",
+          "sha256": "17aa71ae0c81400177cd635d53d1b6944f0b4be166b18023f4c343e404db125a",
+          "observedAt": "2026-10-16T13:11:24.676Z",
+          "expiresAt": "2026-10-16T14:11:24.678Z"
+        },
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\power-automate\\3.2.1\\skills\\manage-flows\\SKILL.md",
+          "sha256": "30bc64b04365f0e17db528ee4237449c48422910f31fe387d9ba20582b6467bd",
+          "observedAt": "2026-10-16T13:11:24.676Z",
+          "expiresAt": "2026-10-16T14:11:24.678Z"
+        },
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\canvas-apps\\3.1.0\\skills\\canvas-app\\SKILL.md",
+          "sha256": "0ac110901eb10b2c67e4c0eeaef3d29f5d013bb0e4b4c501977b91b0292c73c3",
+          "observedAt": "2026-10-16T13:11:24.676Z",
+          "expiresAt": "2026-10-16T14:11:24.678Z"
+        },
+        {
+          "reference": "C:\\Users\\leon\\.codex\\plugins\\cache\\power-platform-skills\\canvas-apps\\3.1.0\\skills\\add-data-source\\SKILL.md",
+          "sha256": "cd82bf5d245322960dec3e6c97219426bc6914c4c9f82ec991ca1fa9009b2a8e",
+          "observedAt": "2026-10-16T13:11:24.676Z",
+          "expiresAt": "2026-10-16T14:11:24.678Z"
+        }
+      ]
+    },
+    {
+      "id": "target-and-licensing",
+      "area": "security",
+      "statement": "Issue #1 read-only SharePoint catalogue receipt saved immediately. office.platform_discovery sharepoint-sites bound requested tenant 5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c and leon@graspai.co.uk to approved org0efd6060.crm4.dynamics.com. Binding reports organizationId e9c89f1b-9270-47e3-83f3-1cb2547a0354, userId 48dd0213-f2f6-eb11-94ee-000d3a4bf7a5, environmentId Default-5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c. This is returned binding metadata, not yet independently reconciled environment GUID mapping or runner selection. Catalogue returned 10 URLs on mydevnet.sharepoint.com; no returned site identifies itself as dedicated AS-E2E. Completeness, tenant ownership/effective access and permissions are unproven. Protect all returned sites: ProjectX786, contentstorage/x8FNO-xtskuCRX2_fMTHLSyfVtWH_cVAlbzNJl4Y0bI, desktopsupportdocuments77, root Website, CollaborationSIte, LeanCloud, GraspAI, CIA, Proposals and /Developer. Reuse allowlist remains empty. No site writes, grants, authoring or deployment. Receipt metadata does not certify licence/DLP/access. Assigned Business Premium plans, intended users, Teams/channel/membership, connection IDs/owners and actual CLI/plugin version remain unknown. Authenticated read-only target/environment receipts now bind the configured default environment to PAC/Flow identity. Current-caller Graph licence assignments include SPB with successful Office365 SharePoint, Teams, PowerApps and Flow plans. Two standard DLP inventories were empty. These timestamped observations do not verify intended-user entitlement, advanced/effective policy, dedicated resource authorization or operation eligibility.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Ada reconciles endpoint with environment metadata using reviewed office probe; delivery infrastructure provides typed licence/DLP/resource/runner read contracts; tenant administrator supplies scoped service-plan/DLP/access evidence and two genuine test identities. Sherlock independently reviews exact target before implementation.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\1268af4b9b1810899500f166afbb8e0de4382e2fb4f53da0c893fd2b49e40dc8.json",
+          "sha256": "1268af4b9b1810899500f166afbb8e0de4382e2fb4f53da0c893fd2b49e40dc8",
+          "observedAt": "2026-10-16T13:19:12.505Z",
+          "expiresAt": "2026-10-16T13:20:12.506Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\1fd08743c88c56ce9d10f4fb4f7d0a7d364529f83611445d8834f6606b7a4e70.json",
+          "sha256": "1fd08743c88c56ce9d10f4fb4f7d0a7d364529f83611445d8834f6606b7a4e70",
+          "observedAt": "2026-10-18T04:38:50.056Z",
+          "expiresAt": "2026-10-18T04:39:50.058Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\c5e8c92006b6da18ea72ebff716d1ac62182d956dbdd6416cc5569cbdd63f546.json",
+          "sha256": "c5e8c92006b6da18ea72ebff716d1ac62182d956dbdd6416cc5569cbdd63f546",
+          "observedAt": "2026-10-18T04:39:22.963Z",
+          "expiresAt": "2026-10-18T04:40:22.964Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\c2bdbbc788bf16a4ab92da93b19e245315296ae2d155ba1d243348dc409b4e9c.json",
+          "sha256": "c2bdbbc788bf16a4ab92da93b19e245315296ae2d155ba1d243348dc409b4e9c",
+          "observedAt": "2026-10-18T04:40:00.173Z",
+          "expiresAt": "2026-10-18T04:41:00.173Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\5da5b6fc1265483fae262207c25645e09a6c534e24b388ef32f91bbb5aa8d9ca.json",
+          "sha256": "5da5b6fc1265483fae262207c25645e09a6c534e24b388ef32f91bbb5aa8d9ca",
+          "observedAt": "2026-10-18T04:40:35.968Z",
+          "expiresAt": "2026-10-18T04:41:35.968Z"
+        }
+      ]
+    },
+    {
+      "id": "issue1-entitlements-resource-matrix",
+      "area": "security",
+      "statement": "Licensing/access matrix: Leon owner/approver\u2014assigned Business Premium SKU/servicePlan IDs/provisioning statuses and separation from premium/trials UNKNOWN; authorised operator/viewer\u2014real identities/assigned standard Power Apps, Power Automate, SharePoint and Teams plans UNKNOWN; independent QA\u2014real tenant identity/access UNKNOWN; denied user\u2014second genuine role-appropriate identity UNKNOWN. For each SharePoint item trigger/read/create/update/file/folder/download, Teams channel adaptive-card, Approvals request/wait/response including owner approval, Canvas SharePoint read/write: selected exact operation/classification/seeded eligibility/applicable DLP policy/environment scope/business-nonbusiness-blocked grouping/connection owner and Connected status/effective user access UNKNOWN. Family names and capability passed summaries do not prove these rights. All dependent work BLOCKED.\nResource allowlist EMPTY. Observed mydevnet.sharepoint.com catalogue is not proof of permitted scope, complete inventory, ownership or permissions. No returned site identified AS-E2E. Protect all ten returned URLs in target-and-licensing receipt; also expense apps, paused Copilot, all existing sites/flows/connections and global CLI profiles. App/flow/connection exclusion inventory incomplete; no reuse permitted. Proposed NEW names only: site display AS-E2E Cloud Asset Showcase, path /sites/AS-E2E-CloudAsset-Showcase on observed hostname pending verified tenant/admin scope and availability; private team AS-E2E Cloud Asset Showcase; channel Agent Swarm Operations. No existence/IDs/permission claims. Team/channel membership, dedicated scope, SharePoint/Teams/Approvals connection IDs/owners remain UNKNOWN. No grants, changes or provisioning.\nExact pinned guidance read via office.read_skill: power-automate route-environments 3.2.1 sha256 5063c9232d13baeeb4ca55e64c4d8d021dff2141406b39ec4621825e704ae450; browse-flows 3.2.1 e6937d173b35d36574d7fb57f7ccf38a9b61ee6f38c3053393550085f55bb85e. Also supplied pinned dv-overview 6c4f76edcbe2b69db56a33c64aa612ed2ca4b849c530f4c07683666a7ff93838; dv-connect 8cef7f5becce9e57e91601122dba6309eab8f395cc848f4c7210fdd618320fe6; dv-query c5193acb192537638c2f3fd367ed505c104d5ac538c3ac5ef1f21e82fdcb23fb; dv-solution b847302a0b8cef5a2bf40f8a109e1b0fe90c46eec0428b2c3e0130eaf47f21ca; erp-xpp ed0c6ee0f3dc825671953a7ddee895655fa9ac5fdf091723b887971a51e9b711 (all package 1.16.0). Canvas canvas-app 3.1.0 0ac110901eb10b2c67e4c0eeaef3d29f5d013bb0e4b4c501977b91b0292c73c3; add-data-source package 3.1.0/frontmatter1.0.0 cd82bf5d245322960dec3e6c97219426bc6914c4c9f82ec991ca1fa9009b2a8e. Catalogue fingerprint 98e74c23e0c2f64b0b97ae3ed1fb4c7258a6babe952468212016c36f1dd3a666. Configured/toolStatus unverified; actual CLI/server active versions UNKNOWN. Dataverse/ERP authoring/data workflows inapplicable; route default/name selection and setup/shell not applied. No Canvas session established; Linus ownership preserved. These are guidance reads, not tenant readiness. User nominated leon@graspai.co.uk as the sole intended account in the current task. Fixed named-user Graph reads now observe an enabled account and all four successful User service plans in its same SPB assignment; userType was null and no Member classification was inferred. This resolves the named-account assignment observation only. Role mapping, operation use-rights, dedicated resource permissions, genuine denied identity and runtime acceptance remain unverified. No further DLP implementation is in scope.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Tenant licensing/Power Platform admin supplies scoped assigned-plan, operation eligibility and DLP evidence; M365 owner supplies permitted site/team/channel membership, connections and two real test identities. Office infrastructure exposes reviewed typed licence/DLP/Teams/connections/version/access probes, without invented contracts. Ada reconciles evidence; Sherlock independently reviews. No broad grants or premium fallback.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\1268af4b9b1810899500f166afbb8e0de4382e2fb4f53da0c893fd2b49e40dc8.json",
+          "sha256": "1268af4b9b1810899500f166afbb8e0de4382e2fb4f53da0c893fd2b49e40dc8",
+          "observedAt": "2026-10-16T13:19:12.505Z",
+          "expiresAt": "2026-10-16T13:20:12.506Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\f56468d4011d0d9136c8dfcbaf6e313c42caad392b52a8c5354c0f76e8fb20bc.json",
+          "sha256": "f56468d4011d0d9136c8dfcbaf6e313c42caad392b52a8c5354c0f76e8fb20bc",
+          "observedAt": "2026-10-18T07:19:52.136Z",
+          "expiresAt": "2026-10-18T07:20:52.141Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\becf0d5b805ef94d89f24a79441410469c2d9a3d2a6cc2eb6457f175a2d20c6d.json",
+          "sha256": "becf0d5b805ef94d89f24a79441410469c2d9a3d2a6cc2eb6457f175a2d20c6d",
+          "observedAt": "2026-10-18T07:21:10.218Z",
+          "expiresAt": "2026-10-19T07:21:10.218Z"
+        }
+      ]
+    },
+    {
+      "id": "canvas-discovery-refresh",
+      "area": "verification",
+      "statement": "Issue #2 bounded source verification, input revision19 sha256 5139b325271adfaaa0be555b1edbf521c32671dc7c545f178cde171f0ca1f0ca. Freshly read DELIVERY lines1-150,231-310 only; FIRST-SLICE all39; APPLICATION-SPECIFICATION all39; QUALITY-EVIDENCE all63. These supersede earlier document-reader blocker. Actual source hashes attached. README all4 at pinned commit a606bad817462141aa3c497ab59887f4aebe365f is title/description only.\nFIRST-SLICE explicitly supports Dataverse/dataverse-table, Canvas/canvas, Power Automate/cloud-flow, Copilot/copilot; other platforms block without adapter. No shell-success fallback. SharePoint typed provisioning/reconciliation/target mapping/write/reload remains BLOCKED; never substitute Dataverse. DELIVERY explicitly supports only same-origin DOM/CSS browser verification; native Canvas/iframe acceptance requires another adapter. Native Canvas/denied-user tests remain BLOCKED. Named-solution/actual-app/ZIP import/inventory requirements leave standard-only packaging/solution metadata unresolved. Recovery needs validated rehearsal/runbook/prior inventory with dedicated data/links/ownership preservation; genuine SharePoint/Canvas recovery contract not observed. QUALITY requires exact compile/package/runtime/access/recovery/documentation bindings, real desktop/mobile identities and four distinct pinned handover docs. Command receipt is not native compilation/App checker proof.\nFresh tool metadata confirms connect(environment_id,optional app_id/login_hint/tenant_id), sync_canvas(directoryPath), compile_canvas(directoryPath), list_controls/describe_control(controlName), list_data_sources/get_data_source_schema(dataSourceName), list_apis/describe_api(apiName), get_appchecker_errors/get_accessibility_errors(object). No check_app/check_accessibility tool names. Names resolved; functional equivalence/applied diagnostics untested. No save/close/export/publish/share tool observed. Prior exact 3.1.0 skill reads/hashes remain in canvas-session; not fresh active-version proof. No active session known and no connect/sync/list_accounts retry. Future reviewed acquire->explicit approved existing app connect->dedicated absolute YAML-only sync->actual control/data/API schemas->source-backed edits->zero-error compile->actual-name diagnostics->supported save/real-msapp export/publish/share->save/close then release remains gated. Studio owner must insert actual SharePoint sources.\nExisting matrix/experience findings retained. BLOCKED rows: target/standard rights/access (Ada), SharePoint mapping/data and Flow1 (Ada/infrastructure), dedicated connected compile (Linus), publication/package, native runtime/denied users (infrastructure/Sherlock), evidence bytes/access and recovery. DELIVERY states are loading/empty/validation/failure/recovery/success; denied is authorization scenario, stale/pending variants cannot replace recovery. Preserve three sections, project/run correlation, concise summaries, unknown metrics, manual refresh/last success, persisted receipt, keyboard/focus/labels/contrast/touch and desktop/mobile.\nEvidence-pack rights UNKNOWN: permission-enforced real SharePoint link is candidate only. Standard operation/DLP rights, actual bytes/correlation and authorized/denied/missing/stale behavior unverified; automatic archive not established. No premium/custom/Azure fallback.\ncapability_status called: project ready checkedAt 2026-10-16T13:31:38.666Z expires13:32:38.666Z, configHash a2c0cd9dc6bfdc7496b67b9dedeaa429f6027ec7dc596a7c80c3e8b43d665a42; office stale/blocked. Metadata is not raw probe or dedicated Studio proof. delivery_status absent. Active version/caller/target auth and raw runtime/probe hashes not freshly verified. No assignments or unchanged platform retries. Two oversize finding refusals retained; corrected payload only. Total tokens/overall duration unknown. No shell/authoring/YAML/msapp/verifier/Git/platform writes/deployment/approval/new issues. Discovery grants no implementation/release approval.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+      "remedy": "Ada routes office infrastructure for typed SharePoint provisioning/mapping, native Canvas/iframe/denied-user QA, standard-only package/solution metadata, scoped recovery, delivery_status and raw version/caller/target evidence. M365/Studio owner verifies dedicated resources/standard rights/DLP and later inserts sources. Linus rechecks changed prerequisites; Sherlock independently reviews exact source/target/release. No office code in showcase repo.",
+      "evidence": [
+        {
+          "reference": "office-document:DELIVERY",
+          "sha256": "381481385d05125ec30228bd741bd76ef072b9671f3ecaf33889d3c3769665e7",
+          "observedAt": "2026-10-16T13:34:04.686Z",
+          "expiresAt": "2026-10-17T13:34:04.686Z"
+        },
+        {
+          "reference": "office-document:FIRST-SLICE",
+          "sha256": "968e2e6b1b26ab3d69369bf5ee27f999d1e36f9084373fc13fe37546e01ffc21",
+          "observedAt": "2026-10-16T13:34:04.686Z",
+          "expiresAt": "2026-10-17T13:34:04.686Z"
+        },
+        {
+          "reference": "office-document:APPLICATION-SPECIFICATION",
+          "sha256": "87f744c273b11d7ab57d0320f9f660bc84edc0bb84de96053f701f696ae6b555",
+          "observedAt": "2026-10-16T13:34:04.686Z",
+          "expiresAt": "2026-10-17T13:34:04.686Z"
+        },
+        {
+          "reference": "office-document:QUALITY-EVIDENCE",
+          "sha256": "c1be88a85ed3970096a32879297b7c064d705596b5491cfc9fcc3df8e24448f4",
+          "observedAt": "2026-10-16T13:34:04.686Z",
+          "expiresAt": "2026-10-17T13:34:04.686Z"
+        },
+        {
+          "reference": "repository:leongodwin/AgentSwarm-CloudAsset-Showcase-20261016@a606bad817462141aa3c497ab59887f4aebe365f/README.md",
+          "sha256": "2d61c1b38d34ff9db04d0bf3a60de29ed0826a1f06cb1944be2d9a2ce0344796",
+          "observedAt": "2026-10-16T13:34:04.686Z",
+          "expiresAt": "2026-10-17T13:34:04.686Z"
+        }
+      ]
+    },
+    {
+      "id": "issue1-target-reconciliation",
+      "area": "deployment",
+      "statement": "Issue #1 bounded verification, unchanged requirement scope. DELIVERY lines1-100,301-403 read at sha256 eb614505bf06801a57bb223b773a3d0b85d705134ecc234d129b9203bc30a81c including Guarded SharePoint schema provisioning. Actual office.sharepoint_provisioning inspect executed once at https://mydevnet.sharepoint.com/sites/GraspAI; durable receipt attached. Authenticated binding tenant5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c, leon@graspai.co.uk, approved https://org0efd6060.crm4.dynamics.com, organizationId e9c89f1b-9270-47e3-83f3-1cb2547a0354, userId48dd0213-f2f6-eb11-94ee-000d3a4bf7a5. Site collection80f3bbb1-61ec-456f-a8a3-b9b157c0e50a, web522d7ca7-41d2-4c12-9364-fd5ec140dfc8; composite ID mydevnet.sharepoint.com,80f3bbb1-61ec-456f-a8a3-b9b157c0e50a,522d7ca7-41d2-4c12-9364-fd5ec140dfc8.\nReturned inventory: only Documents documentLibrary0197e042-91a4-4356-841e-7c804b79df22, /sites/GraspAI/Shared%20Documents, 34 columns preserved in receipt. Relevant exact names/IDs: Title fa564e0f-0c70-4ab9-b863-0177e6ddd247; FileLeafRef8553196d-ec8d-4564-9861-3dbe931050c8; ID1d22ea11-1e32-424e-89ab-9fedbadb6ce1; _UIVersionString dce8262a-3ae9-45aa-aab4-83bd75fb738a. No Swarm Projects, Swarm Run Logs or Engineering Artifacts returned. No business items/content read. Site/Documents remain protected; AS-E2E write/reuse allowlist EMPTY. Read proves no dedicated ownership, effective permissions, licensing, DLP or app approval.\nMetadata inspection observed only, 60-second expiry; dependent implementation BLOCKED. Actual endpoint-to-environment GUID UNKNOWN: earlier Default-tenant binding/catalogue omitted URL mapping. Never select by name. Runner target/release unverified. delivery_status absent from callable tools. capability_status returned project ready checked2026-10-16T14:03:01.301Z expires14:04:01.301Z configHash a2c0cd9dc6bfdc7496b67b9dedeaa429f6027ec7dc596a7c80c3e8b43d665a42; office BLOCKED expired current-evidence checked13:26:50.471Z. Generic passed probes are not raw plans/DLP/connection/version facts; failed capability blocks assignments.\nProvisioning gates CLOSED: pinned cubefarm.sharepoint.json at source, exact parsed plan hash, independently approved current design/task with hash input and every resource ownership key, fresh independently reviewed exact-site sharepoint-permissions/data-boundary/recovery evidence. Discovery cannot provision. Additive text/number/en-GB currency/choice support excludes built-ins, lookups, folders, seeds, updates/deletion/permissions. Unknown writes require journal/lease retention and independent reconciliation, never automatic replay. Lookup/folder/seeding and SharePoint-backed native Canvas mapping/runtime/denied-user, standard-only packaging, flow rights/run-action evidence, download and recovery remain blockers.\nExisting licensing/access matrix retained: owner/intended-user assigned standard plans including genuine approval, operation eligibility/DLP grouping, team/channel/membership, connection IDs/owners, two real test identities and active CLI/plugin versions UNKNOWN. Linus owns Canvas; Sherlock independently reviews. inspect_repository refreshed source a606bad817462141aa3c497ab59887f4aebe365f. Missing-revision inspect refusal corrected; oversized finding corrected, no platform replay. Inspection wall time20.2s; total duration/tokens UNKNOWN. No shell/profile/grant/tenant/source writes, provisioning, approvals, new issues or release. Receipt is historical after expiry; discovery grants no implementation/acceptance approval.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Ada routes mapping/lookup/folder/seeding/flow/recovery contract gaps to office infrastructure. M365/Power Platform admins supply scoped licensing/DLP/access/ownership evidence and two real test identities. Linus verifies dedicated Canvas path after changed prerequisites; Sherlock independently reviews exact design/task/source/target. Keep provisioning gates closed.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\6c0b5f0b765022cfbbc4fa6069fe0bda4d0dc69f34dc86b0704d1fb79d465761.json",
+          "sha256": "6c0b5f0b765022cfbbc4fa6069fe0bda4d0dc69f34dc86b0704d1fb79d465761",
+          "observedAt": "2026-10-16T13:20:17.708Z",
+          "expiresAt": "2026-10-16T13:21:17.708Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\28e2c53b2e97a6cbf8e6964edf2ed908b31d78664abfe589830713e20b87446a.json",
+          "sha256": "28e2c53b2e97a6cbf8e6964edf2ed908b31d78664abfe589830713e20b87446a",
+          "observedAt": "2026-10-16T13:21:18.118Z",
+          "expiresAt": "2026-10-16T13:22:18.118Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\6172e18ca3171b5c4c8b2fdcc0bbcc9525ecc508fbcf84c7fde792e333d62979.json",
+          "sha256": "6172e18ca3171b5c4c8b2fdcc0bbcc9525ecc508fbcf84c7fde792e333d62979",
+          "observedAt": "2026-10-16T13:20:36.187Z",
+          "expiresAt": "2026-10-17T13:20:36.209Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\sharepoint-inventory\\e5c7cbbd709669389c1a09fc7814e9e0d20e60df9bc7ae128b486586825d694b.json",
+          "sha256": "e5c7cbbd709669389c1a09fc7814e9e0d20e60df9bc7ae128b486586825d694b",
+          "observedAt": "2026-10-16T14:03:19.547Z",
+          "expiresAt": "2026-10-16T14:04:19.547Z"
+        }
+      ]
+    },
+    {
+      "id": "sharepoint-rest-auth",
+      "area": "verification",
+      "statement": "Customer-app delegated AllSites.Read silently authenticated and six read-only GraspAI Documents REST calls including GetChanges succeeded. Current observation window only; historical coverage, denied identity and flow causality remain unverified.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "ready",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Use the cited exact receipt for this read-only observation; obtain dedicated resource bindings, licence/DLP, complete history/dispatch and independent runtime evidence before delivery.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\rest-history\\be6206a41c9d2851a19489dc4ef395576f0faed14d12febb1bf03d6d12a764ef.json",
+          "sha256": "be6206a41c9d2851a19489dc4ef395576f0faed14d12febb1bf03d6d12a764ef",
+          "observedAt": "2026-10-18T00:54:29.909Z",
+          "expiresAt": "2026-10-18T00:59:29.909Z"
+        }
+      ]
+    },
+    {
+      "id": "resource-permission-observation",
+      "area": "security",
+      "statement": "Fixed authenticated REST permission reads bind the existing GraspAI site and Documents IDs to Leon in the AllSites.Read observer app. Two passes agree: viewing/opening observed; add/edit/delete/manageLists/managePermissions unavailable in this observer context. This is not Leon global rights, connector/writer rights or an approved dedicated write target. Existing resources remain protected.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Obtain exact dedicated write targets and independent permission/data-boundary/recovery evidence; verify actual standard connector or writer execution and denied identity before provisioning/runtime approval. No DLP implementation in this task.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\639a61213a0949d941b4a920e7dbb01fcaced59ba7b81caeb94e97e16aeff196.json",
+          "sha256": "639a61213a0949d941b4a920e7dbb01fcaced59ba7b81caeb94e97e16aeff196",
+          "observedAt": "2026-10-18T07:31:14.285Z",
+          "expiresAt": "2026-10-18T07:32:14.285Z"
+        }
+      ]
+    },
+    {
+      "id": "dedicated-target-writer-proposal",
+      "area": "deployment",
+      "statement": "Server-pinned repo-specific AS-E2E CloudAsset Swarm Projects, Swarm Run Logs and Engineering Artifacts proposed as new targets. Two authenticated inventory passes observed all names absent; protected Documents remains untouched. Exact configured SharePoint connection is Connected as Leon and sees the site. The current Graph token lacks declared Sites.Manage.All. Native HttpRequest GET probe was refused with403 by FlowAgent dynamic-resolver-only guard before provider dispatch. Absence and connection metadata are not write approval.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Independently approve a pinned schema plan/design/task matching the exact dedicated proposal and required target governance. Provide a supported narrowly authorized schema writer; do not bypass plugin resolver restrictions, broaden observer credentials or autoapprove. Verify real permitted/denied writes and native runtime before release. DLP implementation excluded.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\98fa5bfa4b29e2d5a6ccb994232c434fd849f147c80f5bfa5ba64f26e0ce5196.json",
+          "sha256": "98fa5bfa4b29e2d5a6ccb994232c434fd849f147c80f5bfa5ba64f26e0ce5196",
+          "observedAt": "2026-10-18T07:40:48.622Z",
+          "expiresAt": "2026-10-18T07:41:48.624Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\815c68247711ca72c9f72dda44c6ebfaf839f7fd54b8f8600dacfc639f4a26e6.json",
+          "sha256": "815c68247711ca72c9f72dda44c6ebfaf839f7fd54b8f8600dacfc639f4a26e6",
+          "observedAt": "2026-10-18T07:51:08.288Z",
+          "expiresAt": "2026-10-18T07:56:08.288Z"
+        }
+      ]
+    },
+    {
+      "id": "configured-schema-writer-context",
+      "area": "deployment",
+      "statement": "Customer M365-Provisioner-App delegated Graph Sites.Manage.All is admin-consented. Actual office worker verifies exact configured client, subject and target as Leon, three proposed target names absent and connector catalogue visibility. Writer configuration and provider-owned cache remain separate from observer configuration. No schema POST or effective write acceptance has occurred.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Complete and independently review the immutable cubefarm.sharepoint.json and authoring task, then obtain exact full-plan server-operator resource approval. Verify allowed/denied operations, required lookup/folder/seed and flow contracts, Canvas/flow build and native runtime before release. Do not autoapprove or bypass connector resolver restrictions. DLP implementation excluded.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\platform-discovery\\0f21358992519545c36409644e6012bbb7832a8e736e1a8f9095151456f58472.json",
+          "sha256": "0f21358992519545c36409644e6012bbb7832a8e736e1a8f9095151456f58472",
+          "observedAt": "2026-10-18T08:28:14.199Z",
+          "expiresAt": "2026-10-18T08:29:14.199Z"
+        }
+      ]
+    },
+    {
+      "id": "repository-inventory",
+      "area": "repository",
+      "statement": "Inspected the committed repository inventory. Source semantics and working changes still need review.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "ready",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Inspect relevant source and resolve any uncommitted changes before relying on the design.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\435e789fe6fc27242f1437070333fe59a413617435dff32cd4865014603d94a1.json",
+          "sha256": "435e789fe6fc27242f1437070333fe59a413617435dff32cd4865014603d94a1",
+          "observedAt": "2026-10-18T08:47:58.931Z",
+          "expiresAt": "2026-10-19T08:47:58.943Z"
+        }
+      ]
+    },
+    {
+      "id": "issue1-pinned-schema-source",
+      "area": "deployment",
+      "statement": "Issue #1 bounded source reconciliation; requirements unchanged. inspect_repository expected_revision33 executed exactly once; revision34 pinned commit054d9893da8b78252dc55b961b5f78477d566021. Durable inventory has exactly README.md, cubefarm.sharepoint.json, docs/delivery/SCHEMA-BOOTSTRAP.md; not truncated; trackedWorkingChanges empty. Untracked files untouched and outside inventory proof.\nRead all198 manifest lines in pages1-120,121-198; second page pinned expectedSha25691aa7c1a2b917efd6ffd07fdb34b3282f4aeb5629b626c45c3bffaa8dfd9b8b7. Read all16 bootstrap lines hash7f9ca8c2513ac44d14605d5479212a592f310cfa35948d48bfac86da39bfbbc2. Bootstrap declares parsed plan hash d02d040577c9a9a85764c61c7c89a23ca144aebb6cbcb7b9b8bab630e9652281; declaration read, not independently recomputed or provisioner-accepted.\nManifest target: tenant5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c, leon@graspai.co.uk, https://mydevnet.sharepoint.com/sites/GraspAI; siteCollection80f3bbb1-61ec-456f-a8a3-b9b157c0e50a; web522d7ca7-41d2-4c12-9364-fd5ec140dfc8. These are source facts, not refreshed tenant observations. Proposed resource keys/names: SwarmProjects/AS-E2E CloudAsset Swarm Projects genericList; SwarmRunLogs/AS-E2E CloudAsset Swarm Run Logs genericList; EngineeringArtifacts/AS-E2E CloudAsset Engineering Artifacts documentLibrary. Projects six columns: BusinessArea choice, EstimatedValue en-GB currency, required SwarmStatus choice, multiline TechnicalSummary(maxLength255), RunIdentifier text, required RecordClass Live/Synthetic. Logs eight: required ProjectLookup to SwarmProjects.Title, required AgentRole, multiline StepDescription(maxLength255), TokensConsumed integer, ExecutionDurationSeconds two decimals, required OutputStatus, RunIdentifier, required RecordClass. Library six: ProjectReference, VersionTag, required SignOffStatus, RunIdentifier, EvidenceKind, EvidenceSha256. Title template-provided per bootstrap; folders/seeds/flows/Canvas unfinished. Evidence hash metadata is not verified bytes/approval.\nApproval BLOCKED: current exact design/authoring-task independent review and expiring server-operator approval bound to full plan/proposal/repository as Leon, plus required fresh independently reviewed exact-site permissions/data-boundary/recovery evidence. Proposal is not approved write allowlist. Documents and all existing resources protected; no adoption/grants/edits/deletes. Bootstrap requires lookup/facet verification, but current DELIVERY hash762822f843bc2766f4436f2f521672d4d44250aa92bfd8e1d284b3978fa62850 guarded provisioning section says lookups unsupported. Exact supported lookup contract remains unverified; office infrastructure owns reconciliation before execution.\ncapability_status project ready checked2026-10-18T08:48:14.372Z expires08:49:14.372Z configHash a2c0cd9dc6bfdc7496b67b9dedeaa429f6027ec7dc596a7c80c3e8b43d665a42; office blocked expired current-evidence. Pass labels are not raw licensing/DLP/version/runner facts. delivery_status absent from executing tool catalogue; target/release unverified; infrastructure owns status contract. Failed capability blocks assignments. Earlier licence/access/environment/test-identity blockers retained without new claims. No DLP, synthesis, catalogue reread, shell, authoring, provisioning, approval or release. Clock metadata tool hook-denied once, no retry. Initial finding exceeded4000 chars; shortened before resubmission. Total tokens/duration unknown; per-tool wall times retained. No implementation or release authority granted.",
+      "status": "observed",
+      "critical": true,
+      "conclusion": "blocked",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Sherlock independently reviews exact current design/source/authoring task. Server operator owns expiring full-plan resource approval after fresh site governance evidence. Office infrastructure reconciles lookup support and exposes delivery_status. Ada retains blocked dependent work and preserves protected resources/untracked files.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\435e789fe6fc27242f1437070333fe59a413617435dff32cd4865014603d94a1.json",
+          "sha256": "435e789fe6fc27242f1437070333fe59a413617435dff32cd4865014603d94a1",
+          "observedAt": "2026-10-18T08:47:58.931Z",
+          "expiresAt": "2026-10-19T08:47:58.943Z"
+        }
+      ]
+    },
+    {
+      "id": "committed-sharepoint-schema",
+      "area": "data",
+      "statement": "Complete committed three-resource schema plan validates, including the required single Title lookup resolved from verified same-plan parent. Current office guidance now describes that implemented narrow lookup contract. Exact plan hashd02d040577c9a9a85764c61c7c89a23ca144aebb6cbcb7b9b8bab630e9652281. Operator create-schema approval exists; independent architecture/task and site governance remain required. No live schema writes, folder/seed/flow/Canvas authoring or release approval are implied.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "ready",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Independent QA reviews current architecture/task/source and exact-site governance; actual authorized schema creation/readback must then be verified. DLP implementation excluded.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\2033539a8ee564b292e0212ed966b9c2cf4cd775b73af89931638d6776308db4.json",
+          "sha256": "2033539a8ee564b292e0212ed966b9c2cf4cd775b73af89931638d6776308db4",
+          "observedAt": "2026-10-18T08:51:30.305Z",
+          "expiresAt": "2026-10-19T08:51:30.305Z"
+        }
+      ]
+    },
+    {
+      "id": "schema-bootstrap-contract",
+      "area": "data",
+      "statement": "Pinned schema-only architecture corrects circular new-ID prerequisites. Fresh authenticated target/writer observations and explicit dedicated boundary/failure-containment contracts are available for independent schema-only review. Planned controls and synthetic tests do not establish native schema success, denied-user proof or full application readiness.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "ready",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Assigned independent QA reviews exact schema-bootstrap proposal. Execute only its fixed schema operation after a current approval; retain future application blockers.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\b3b6149363ec97ddb22126ba5ba5144ffdee73846f5168f0886debdf51a7e973.json",
+          "sha256": "b3b6149363ec97ddb22126ba5ba5144ffdee73846f5168f0886debdf51a7e973",
+          "observedAt": "2026-10-18T09:39:49.000Z",
+          "expiresAt": "2026-10-18T09:54:49.000Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\c34e6787c7ff6da14dfa2b5fe837cec4696a6b22ec5b25d19f4db0ba739a3db7.json",
+          "sha256": "c34e6787c7ff6da14dfa2b5fe837cec4696a6b22ec5b25d19f4db0ba739a3db7",
+          "observedAt": "2026-10-18T09:40:27.904Z",
+          "expiresAt": "2026-10-18T10:40:27.904Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\0712a64b83f4a22746ace9f6596ebbaf1aded70efaa1ec458269de8558d9d315.json",
+          "sha256": "0712a64b83f4a22746ace9f6596ebbaf1aded70efaa1ec458269de8558d9d315",
+          "observedAt": "2026-10-18T09:40:27.904Z",
+          "expiresAt": "2026-10-18T10:40:27.904Z"
+        }
+      ]
+    },
+    {
+      "id": "owned-schema-reconciliation-contract",
+      "area": "data",
+      "statement": "Actual owned Projects list is correlated to the original dispatched marker and byte-bound journal/lease. Revised schema plan removes unsupported multiline maxLength. Original office stopped with zero sessions/owned native PIDs. Fresh permission observations and exact read-only metadata support a proposed explicit reconciliation; no successful handoff/resumption or full application acceptance is claimed.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "ready",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Assigned QA independently reviews the exact new proposal and migration semantics. Fixed executor must recheck fresh provider metadata and old-owner death under shared guard before durable handoff; pending handoff remains blocked.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\ab7de702a80d50310975b0bce4549d47e6eda8acc8827d18cdc395f6053cc6d7.json",
+          "sha256": "ab7de702a80d50310975b0bce4549d47e6eda8acc8827d18cdc395f6053cc6d7",
+          "observedAt": "2026-10-18T10:07:58.488Z",
+          "expiresAt": "2026-10-18T10:22:58.488Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\039c21ae9d4d267f2a7c3bf43dba0d17874fad43f3115aef6fe46a6a7a127f42.json",
+          "sha256": "039c21ae9d4d267f2a7c3bf43dba0d17874fad43f3115aef6fe46a6a7a127f42",
+          "observedAt": "2026-10-18T10:08:01.055Z",
+          "expiresAt": "2026-10-18T11:08:01.055Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\df73a8b86efb7054e51d7540c89eefcae42677efb06f7c28a82bb912764cd1d2.json",
+          "sha256": "df73a8b86efb7054e51d7540c89eefcae42677efb06f7c28a82bb912764cd1d2",
+          "observedAt": "2026-10-18T10:08:01.055Z",
+          "expiresAt": "2026-10-18T11:08:01.055Z"
+        }
+      ]
+    },
+    {
+      "id": "applied-schema-continuation-contract",
+      "area": "data",
+      "statement": "Original migration is applied, parent verified and lease legitimately released after readback, with no child dispatch. New exact applied-continuation proposal binds immutable lineage, current history and released state; original owner stopped. No live continuation success or global application approval claimed.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "ready",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Fresh assigned QA approval of exact continuation scope plus two runtime metadata observations and guarded durable continuation before remaining dedicated creates. Post-WAL interruption blocks without replay.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\b9ce0fe0971246349217838bbb72a3147336cf3438c6846b6760d14c89dc7f3b.json",
+          "sha256": "b9ce0fe0971246349217838bbb72a3147336cf3438c6846b6760d14c89dc7f3b",
+          "observedAt": "2026-10-18T10:27:48.269Z",
+          "expiresAt": "2026-10-18T10:42:48.269Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\2b88351a6f8f6d635b70b38eeadb7e7380147e1b0ccb9bfb8494c2d0ee1180e6.json",
+          "sha256": "2b88351a6f8f6d635b70b38eeadb7e7380147e1b0ccb9bfb8494c2d0ee1180e6",
+          "observedAt": "2026-10-18T10:28:09.482Z",
+          "expiresAt": "2026-10-18T11:28:09.482Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\4cdc6dd356207fdc54ec463b4e081f1b8df8ce0c49de7788fec4dc16321555ac.json",
+          "sha256": "4cdc6dd356207fdc54ec463b4e081f1b8df8ce0c49de7788fec4dc16321555ac",
+          "observedAt": "2026-10-18T10:28:09.482Z",
+          "expiresAt": "2026-10-18T11:28:09.482Z"
+        }
+      ]
+    },
+    {
+      "id": "dedicated-schema-authenticated-readback",
+      "area": "data",
+      "statement": "Authenticated exact-plan schema execution succeeded after fresh independent continuation approval. SwarmProjects 2ff4739d-7ab4-48fb-a5de-c7766a6cd026 preserves original marker/lineage. SwarmRunLogs c14f4bd2-f9f7-46e7-a7b1-bb57a80dc622 and EngineeringArtifacts a08957e8-bf46-466e-b1cb-93dfdfeb9347 are created and verified. All 20 planned fields and exact parent lookup match native readback; lease and guard cleared. No business records, flows, Canvas app or deployment/runtime acceptance is claimed.",
+      "status": "observed",
+      "critical": false,
+      "conclusion": "ready",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "remedy": "Consume these exact IDs and field schemas in the remaining target/connector/Canvas/flow contracts; refresh scoped permissions and obtain genuine full architecture/task approval before authoring. Forced-crash and application runtime evidence remain separate.",
+      "evidence": [
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\e3a8896a64d30eadab10eef39b4d0179099752ac2a238aac5fd5041f8eecba09.json",
+          "sha256": "e3a8896a64d30eadab10eef39b4d0179099752ac2a238aac5fd5041f8eecba09",
+          "observedAt": "2026-10-18T10:44:56.645Z",
+          "expiresAt": "2026-10-18T11:44:56.645Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\aab66c4f46ca916ebe491dea8ab7062ef3a0479179c5b848b1a1588daec825be.json",
+          "sha256": "aab66c4f46ca916ebe491dea8ab7062ef3a0479179c5b848b1a1588daec825be",
+          "observedAt": "2026-10-18T10:44:56.648Z",
+          "expiresAt": "2026-10-18T11:44:56.648Z"
+        },
+        {
+          "reference": "C:\\temp\\AgentSwarm-CloudAsset-E2E-829bcf65\\planning\\evidence\\5119f291f951d887226ec1b4357479ccd5fcc9dc96dba8d37ef090e8e67a3744.json",
+          "sha256": "5119f291f951d887226ec1b4357479ccd5fcc9dc96dba8d37ef090e8e67a3744",
+          "observedAt": "2026-10-18T10:44:56.649Z",
+          "expiresAt": "2026-10-18T11:44:56.649Z"
+        }
+      ]
+    }
+  ],
+  "contracts": [
+    {
+      "id": "target-boundary",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "description": "ONLY tenant 5e9bd5a8-4e35-4907-ac7b-ec1dc8d1b77c as leon@graspai.co.uk at https://org0efd6060.crm4.dynamics.com/. Map actual environment and SharePoint IDs without inferring from display names. Dedicated AS-E2E allowlist only; no global profile changes, broad grants, paid features, Copilot activation or Dataverse app data. Unknown entitlement/DLP/access blocks dependent work.",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "independent-delivery"
+      ]
+    },
+    {
+      "id": "sharepoint-contract",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "description": "Use manager-specified Projects, Run Logs and Engineering Artifacts schema exactly in meaning. Agree discovered internal field/lookup names, minimal stable run/correlation/idempotency/synthetic/evidence-hash/approval fields, transition ownership, concurrency/retry semantics and immutable evidence/version links before Canvas or flow authoring.",
+      "requirementIds": [
+        "initiative-dispatch",
+        "evidence-approval",
+        "tablet-workspace",
+        "evidence-pack",
+        "synthetic-demo"
+      ]
+    },
+    {
+      "id": "flow-contract",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "description": "Flow1 non-synthetic Architect Synthesis only: deterministic summary, dedicated-channel card, idempotent artifact folder, Engineering Build and correlated initial log. Flow2 validates genuine matching project/run evidence then requests Leon's human approval, QA Testing pending, Completed only after observed Approved. Retain visible failure/duplicate/retry outcomes; never autoapprove or impersonate.",
+      "requirementIds": [
+        "initiative-dispatch",
+        "evidence-approval",
+        "standard-entitlements",
+        "synthetic-demo"
+      ]
+    },
+    {
+      "id": "canvas-contract",
+      "owner": "b26cf85f-317c-4a90-9164-a03569b01728",
+      "description": "One responsive tablet screen with requested three navigation sections, Projects/status/selected metadata and document links, correlated recent logs and concise action summaries, actual metrics or labelled unknowns. Default manual Refresh plus foreground bounded polling only if evidenced feasible; display last successful refresh. Persisted initiative receipt and real access-checked evidence archive/link. No mock runtime proof or private thoughts.",
+      "requirementIds": [
+        "initiative-dispatch",
+        "tablet-workspace",
+        "evidence-pack",
+        "synthetic-demo"
+      ]
+    },
+    {
+      "id": "release-contract",
+      "owner": "e59b984c-1f59-4715-bfd6-9688e1bf5b0c",
+      "description": "Ada delivers, Linus owns Canvas, Sherlock independently reviews exact design/source/target. Commit cubefarm.delivery.json and QA-owned live assertions/scripts plus distinct user/admin/operations/architecture Markdown handover. FirstSlice and qualityEvidence use supported typed mappings and exact happy/denied/failure scenario-to-test names. Create scoped release only with real committed artifacts/target/URLs; Sherlock approves its plan hash and later fresh visual/recovery session. Runner complete alone unlocks accept_slice/expansion; unsupported adapters are blockers, not waivers.",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "evidence-approval",
+        "tablet-workspace",
+        "evidence-pack",
+        "synthetic-demo",
+        "independent-delivery"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "issue": 1,
+      "stage": "discovery",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "evidence-approval",
+        "independent-delivery"
+      ]
+    },
+    {
+      "issue": 2,
+      "stage": "discovery",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "tablet-workspace",
+        "evidence-pack",
+        "independent-delivery"
+      ]
+    },
+    {
+      "issue": 3,
+      "stage": "discovery",
+      "requirementIds": [
+        "initiative-dispatch",
+        "evidence-approval",
+        "standard-entitlements",
+        "tablet-workspace",
+        "evidence-pack",
+        "synthetic-demo"
+      ]
+    },
+    {
+      "issue": 4,
+      "stage": "design",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "evidence-approval",
+        "tablet-workspace",
+        "evidence-pack",
+        "synthetic-demo",
+        "independent-delivery"
+      ]
+    },
+    {
+      "issue": 5,
+      "stage": "slice",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "tablet-workspace",
+        "evidence-pack",
+        "independent-delivery"
+      ]
+    },
+    {
+      "issue": 6,
+      "stage": "slice",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "independent-delivery"
+      ]
+    },
+    {
+      "issue": 7,
+      "stage": "slice",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "tablet-workspace",
+        "evidence-pack",
+        "independent-delivery"
+      ]
+    },
+    {
+      "issue": 8,
+      "stage": "slice",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "tablet-workspace",
+        "evidence-pack",
+        "independent-delivery"
+      ]
+    },
+    {
+      "issue": 9,
+      "stage": "implementation",
+      "requirementIds": [
+        "isolation",
+        "standard-entitlements",
+        "initiative-dispatch",
+        "evidence-approval",
+        "tablet-workspace",
+        "evidence-pack",
+        "synthetic-demo",
+        "independent-delivery"
+      ]
+    }
+  ],
+  "slice": {
+    "description": "Using only dedicated AS-E2E resources, an authorised real user submits one non-synthetic Architect Synthesis initiative in Canvas, reloads its persisted receipt, observes one Flow1 card/folder/summary/log and opens its real evidence link. A denied identity and a real failure case are independently exercised. Flow2 completion is not required by this slice.",
+    "requirementIds": [
+      "isolation",
+      "standard-entitlements",
+      "initiative-dispatch",
+      "tablet-workspace",
+      "evidence-pack",
+      "independent-delivery"
+    ],
+    "acceptanceCriteria": [
+      "Exact approved tenant/caller/target and standard end-user entitlements/DLP/resources are verified without changing protected resources.",
+      "Actual Canvas submission persists in SharePoint after reload and Flow1 dispatches exactly once with correlated real card/artifacts/log and Engineering Build status.",
+      "Responsive desktop/mobile slice provides accessible metadata/status/logs and actual or labelled-unknown metrics with bounded refresh and persisted receipt.",
+      "A real correlated evidence link/pack is accessible to the authorised identity and denied to a real inappropriate identity; missing/error paths never show false success.",
+      "Connected Canvas sync/compile/App checker/real msapp/publication and genuine flow action/run evidence pass supported runner verification.",
+      "Committed manifest, QA-owned assertions and four substantive handover documents support independent exact-release plan/visual/recovery approval; runner complete and accept_slice are required before expansion."
+    ]
+  }
+}

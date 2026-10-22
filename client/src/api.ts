@@ -1,3 +1,4 @@
+import type {EfficiencyReport} from '../../shared/efficiency';
 import type {DeliveryRecoveryInspection} from '../../shared/deliveryRecovery';
 import type { DeliveryView } from '../../shared/delivery';
 import type {HealthEvidenceView} from '../../shared/healthEvidence';
@@ -42,9 +43,12 @@ export interface FloorOptions {
 }
 
 export const api = {
+  deliveryRecord: (repoId:string) => call<{record:import('../../shared/deliveryRecord').DeliveryRecord|null;readiness:ReturnType<typeof import('../../server/planningReadiness').planningReadiness>;phase:string;blockers:string[];demo:boolean}>('GET',`${r(repoId)}/delivery-record`),
+  reviewDeliveryRecord: (repoId:string) => call('POST',`${r(repoId)}/delivery-record/review`,{}),
   officeRuntime:()=>call<{pid:number;startedAt:string;draining:boolean;authenticationWork?:import('../../shared/tenancy').TenancyActivity;reload?:import('../../server/officeReload.mjs').ReloadState}>('GET','/api/runtime',undefined,true),
   tenantDlp: () => call<import('../../shared/tenantDlp').TenantDlpView>('GET', '/api/governance/tenant'),
   toolGovernance: () => call<import('../../shared/toolGovernance').ToolGovernanceView>('GET', '/api/governance/tools'),
+  efficiency:(repo:string)=>call<EfficiencyReport>('GET',`/api/repos/${encodeURIComponent(repo)}/efficiency`),
   workflowReliability:(repo:string)=>call<import('../../shared/workflowReliability').WorkflowReliability>('GET',`/api/repos/${encodeURIComponent(repo)}/reliability`),
   capabilities: () => call<{ results: import('../../server/capabilityChecks').CapabilityResult[]; configuredProjects: string[];unavailableReason?:string;unavailableKind?:'storage'|'limit'|'invalid' }>('GET', '/api/capabilities'),
   installedSkills: () => call<import('../../server/skillRegistry').SkillCatalogue>('GET', '/api/installed-skills'),

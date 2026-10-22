@@ -83,3 +83,11 @@ it('rejects an oversized UTF-8 identity before leaving an unreadable ownership f
   try{await expect(acquireResourceLease(root,'界'.repeat(8192),'owner')).rejects.toThrow('bounded evidence size');expect(await fs.readdir(root)).toEqual([]);}
   finally{await fs.rm(root,{recursive:true,force:true});}
 });
+it('allows release retry after temporary guard contention without relaxing ownership checks',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-lease-release-retry-'));
+  try{
+    const lease=await acquireResourceLease(root,'resource','owner'),file=path.join(root,(await fs.readdir(root))[0]);
+    await fs.mkdir(file+'.reaping');await expect(lease.release()).rejects.toThrow('already in progress');
+    await fs.rmdir(file+'.reaping');await lease.assertOwned();await lease.release();expect(await fs.readdir(root)).toEqual([]);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});

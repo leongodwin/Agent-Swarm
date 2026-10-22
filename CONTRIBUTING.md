@@ -1,12 +1,16 @@
 # Contributing
 
-How to run cubefarm from source, test it and publish it. Agent sessions working on this repo also follow [CLAUDE.md](CLAUDE.md).
+How to run Agent Swarm from source, test it and publish it. Agent sessions working on this repo also follow [CLAUDE.md](CLAUDE.md).
+
+## Current delivery and runtime guidance
+
+Start with the [documentation index](docs/README.md), [delivery contract](docs/DELIVERY.md) and [current status](docs/PRODUCTION-GOAL-STATUS.md). Codex is the default; Gemini and OpenCode require their own authentication and governance prerequisites. Claude and GitHub Copilot CLI execution and SDK execution are disabled. The [backend pilot](docs/BACKEND-PILOT-COMPLETION.md) is accepted only for its declared development scope.
 
 ## Run it from source
 
 ```bash
-git clone https://github.com/leonvanzyl/cubefarm.git
-cd cubefarm
+git clone https://github.com/leongodwin/Agent-Swarm.git
+cd Agent-Swarm
 npm install
 npm run dev    # or: npm run demo
 ```
@@ -28,9 +32,9 @@ npm run test:e2e     # browser smoke tests (Playwright): builds, boots a demo of
 ```
 
 - Tests sit next to the code they cover as `*.test.ts`, anywhere under `client/`, `server/`, `shared/` or `scripts/` (e.g. `shared/issues.test.ts`). Vitest finds them through `vitest.config.ts`; `tsc` type-checks them and the Vite build leaves them out, since nothing in the app imports them.
-- Keep them fast and offline: no network, no GitHub (`gh`), no Claude sessions and no real `~/.cubefarm`. Test pure logic directly, fake anything that would spend usage, and use a temp `SWARM_HOME` and random free ports for anything that needs a server. `npm test` already points `SWARM_HOME` at a temp folder.
+- Keep them fast and offline: no network, no GitHub (`gh`), no real coding-agent sessions and no real `~/.cubefarm`. Test pure logic directly, fake anything that would spend usage, and use a temp `SWARM_HOME` and random free ports for anything that needs a server. `npm test` already points `SWARM_HOME` at a temp folder.
 - `npm run test:e2e` runs `e2e/*.spec.ts` in headless Chromium with software WebGL against a demo office on port 4399 (`E2E_PORT` changes it) with a temp `SWARM_HOME`. The first time, get the browser with `npx playwright install chromium`. Wait on what the page shows rather than sleeping, and don't rely on pointer lock, which a headless browser may not grant.
-- GitHub Actions (`.github/workflows/ci.yml`) runs `npm ci`, `npm run typecheck`, `npm test` and `npm run build` on Ubuntu and Windows for every pull request and every push to `main`, then packs the npm package, installs it into an empty folder and boots it in demo mode (`scripts/smoke-package.mjs`). A separate `e2e` job on Ubuntu runs `npm run test:e2e` and uploads the Playwright report when it fails. It needs no secrets.
+- GitHub Actions (`.github/workflows/ci.yml`) runs `npm ci`, `npm run typecheck`, `npm test` and `npm run build` on Ubuntu, Windows and macOS for every pull request and every push to `main`, then packs the npm package, installs it into an empty folder and boots it in demo mode (`scripts/smoke-package.mjs`). Three isolated `e2e` shards on Ubuntu run the full Playwright suite with one worker per shard and retain progress logs and reports even after failure. It needs no secrets.
 
 ## Architecture
 
@@ -45,11 +49,11 @@ bin/cubefarm.js  the `npx cubefarm` command: checks the machine, starts the serv
 scripts/office.mjs  the launcher for a checkout (npm run dev / demo / start): runs the office and updates it
 server/  Node + Express + ws
   swarm.ts        orchestrator: floors, agents, scheduling, persistence, websocket fan-out
-  agentRunner.ts  one Claude Agent SDK session per agent; turns its stream into terminal lines
+  agentRunner.ts  historical SDK implementation; SDK execution is disabled by current policy
   cliRunner.ts    one agent as the real CLI in a pseudo-terminal: hooks, turn endings, the CEO's tools over MCP
   ptyHost.ts      the terminal keeper: its own process holding the CLIs' terminals and hooks through office restarts
   ptyClient.ts    the office's side of the keeper (ptyProtocol.ts: their messages)
-  clis.ts         the CLIs agents can run (Claude Code, Codex, OpenCode): finding them, their command lines
+  clis.ts         permitted CLIs (Codex, Gemini, OpenCode): discovery, commands and governance bridges
   terminal.ts     each agent's terminal: a headless xterm mirror, its viewers, keystrokes to the running CLI
   github.ts       everything GitHub, via the gh CLI
   workspace.ts    clones + per-agent git worktrees

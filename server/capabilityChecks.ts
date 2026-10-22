@@ -20,15 +20,21 @@ const CAPABILITY_MAX_BYTES=4*1024*1024;
 const category = z.enum(['authentication', 'environment', 'licence', 'mcp', 'cli', 'connector', 'workflow']);
 const endpoint = z.url().refine((v) => { const u = new URL(v); return !u.username && !u.password && (u.protocol === 'https:' || u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)); });
 const azureCli = z.object({ tenantId: z.uuid(), username: z.email() }).strict();
-const pendingReads = new Map<string, Promise<string>>();
-function sharedRead(executable: string, args: string[], cwd: string, signal: AbortSignal) {
+// Coalescing must not transfer cancellation authority between independent probes.
+const pendingReads = new WeakMap<AbortSignal, Map<string, Promise<string>>>();
+async function sharedRead(executable: string, args: string[], cwd: string, signal: AbortSignal) {
+  signal.throwIfAborted();
+  let reads = pendingReads.get(signal);
+  if (!reads) { reads = new Map(); pendingReads.set(signal, reads); }
   const key = JSON.stringify([executable, args, cwd]);
-  let request = pendingReads.get(key);
+  let request = reads.get(key);
   if (!request) {
-    request = deliveryCommands.run({ executable, args }, cwd, {}, signal).finally(() => pendingReads.delete(key));
-    pendingReads.set(key, request);
+    request = deliveryCommands.run({ executable, args }, cwd, {}, signal).finally(() => reads.delete(key));
+    reads.set(key, request);
   }
-  return request;
+  const output = await request;
+  signal.throwIfAborted();
+  return output;
 }
 const probe = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('platform-auth'), environmentUrl: endpoint, binding: targetBindingSchema, identity: platformIdentitySchema, includeFlow: z.boolean().default(false) }).strict(),
@@ -60,10 +66,19 @@ export const capabilityConfigSchema = z.object({
   }
 });
 export type CapabilityConfig = z.infer<typeof capabilityConfigSchema>;
-export interface CapabilityResult { repoId: string; checkedAt: string; expiresAt: string; status: 'ready' | 'blocked'; configHash?: string; checks: { id: string; category: string; passed: boolean; detail: string; remedy: string }[] }
+const probeStage = z.enum(['dispatch','platform-auth','github-auth','connection-list','cli-version','azure-account','azure-token','token-identity','http-request','http-body','http-assertion','mcp-connect','mcp-tools']);
+const probeFailure = z.enum(['deadline','cancelled','provider','http-refused','invalid-response','assertion']);
+const diagnosticsSchema = z.object({stage:probeStage,elapsedMs:z.number().int().min(0).max(86400000),failure:probeFailure.optional()}).strict();
+type ProbeDiagnostics = z.infer<typeof diagnosticsSchema>;
+class CapabilityProbeFailure extends Error {
+  constructor(message:string,readonly stage:ProbeDiagnostics['stage'],readonly failure:NonNullable<ProbeDiagnostics['failure']>){super(message);}
+}
+export interface CapabilityResult { repoId: string; checkedAt: string; expiresAt: string; status: 'ready' | 'blocked'; configHash?: string; checks: { id: string; category: string; passed: boolean; detail: string; remedy: string; diagnostics?:ProbeDiagnostics }[] }
+/** Timing is diagnostic evidence, not an execution-context change. */
+export function capabilityDecisions(checks:CapabilityResult['checks']){return checks.map(({diagnostics:_,...decision})=>decision);}
 const projectKey = z.string().min(1).max(240).refine(id => !['__proto__', 'prototype', 'constructor'].includes(id) && !/[\x00-\x1f]/.test(id));
 const resultSchema = z.object({repoId: projectKey, checkedAt: z.iso.datetime(), expiresAt: z.iso.datetime(), status: z.enum(['ready','blocked']), configHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  checks: z.array(z.object({id: key, category, passed: z.boolean(), detail: z.string().max(2000), remedy: z.string().max(1000)}).strict()).min(1).max(40),
+  checks: z.array(z.object({id: key, category, passed: z.boolean(), detail: z.string().max(2000), remedy: z.string().max(1000),diagnostics:diagnosticsSchema.optional()}).strict()).min(1).max(40),
 }).strict().superRefine((result, context) => {
   const duration = Date.parse(result.expiresAt) - Date.parse(result.checkedAt);
   if (duration <= 0 || duration > 65_000) context.addIssue({code:'custom',message:'Invalid capability observation lifetime'});
@@ -81,7 +96,7 @@ function currentObservation(result: CapabilityResult) {
 
 export function capabilityBlocker(result: Pick<CapabilityResult, 'status' | 'checks'>): string | null {
   if (result.status === 'ready' && result.checks.length > 0 && result.checks.every(check => check.passed)) return null;
-  return result.checks.filter(check => !check.passed).map(check => `${check.id}: ${check.remedy}`).join('; ') || 'Capability verification is not ready; refresh project readiness';
+  return result.checks.filter(check => !check.passed).map(check => `${check.id}: ${check.detail.startsWith('Live probe failed (')?`${check.detail}. `:''}${check.remedy}`).join('; ') || 'Capability verification is not ready; refresh project readiness';
 }
 export function azureResource(url: string) {
   const u = new URL(url);
@@ -111,9 +126,18 @@ export function versionAtLeast(output: string, minimum: string) {
   return true;
 }
 export async function runCapabilityProbe(check: CapabilityConfig['checks'][number], cwd: string, signal: AbortSignal, officeRoot?: string) {
+  let stage:ProbeDiagnostics['stage']='dispatch';
+  try { await executeCapabilityProbe(check,cwd,signal,officeRoot,value=>{stage=value;});signal.throwIfAborted(); }
+  catch(error){
+    const failure=signal.aborted?(signal.reason?.name==='TimeoutError'?'deadline':'cancelled'):error instanceof CapabilityProbeFailure?error.failure:'provider';
+    throw new CapabilityProbeFailure(error instanceof Error?error.message:'Capability probe failed',stage,failure);
+  }
+}
+async function executeCapabilityProbe(check: CapabilityConfig['checks'][number], cwd:string, signal:AbortSignal,officeRoot:string|undefined,setStage:(stage:ProbeDiagnostics['stage'])=>void){
   signal.throwIfAborted();
   const p = check.probe;
   if (p.kind === 'platform-auth') {
+    setStage('platform-auth');
     const command = (executable: string, args: string[]) => sharedRead(executable, args, cwd, signal);
     const request: Request = async (method, resource) => JSON.parse(await command('dataverse', ['api', 'request', '--target', 'dataverse', '--environment', p.environmentUrl, '--method', method, '--path', `/api/data/v9.2/${resource}`]));
     const flow = p.includeFlow ? await connectFlowAdapter(cwd, signal) : undefined;
@@ -123,13 +147,15 @@ export async function runCapabilityProbe(check: CapabilityConfig['checks'][numbe
   }
   const dotnet = officeRoot ? path.join(officeRoot, 'tools', 'dotnet', process.platform === 'win32' ? 'dotnet.exe' : 'dotnet') : undefined;
   const privateSdk = dotnet && await fs.access(dotnet).then(() => true, () => false) ? dotnet : undefined;
-  if (p.kind === 'github-auth') { await deliveryCommands.run({ executable: 'gh', args: ['auth', 'status'] }, cwd, {}, signal); return; }
+  if (p.kind === 'github-auth') { setStage('github-auth');await deliveryCommands.run({ executable: 'gh', args: ['auth', 'status'] }, cwd, {}, signal); return; }
   if (p.kind === 'pac-connection') {
+    setStage('connection-list');
     const output = await sharedRead('pac', ['connection', 'list', '--environment', p.environmentUrl], cwd, signal);
     if (!connectedAccount(output, p.api, p.account, p.connectionId)) throw new Error('Required account connection is missing or disconnected');
     return;
   }
   if (p.kind === 'cli') {
+    setStage('cli-version');
     const output = await deliveryCommands.run({ executable: p.executable === 'dotnet' && privateSdk ? privateSdk : p.executable, args: [p.executable === 'pac' ? 'help' : '--version'] }, cwd, {}, signal);
     if (!versionAtLeast(output, p.minimumVersion)) throw new Error('Required CLI version is unavailable');
     return;
@@ -138,22 +164,27 @@ export async function runCapabilityProbe(check: CapabilityConfig['checks'][numbe
   if (p.tokenEnv && !token) throw new Error('Credential is not connected');
   if (p.kind === 'http' && p.azureCli) {
     const resource = azureResource(p.url); if (!resource) throw new Error('Unapproved Azure token destination');
-    const account = JSON.parse(await sharedRead('az', ['account', 'show', '--output', 'json'], cwd, signal));
-    if (account.tenantId?.toLowerCase() !== p.azureCli.tenantId.toLowerCase() || account.user?.name?.toLowerCase() !== p.azureCli.username.toLowerCase()) throw new Error('Azure CLI identity does not match the project');
+    // Bind the credential actually sent, rather than separately querying default
+    // account metadata. This avoids another sequential Python/CLI cold start.
+    setStage('azure-token');
     const credentials = JSON.parse(await sharedRead('az', ['account', 'get-access-token', '--resource', resource, '--tenant', p.azureCli.tenantId, '--output', 'json'], cwd, signal));
     if (credentials.tenant?.toLowerCase() !== p.azureCli.tenantId.toLowerCase() || typeof credentials.accessToken !== 'string' || !credentials.accessToken) throw new Error('Azure CLI did not return the expected tenant token');
     token = credentials.accessToken;
+    setStage('token-identity');
     const claims = JSON.parse(Buffer.from(token!.split('.')[1] ?? '', 'base64url').toString());
     if (claims.tid?.toLowerCase() !== p.azureCli.tenantId.toLowerCase() || String(claims.preferred_username ?? claims.upn ?? claims.unique_name ?? '').toLowerCase() !== p.azureCli.username.toLowerCase()) throw new Error('Azure token identity does not match the project');
   }
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
   if (p.kind === 'http') {
+    setStage('http-request');
     const response = await fetch(p.url, { headers, signal, redirect: 'error' });
-    if (!response.ok) throw new Error('Capability endpoint refused the request');
+    if (!response.ok) throw new CapabilityProbeFailure('Capability endpoint refused the request','http-request','http-refused');
+    setStage('http-body');
     const body = await response.text(); if (body.length > 1024 * 1024) throw new Error('Capability response is too large');
-    const data = JSON.parse(body); let value: unknown = data;
+    let data:unknown;try{data=JSON.parse(body);}catch{throw new CapabilityProbeFailure('Capability response is invalid JSON','http-body','invalid-response');}let value: unknown = data;
+    setStage('http-assertion');
     for (const part of p.pointer) value = value && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined;
-    if (p.matches !== undefined ? !matchesObservation(value, p.matches) : value !== p.equals) throw new Error('Capability assertion did not match');
+    if (p.matches !== undefined ? !matchesObservation(value, p.matches) : value !== p.equals) throw new CapabilityProbeFailure('Capability assertion did not match','http-assertion','assertion');
     if (p.freshness) { let timestamp: unknown = data; for (const part of p.freshness.pointer) timestamp = timestamp && typeof timestamp === 'object' ? (timestamp as Record<string, unknown>)[part] : undefined; const time = Date.parse(String(timestamp)); if (!Number.isFinite(time) || time > Date.now() + 60000 || time < Date.now() - p.freshness.maxAgeSeconds * 1000) throw new Error('Workflow observation is stale'); }
     return;
   }
@@ -163,7 +194,9 @@ export async function runCapabilityProbe(check: CapabilityConfig['checks'][numbe
   const transport = p.url ? new StreamableHTTPClientTransport(new URL(p.url), { requestInit: { headers, signal } }) : new StdioClientTransport({ command: p.command!, args: p.args, env, stderr: 'ignore', cwd });
   const abort = () => { void transport.close(); }; signal.addEventListener('abort', abort, { once: true });
   try {
+    setStage('mcp-connect');
     await client.connect(transport, { timeout: 12_000 });
+    setStage('mcp-tools');
     const names = new Set<string>(); let cursor: string | undefined;
     for (let page = 0; page < 20; page++) { const list = await client.listTools({ cursor }, { signal, timeout: 12_000 }); for (const tool of list.tools) names.add(tool.name); cursor = list.nextCursor; if (!cursor) break; }
     if (p.tools.some((tool) => !names.has(tool))) throw new Error('Required MCP tools are unavailable');
@@ -226,6 +259,7 @@ export class CapabilityService {
   configurationFingerprint(repoIds: string[]) {
     return crypto.createHash('sha256').update(JSON.stringify([...new Set(repoIds)].sort().map(id => [id, this.configs[id] ?? null]))).digest('hex');
   }
+  configuration(repoId:string){return this.configs[repoId]?structuredClone(this.configs[repoId]):null;}
   async configure(repoId: string, input: unknown) {
     if (!this.initialized) throw new Error('Capability state is not initialized; preserve and repair before execution');
     projectKey.parse(repoId);
@@ -252,12 +286,28 @@ export class CapabilityService {
     if (this.pending.has(pendingKey)) return structuredClone(await this.pending.get(pendingKey)!);
     const work = (async () => {
       const checks: CapabilityResult['checks'] = [];
-      const probe = (check: CapabilityConfig['checks'][number]) => this.probe(check, cwd, AbortSignal.any([this.stop.signal, AbortSignal.timeout(15_000)]), this.root);
+      const observedAt=Date.now();
+      const probe = (check: CapabilityConfig['checks'][number], signal = AbortSignal.any([this.stop.signal, AbortSignal.timeout(15_000)])) => this.probe(check, cwd, signal, this.root);
       if (environmentUrl && (!config || new URL(config.environmentUrl).origin !== new URL(environmentUrl).origin)) checks.push({ id: 'configuration', category: 'environment', passed: false, detail: 'No capability plan for this target', remedy: 'Configure authentication, environment, licence, MCP, CLI and connector probes in Solution delivery.' });
-      else if (config) checks.push(...await Promise.all(config.checks.map(async (check) => {
-        try { await probe(check); return { id: check.id, category: check.category, passed: true, detail: 'Live probe passed', remedy: check.remedy }; }
-        catch { return { id: check.id, category: check.category, passed: false, detail: 'Live probe failed or access is unknown', remedy: check.remedy }; }
-      })));
+      else if (config) {
+        // MCP package startup competes with Azure/PAC process startup on Windows.
+        // Separate runtime startup, Azure-backed reads and PAC connection reads.
+        // PAC can finish alone while concurrent credential readers hit deadlines.
+        // Every probe still has a 15s deadline; identical cloud reads share only
+        // their group's cancellation owner. No failed probe is retried here.
+        const groups=[config.checks.filter(check=>['mcp','cli','github-auth'].includes(check.probe.kind)),config.checks.filter(check=>!['mcp','cli','github-auth','pac-connection'].includes(check.probe.kind)),config.checks.filter(check=>check.probe.kind==='pac-connection')];
+        const results=new Map<string,CapabilityResult['checks'][number]>();
+        for(const group of groups){
+        if(!group.length)continue;
+        const configuredSignal = AbortSignal.any([this.stop.signal, AbortSignal.timeout(15_000)]);
+        for(const result of await Promise.all(group.map(async (check) => {
+        const started=Date.now();
+        try { await probe(check, configuredSignal); return { id: check.id, category: check.category, passed: true, detail: 'Live probe passed', remedy: check.remedy,diagnostics:{stage:'dispatch' as const,elapsedMs:Math.min(86400000,Math.max(0,Date.now()-started))} }; }
+        catch(error) { const diagnostics:ProbeDiagnostics={stage:error instanceof CapabilityProbeFailure?error.stage:'dispatch',failure:error instanceof CapabilityProbeFailure?error.failure:configuredSignal.aborted?(configuredSignal.reason?.name==='TimeoutError'?'deadline':'cancelled'):'provider',elapsedMs:Math.min(86400000,Math.max(0,Date.now()-started))};return { id: check.id, category: check.category, passed: false, detail: `Live probe failed (${diagnostics.stage}: ${diagnostics.failure})`, remedy: check.remedy,diagnostics }; }
+        })))results.set(result.id,result);
+        }
+        checks.push(...config.checks.map(check=>results.get(check.id)!));
+      }
       try { await probe({ id: 'github-auth', category: 'authentication', remedy: 'Sign in with gh auth login', probe: { kind: 'github-auth' } }); checks.push({ id: 'github-auth', category: 'authentication', passed: true, detail: 'GitHub authentication verified', remedy: '' }); }
       catch { checks.push({ id: 'github-auth', category: 'authentication', passed: false, detail: 'GitHub authentication unavailable', remedy: 'Sign in with gh auth login and refresh readiness.' }); }
       if(cli==='gemini'){const blocker=await verifyGeminiProfile(commandFor('gemini')).catch(()=> 'Gemini protected profile validation is unavailable');checks.push({id:'gemini-governance',category:'cli',passed:blocker===null,detail:blocker??'Native protected-profile security validation passed; session attestation is still required',remedy:blocker?'Provision the reviewed administrator-owned Gemini governance artifacts':''});}
@@ -265,11 +315,11 @@ export class CapabilityService {
       try { await probe({ id: 'worker-cli', category: 'cli', remedy: 'Install the selected worker CLI', probe: { kind: 'cli', executable: worker as 'git', minimumVersion: '0.0.1' } }); checks.push({ id: 'worker-cli', category: 'cli', passed: true, detail: 'Worker CLI responds', remedy: '' }); }
       catch { checks.push({ id: 'worker-cli', category: 'cli', passed: false, detail: 'Worker CLI is unavailable', remedy: 'Install the selected worker CLI and refresh readiness.' }); }
       if (JSON.stringify(config) !== JSON.stringify(this.configs[repoId])) checks.push({ id: 'configuration-changed', category: 'environment', passed: false, detail: 'Configuration changed during the check', remedy: 'Refresh readiness with the latest configuration' });
-      const result: CapabilityResult = { repoId, configHash: crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl })).digest('hex'), checkedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), status: checks.every((c) => c.passed) ? 'ready' : 'blocked', checks };
+      const result: CapabilityResult = { repoId, configHash: crypto.createHash('sha256').update(JSON.stringify({ config, environmentUrl })).digest('hex'), checkedAt: new Date(observedAt).toISOString(), expiresAt: new Date(observedAt + 60_000).toISOString(), status: checks.every((c) => c.passed) ? 'ready' : 'blocked', checks };
       let changed=false;
       await this.writer.write(async()=>{
         if(JSON.stringify(config)!==JSON.stringify(this.configs[repoId])&&!result.checks.some(check=>check.id==='configuration-changed')){result.checks.push({id:'configuration-changed',category:'environment',passed:false,detail:'Configuration changed before evidence publication',remedy:'Refresh readiness with the latest configuration'});result.status='blocked';}
-        changed=JSON.stringify(this.results[repoId]?.checks)!==JSON.stringify(result.checks);
+        changed=JSON.stringify(capabilityDecisions(this.results[repoId]?.checks??[]))!==JSON.stringify(capabilityDecisions(result.checks));
         const results={...this.results,[repoId]:result};await this.persist(this.configs,results);this.results=results;
         if(currentObservation(result)){
           this.liveResults.add(repoId);if(this.cache.size>=1024){const oldest=this.cache.keys().next().value;if(oldest!==undefined)this.cache.delete(oldest);}

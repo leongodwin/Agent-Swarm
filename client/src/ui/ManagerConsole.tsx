@@ -13,6 +13,7 @@ import { Resume } from './Phone';
 import { ProjectPicker } from './ProjectPicker';
 import { StatusPill } from './TerminalView';
 import { ToolGovernancePanel } from './ToolGovernancePanel';
+import {DeliveryPlanPanel} from './DeliveryPlanPanel';
 
 const MODELS: string[] = [];
 const EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -808,6 +809,7 @@ export function ManagerConsole({ initialTab, initialRepo }: { initialTab?: Manag
     ['ceo', `🧠 CEO & hiring${pending ? ` (${pending})` : ''}`],
     ['team', '👩‍💻 Team'],
     ['issues', '📝 Issues'],
+    ['delivery-plan', 'Delivery plan'],
     ['powerbi', '📊 Operations & audit'],
     ['settings', '⚙️ Settings'],
   ];
@@ -826,6 +828,7 @@ export function ManagerConsole({ initialTab, initialRepo }: { initialTab?: Manag
         {tab === 'team' && <TeamTab />}
         {tab === 'issues' && <IssuesTab initialRepo={initialRepo} />}
         {tab === 'powerbi' && <PowerBiDashboardTab />}
+        {tab === 'delivery-plan' && <DeliveryPlanPanel initialRepo={initialRepo}/>}
         {tab === 'settings' && <SettingsTab />}
       </div>
     </Panel>

@@ -26,7 +26,7 @@ export type Overlay =
   | { kind: 'alm-kiosk' }
   | { kind: 'help' };
 
-export type ManagerTab = 'floors' | 'ceo' | 'team' | 'issues' | 'settings' | 'powerbi';
+export type ManagerTab = 'floors' | 'ceo' | 'team' | 'issues' | 'settings' | 'powerbi' | 'delivery-plan';
 
 export interface Focus {
   id: string;

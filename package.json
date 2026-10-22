@@ -19,7 +19,7 @@
     "url": "git+https://github.com/leonvanzyl/cubefarm.git"
   },
   "license": "MIT",
-  "author": "Leon van Zyl",
+  "author": "Leon Godwin",
   "type": "module",
   "bin": {
     "cubefarm": "bin/cubefarm.js"
@@ -29,7 +29,29 @@
     "dist",
     "dist-server",
     "docs/DELIVERY.md",
-    "docs/RELIABILITY.md"
+    "docs/RELIABILITY.md",
+    "docs/WORKER-READINESS.md",
+    "docs/APPLICATION-SPECIFICATION.md",
+    "docs/TASK-EXECUTION.md",
+    "docs/FIRST-SLICE.md",
+    "docs/QUALITY-EVIDENCE.md",
+    "docs/EXECUTION-EFFICIENCY.md",
+    "docs/NATIVE-USAGE.md",
+    "docs/GEMINI-LIVE-QA.md",
+    "docs/LIVE-USAGE-GAPS-QA.md",
+    "docs/SERVER-RESTART-SCHEDULER-QA.md",
+    "docs/FULL-LAUNCHER-RECOVERY-QA.md",
+    "docs/DELIVERY-LEASE-RESUMPTION-QA.md",
+    "docs/RETAINED-CLOUD-RECONCILIATION-QA.md",
+    "docs/NATIVE-TARGET-RECONCILIATION-QA.md",
+    "docs/NATIVE-LEASE-HANDOFF-QA.md",
+    "docs/TRACKED-IMPORT-ADOPTION-QA.md",
+    "docs/PINNED-PREPARATION-RECOVERY-QA.md",
+    "docs/AGENT-SWARM-M365-E2E-QA.md",
+    "docs/PREREQUISITE-READINESS-QA.md",
+    "docs/SHAREPOINT-PROVISIONING-QA.md",
+    "docs/WORKER-CONTRACT-QA.md",
+    "docs/PLANNING-CONTRACTS-QA.md"
   ],
   "engines": {
     "node": ">=22"
@@ -48,6 +70,7 @@
   },
   "dependencies": {
     "@axe-core/playwright": "4.13.0",
+    "@azure/msal-node": "7.1.0",
     "@lydell/node-pty": "1.2.0-beta.15",
     "@modelcontextprotocol/sdk": "^1.30.1",
     "@playwright/mcp": "0.0.83",

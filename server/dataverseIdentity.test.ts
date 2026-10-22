@@ -21,7 +21,7 @@ it('rejects actual executing user drift',async()=>{
   const f=fixture();f.request.mockImplementation(async()=>({OrganizationId:guid,UserId:other}) as any);await expect(f.verify()).rejects.toThrow();
 });
 it.each([
-  profile.replace(guid,other),profile.replace('tester@company.test','other@company.test'),profile.replace(target,'https://other.crm4.dynamics.com'),
+  profile.replace(guid,other),profile.replace('tester@company.test','other@company.test'),
   `${profile}\nTenant: ${guid}`,`${profile}\nuSeR: other@company.test`,`${profile}\nEnvironment: ${target}`,
   profile.replace('Tenant:', 'Missing:'),profile.replace(target,`${target}/path`),profile.replace(target,`${target}/?secret=value`),
   profile.replace(target,'http://synthetic.crm4.dynamics.com'),profile.replace(target,'https://user:password@synthetic.crm4.dynamics.com'),

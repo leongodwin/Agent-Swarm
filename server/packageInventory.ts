@@ -7,6 +7,7 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import { standardConnectorId } from './standardPolicy.ts';
 import {packagedColumnConstraints,type PackagedConstraints} from './packagedColumnConstraints.ts';
 import {inspectFlowSchemaReferences,type ResourceSchemaReference} from './flowSchemaReferences.ts';
+import {sharepointSiteUrl} from './sharepointProvisioning.ts';
 
 const sha=(value:Buffer|string)=>crypto.createHash('sha256').update(value).digest('hex');
 const array=(value:any):any[]=>value===undefined||value===''?[]:Array.isArray(value)?value:[value];
@@ -14,13 +15,13 @@ const text=(value:any):string=>typeof value==='string'?value:typeof value?.['#te
 const logical=(value:any)=>{const name=text(value).toLowerCase();if(!/^[a-z_][a-z0-9_]*$/.test(name))throw new Error('Invalid logical name');return name;};
 const guid=(value:string)=>{const id=value.replace(/[{}]/g,'').toLowerCase();if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))throw new Error('Invalid component ID');return id;};
 export interface PackageFile {path:string;bytes:number;sha256:string}
-export interface PackageResource {id:string;kind:'cloud-flow'|'canvas';complete:boolean;connectors:string[];tables:string[];schemaReferences?:ResourceSchemaReference[];operations:{type:string;operationId?:string;connector?:string}[]}
+export interface PackageResource {id:string;kind:'cloud-flow'|'canvas';complete:boolean;connectors:string[];tables:string[];schemaReferences?:ResourceSchemaReference[];sharepointBindingsComplete?:boolean;sharepointSources?:{siteUrl:string;listId:string;sourceName:string}[];operations:{type:string;operationId?:string;connector?:string}[]}
 export interface PackageRelationship {schemaName:string;kind:'one-to-many'|'many-to-many'|'unsupported';complete:boolean;metadataSha256:string;referencedEntity?:string;referencedAttribute?:string;referencingEntity?:string;referencingAttribute?:string;entity1?:string;entity2?:string;intersectEntity?:string;cascade:Record<string,string>}
 export interface PackageInventory {
   schemaVersion:1;scope:'package-metadata-inventory';packageSha256:string;archiveComplete:boolean;resourceInventoryComplete:boolean;
   solution?:{name:string;version:string;managed:boolean};files:PackageFile[];
   components:{type:number;id?:string;name?:string;behavior?:string}[];
-  tables:{name:string;partial:boolean;attributes:{name:string;type:string;required:string;metadataSha256:string;constraints:PackagedConstraints}[];keys:{schemaName:string;attributes:string[];metadataSha256:string}[]}[];
+  tables:{name:string;partial:boolean;referenceOnly?:boolean;attributes:{name:string;type:string;required:string;metadataSha256:string;constraints:PackagedConstraints}[];keys:{schemaName:string;attributes:string[];metadataSha256:string}[]}[];
   relationships:PackageRelationship[];
   connections:{name:string;connector:string}[];resources:PackageResource[];issues:string[];complianceVerified:false;
 }
@@ -110,7 +111,9 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
         return {schemaName,attributes:columns,metadataSha256:sha(JSON.stringify(key))};
       });
       if(keys.length>10||new Set(keys.map(key=>key.schemaName.toLowerCase())).size!==keys.length)throw new Error('Ambiguous package keys');
-      report.tables.push({name,partial:root?.behavior!=='0',attributes,keys});
+      const emptyReferencePayload=(value:unknown):boolean=>value===''||value===undefined||value!==null&&typeof value==='object'&&Object.entries(value).every(([key,child])=>key==='@_Id'?child==='Mscrm.Templates':!key.startsWith('@_')&&emptyReferencePayload(child));
+      const referenceOnly=root?.behavior==='2'&&attributes.length===0&&keys.length===0&&!!info&&info['@_unmodified']==='1'&&Object.entries(info).every(([key,value])=>['@_Name','@_unmodified'].includes(key)||key==='attributes'&&emptyReferencePayload(value))&&Object.entries(entity).every(([key,value])=>['Name','EntityInfo'].includes(key)||key==='RibbonDiffXml'&&emptyReferencePayload(value));
+      report.tables.push({name,partial:root?.behavior!=='0',referenceOnly,attributes,keys});
     }
     const relationships=array(custom.EntityRelationships?.EntityRelationship),relationshipNames=new Set<string>();if(relationships.length>10000)throw new Error('Relationship schema inventory limit');
     for(const relationship of relationships){
@@ -167,6 +170,13 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
               if(schema.entitySet){if(resource.schemaReferences!.length<300)resource.schemaReferences!.push({resource:id,entitySet:schema.entitySet,columns:schema.columns});else {resource.complete=false;issue(`Flow ${id}: explicit schema references exceed their inventory bound`);}}
               for(const reason of schema.unavailable)issue(`Flow ${id}: ${reason}`);
             }else if(connector==='shared_commondataservice'){resource.complete=false;issue(`Flow ${id}: legacy Dataverse connector requires an independent schema and environment adapter`);}
+            else if(connector==='shared_sharepointonline'){
+              if(resource.sharepointBindingsComplete===undefined)resource.sharepointBindingsComplete=true;
+              const params=operation.inputs?.parameters;
+              if(typeof params?.dataset==='string'&&sharepointSiteUrl.safeParse(params.dataset).success&&typeof params.table==='string'){
+                try{(resource.sharepointSources??=[]).push({siteUrl:params.dataset,listId:guid(params.table),sourceName:host.operationId});}catch{resource.complete=false;resource.sharepointBindingsComplete=false;issue(`Flow ${id}: SharePoint list binding is not a literal GUID`);}
+              }else{resource.complete=false;resource.sharepointBindingsComplete=false;issue(`Flow ${id}: SharePoint operation needs an explicit site/list binding adapter`);}
+            }
           } else if(!['Recurrence','Scope','Foreach','Until','If','Switch','Compose','ParseJson','InitializeVariable','SetVariable','AppendToArrayVariable','AppendToStringVariable','IncrementVariable','DecrementVariable','Select','Query','Table','Join','Terminate','Wait','Response'].includes(type)) {resource.complete=false;issue(`Flow ${id} uses unsupported operation type ${type}`);}
           resource.operations.push(record);
           if(operation.actions)walk(operation.actions,depth+1);if(operation.else?.actions)walk(operation.else.actions,depth+1);if(operation.default?.actions)walk(operation.default.actions,depth+1);
@@ -181,7 +191,11 @@ export async function inspectSolutionPackage(file:string,signal?:AbortSignal,lim
       const nested=await archive(buffer,`${path}!/`,report,budget,limits,signal);const ds=nested.get('references/datasources.json');if(!ds)throw new Error('Canvas datasource metadata is missing');
       const datasources=json(ds).DataSources;if(!Array.isArray(datasources))throw new Error('Unsupported Canvas datasource metadata');
       const resource:PackageResource={id:name,kind:'canvas',complete:false,connectors:[],tables:[],operations:[]};
-      for(const data of datasources)if(data.Type==='NativeCDSDataSourceInfo') {resource.connectors.push('shared_commondataserviceforapps');resource.tables.push(logical(data.LogicalName));}else if(!['OptionSetInfo','StaticDataSourceInfo','ViewInfo'].includes(data.Type))issue(`Canvas ${name} has unsupported datasource type`);
+      for(const data of datasources)if(data.Type==='NativeCDSDataSourceInfo') {resource.connectors.push('shared_commondataserviceforapps');resource.tables.push(logical(data.LogicalName));}
+      else if(data.Type==='ConnectedDataSourceInfo'&&standardConnectorId(data.ApiId??'')==='shared_sharepointonline'){
+        if(typeof data.Name!=='string'||!data.Name.trim()||data.Name.length>200||!sharepointSiteUrl.safeParse(data.DatasetName).success||typeof data.TableName!=='string')throw Error('Malformed Canvas SharePoint datasource');
+        resource.sharepointBindingsComplete=true;resource.connectors.push('shared_sharepointonline');(resource.sharepointSources??=[]).push({sourceName:data.Name,siteUrl:data.DatasetName,listId:guid(data.TableName)});
+      }else if(!['OptionSetInfo','StaticDataSourceInfo','ViewInfo'].includes(data.Type))issue(`Canvas ${name} has unsupported datasource type`);
       resource.connectors=[...new Set(resource.connectors)].sort();resource.tables=[...new Set(resource.tables)].sort();report.resources.push(resource);issue(`Canvas ${name} still requires formula, control, library and runtime binding verification`);
       resource.schemaReferences=resource.tables.map(logicalName=>({resource:name,logicalName,columns:[]}));
       for(const field of ['BackgroundImageUri','AdditionalUris0'])if(text(app[field]))used.add(packagePath(app[field]));

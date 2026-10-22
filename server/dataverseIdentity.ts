@@ -14,7 +14,14 @@ export async function verifyDataverseIdentity(command:Command,request:Request,en
     }),
     Promise.resolve().then(async()=>{
       const profile=await command('dataverse',['auth','who']);
-      if(identityField(profile,'Tenant').toLowerCase()!==identity.tenantId.toLowerCase()||identityField(profile,'User').toLowerCase()!==identity.username.toLowerCase()||identityRoot(identityField(profile,'Environment'))!==target)throw new Error('Dataverse profile differs from the approved account/environment');
+      if(identityField(profile,'Tenant').toLowerCase()!==identity.tenantId.toLowerCase()||identityField(profile,'User').toLowerCase()!==identity.username.toLowerCase())throw new Error('Dataverse profile differs from the approved account');
+      const defaultTarget=identityRoot(identityField(profile,'Environment'));
+      if(defaultTarget!==target){
+        // The CLI accepts an explicit target independently of its default. Check
+        // the executing target account as well; never select a global profile.
+        const user=z.object({systemuserid:dataverseGuid,domainname:z.string(),isdisabled:z.literal(false),applicationid:z.null()}).parse(await request('GET',`systemusers(${binding.userId})?$select=systemuserid,domainname,isdisabled,applicationid`));
+        if(user.systemuserid.toLowerCase()!==binding.userId.toLowerCase()||user.domainname.toLowerCase()!==identity.username.toLowerCase())throw new Error('Explicit-target Dataverse account differs from the approved account');
+      }
     }),
   ]);
   const failed=checks.find((check):check is PromiseRejectedResult=>check.status==='rejected');if(failed)throw failed.reason;

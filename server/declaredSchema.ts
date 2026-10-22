@@ -56,7 +56,8 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
       if(url.protocol!=='https:'||url.username||url.password||url.port||url.pathname!=='/'||url.search||url.hash||!/^[-a-z0-9]+\.crm\d*\.dynamics\.com$/.test(url.hostname))return unavailable('Schema discovery requires an approved public-cloud Dataverse environment URL');
       if(!identity||!binding)return unavailable('Schema discovery requires the approved platform identity and organization/user binding');
       const tables=manifest.targetComponents.filter(component=>component.kind==='dataverse-table').map(table=>({...table,logicalName:table.logicalName.toLowerCase()}));
-      if(!tables.length)return unavailable('No declared Dataverse table contracts are available; resource-derived schema coverage remains unverified');
+      const emptyPackage=manifest.recovery.scope==='empty-solution-only'&&!!manifest.preparation;
+      if(!tables.length&&!emptyPackage)return unavailable('No declared Dataverse table contracts are available; resource-derived schema coverage remains unverified');
       if(tables.some(table=>!/^[_a-z][_a-z0-9]*$/.test(table.logicalName)))return unavailable('Schema contracts require valid Dataverse table logical names');
       const actions=manifest.postDeployActions.filter(action=>action.type==='schema-check');
       if(tables.length>100||new Set(tables.map(table=>table.logicalName.toLowerCase())).size!==tables.length||tables.some(table=>actions.filter(action=>action.component===table.key).length!==1))return unavailable('Every declared Dataverse table requires exactly one unambiguous approved column contract');
@@ -68,7 +69,7 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
       };
       const observations:DeclaredSchemaObservation['observations']=[];
       const request:Request=async(method,resource)=>{
-        if(method!=='GET'||!(resource==='WhoAmI'||resource===currentOrganizationResource||resource.startsWith('EntityDefinitions')))throw new Error('Schema observer accepts metadata and fixed identity reads only');
+        if(method!=='GET'||!(resource==='WhoAmI'||resource===currentOrganizationResource||resource===`systemusers(${binding.userId})?$select=systemuserid,domainname,isdisabled,applicationid`||resource.startsWith('EntityDefinitions')))throw new Error('Schema observer accepts metadata and fixed identity reads only');
         if(resource.length>4000){failure='limit';throw new Error('Schema request exceeded its bound');}
         const output=await command('dataverse',['api','request','--target','dataverse','--environment',url.origin,'--method','GET','--path',`/api/data/v9.2/${resource}`]);
         bytes+=Buffer.byteLength(output);if(bytes>8*1024*1024){failure='limit';throw new Error('Schema observation exceeded its byte bound');}
@@ -79,7 +80,8 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
         return value;
       };
       stage='initial-identity';
-      await verifyDataverseIdentity(command,request,url.origin,binding,identity);
+      const initialIdentity=await verifyDataverseIdentity(command,request,url.origin,binding,identity);
+      if(emptyPackage)observations.push({resource:'verified-empty-package-target-identity',value:initialIdentity});
       stage='resource-contracts';
       await verifyResourceSchemaReferences(input.resourceSchemaReferences??[],tables,actions,request);
       if(['build','test','import'].includes(input.phase)){stage='migration';await verifyMigrationCompatibility(actions,tables,request);}
@@ -97,7 +99,7 @@ export function createDeclaredSchemaObserver(commands:Pick<DeliveryDependencies,
       const observedDiagnostic={...diagnostic(),stage:'complete' as const,failure:'none' as const};
       return declaredSchemaObservation.parse({...base,status:'observed',checkedAt:new Date().toISOString(),identity,binding,tables:tables.map(table=>table.logicalName),observations,
         diagnostic:observedDiagnostic,
-        reason:['build','test','import'].includes(input.phase)?'Declared target migration compatibility passed identity-bound checks; final columns and comprehensive schema remain unverified':'Declared target columns and any declared structure contracts passed identity-bound checks; complete source/package schemas, undeclared relationships/keys and effective security remain unverified'});
+        reason:emptyPackage?'Target identity was verified for the empty-package scope; no table schema or data restoration is certified':['build','test','import'].includes(input.phase)?'Declared target migration compatibility passed identity-bound checks; final columns and comprehensive schema remain unverified':'Declared target columns and any declared structure contracts passed identity-bound checks; complete source/package schemas, undeclared relationships/keys and effective security remain unverified'});
     }catch{
       const observedFailure=input.signal?.aborted?'cancelled':diagnostic().failure;failure=observedFailure;
       const next=observedFailure==='provider'?'Restore the supported Dataverse CLI connection and retry this read-only check.':observedFailure==='cancelled'?'The check was cancelled; retry after the owning lifecycle permits new work.':observedFailure==='limit'?'Reduce the scoped observation or use a separately reviewed bounded adapter.':remediation[stage];

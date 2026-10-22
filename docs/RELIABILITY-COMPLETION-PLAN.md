@@ -1,5 +1,7 @@
 # Plan to close the three remaining reliability gaps
 
+Historical plan prepared 10 October 2026. Use the [current roadmap](AGENT-SWARM-IMPLEMENTATION-PLAN.md) and [status](PRODUCTION-GOAL-STATUS.md) for present priorities. The [backend pilot](BACKEND-PILOT-COMPLETION.md) closes its narrow development slice only; this plan does not authorize further tenant work or resume paused Copilot work.
+
 Prepared 10 October 2026 from the recorded tenant-validation results. This is an execution plan; no additional deployment, sign-in or restoration is performed by creating it. Refresh live state before execution.
 
 ## Targets and scope

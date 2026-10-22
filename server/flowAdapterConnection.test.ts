@@ -5,10 +5,15 @@ vi.mock('./skillRegistry.ts',()=>({discoverSkills:()=>({skills:[]})}));
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js',()=>({StdioClientTransport:class{onclose?:()=>void;closed=false;constructor(){state.transport=this;}async close(){await state.transportClose();if(!this.closed){this.closed=true;this.onclose?.();}}}}));
 vi.mock('@modelcontextprotocol/sdk/client/index.js',()=>({Client:class{connect(...args:unknown[]){return state.connect(...args);}listTools(...args:unknown[]){return state.list(...args);}callTool(...args:unknown[]){return state.call(...args);}async close(){await state.clientClose();await state.transport?.close();}}}));
 import {connectFlowAdapter} from './flowAdapter.ts';
-const names=['whoami','get_flow','get_flow_context','preflight_flow','publish_flow','disable_flow','get_run_history','get_run_action_content'];
+const names=['whoami','get_flow','get_flow_context','preflight_flow','publish_flow','disable_flow','get_run_history','get_run_details','get_run_actions','get_run_action_content'];
 const roots:string[]=[];
 afterEach(async()=>{vi.unstubAllEnvs();vi.resetAllMocks();state.transport=null;await Promise.all(roots.splice(0).map(root=>fs.rm(root,{recursive:true,force:true,maxRetries:5})));});
 async function fixture(){const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-flow-connect-'));roots.push(root);const entry=path.join(root,'synthetic.mjs');await fs.writeFile(entry,'// never executed: mocked transport');vi.stubEnv('SWARM_FLOWAGENT_ENTRY',entry);state.connect.mockResolvedValue(undefined);state.list.mockResolvedValue({tools:names.map(name=>({name}))});state.call.mockResolvedValue({content:[{type:'text',text:'{"observed":true}'}]});state.clientClose.mockResolvedValue(undefined);state.transportClose.mockResolvedValue(undefined);const controller=new AbortController();return {root,controller,connect:()=>connectFlowAdapter(root,controller.signal)};}
+it('requires exact run detail capability before admitting a flow runtime',async()=>{
+  const f=await fixture();state.list.mockResolvedValue({tools:names.filter(name=>name!=='get_run_details').map(name=>({name}))});
+  await expect(f.connect()).rejects.toThrow('get_run_details is missing');expect(state.call).not.toHaveBeenCalled();expect(state.clientClose).toHaveBeenCalledOnce();
+});
+it('requires native action status observation before admitting the functional failure verifier',async()=>{const f=await fixture();state.list.mockResolvedValue({tools:names.filter(name=>name!=='get_run_actions').map(name=>({name}))});await expect(f.connect()).rejects.toThrow('get_run_actions is missing');expect(state.call).not.toHaveBeenCalled();expect(state.clientClose).toHaveBeenCalledOnce();});
 it('discovers paged required capabilities and refuses calls after joined cleanup',async()=>{
   const f=await fixture();state.list.mockResolvedValueOnce({tools:names.slice(0,4).map(name=>({name})),nextCursor:'page-2'}).mockResolvedValueOnce({tools:names.slice(4).map(name=>({name}))});const adapter=await f.connect();expect(await adapter.call('get_flow',{})).toEqual({observed:true});expect(state.list.mock.calls[1][0]).toEqual({cursor:'page-2'});await Promise.all([adapter.close(),adapter.close()]);expect(state.clientClose).toHaveBeenCalledOnce();await expect(adapter.call('get_flow',{})).rejects.toThrow('closed');expect(state.call).toHaveBeenCalledOnce();
 });

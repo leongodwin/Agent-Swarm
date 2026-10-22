@@ -92,8 +92,11 @@ function start(m: Extract<ToHost, { op: 'spawn' }>) {
   }
   const h: Held = { proc, meta: m.meta, attached: true, backlog: [], bytes: 0, exit: null, killed: false };
   held.set(m.id, h);
-  send({ op: 'spawned', id: m.id, pid: proc.pid });
+  let advertisedPid=proc.pid;
+  send({ op: 'spawned', id: m.id, pid: advertisedPid });
   proc.onData((data) => {
+    // Windows assigns the native PID only after its data pipe becomes ready.
+    if(proc.pid>0&&proc.pid!==advertisedPid){advertisedPid=proc.pid;send({op:'spawned',id:m.id,pid:advertisedPid});}
     if (h.attached && office) return send({ op: 'data', id: m.id, data });
     h.backlog.push(data);
     h.bytes += data.length;

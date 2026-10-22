@@ -1,5 +1,24 @@
+import {functionalTransportCheck} from '../shared/functionalShowcase.ts';
+import {verifyFunctionalRejection} from './functionalRejection.ts';
+import {createFunctionalRecovery} from './functionalRecovery.ts';
+import {withVerificationBudget} from './verificationBudget.ts';
+import {inspectNativeClaimTermination} from './nativeClaimTermination.ts';
+import {inspectNativeDeniedDiagnostic} from './nativeDeniedDiagnostic.ts';
+import {reconcileNativeClaimSession,nativeClaimRequestSchema} from './nativeClaimSession.ts';
+import {assertQualityManifest,validateQualityDocument,qualityDocumentFile,qualityCommandFile,qualityHash,qualityBytesHash,qualityContractHash,buildQualityIndex,assertQualityDecisions} from './qualityEvidence.ts';
+import {createProductionNativeQa} from './productionNativeQa.ts';
+import {verifyNativeDeniedAccess,type NativeDeniedFactory} from './nativeDeniedAccess.ts';
+import {browserBridgeEndpoint,coordinatorBrowserEnabled} from './browserTools.ts';
+import {verifyCoordinatorReadiness} from './coordinatorBrowserVerification.ts';
+import {qualityDecisionSchema} from '../shared/qualityEvidence.ts';
+import {manifestDigest} from './lifecycleGovernance.ts';
+import {assertFirstSliceComponents,firstSliceEvidence,firstSliceContractHash} from './firstSlice.ts';
 import fs from 'node:fs/promises';
+import {unlinkSync} from 'node:fs';
 import {stablePackageDigest} from './deliveryPackage.ts';
+import {prepareTrackedImport,trackedImportCommand,verifyTrackedImport,recordTrackedImportIntent,type TrackedImport} from './trackedImport.ts';
+import {pinnedArtifactSchema,nativeEnvironment} from './pinnedPreparationContracts.ts';
+import {readPinnedBlob,collectPinnedPreparation,verifyLocalPreparation,verifyEmptySolution,digest as preparationDigest} from './pinnedPreparation.ts';
 import {verifyDeploymentSettings} from './deploymentSettings.ts';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -10,6 +29,11 @@ import { readBoundedJson } from './boundedJson.ts';
 import {parseUnambiguousJson} from './unambiguousJson.ts';
 import { validateDeliveryState, type DeliveryStoredState } from './deliveryState.ts';
 import {inspectDeliveryRecovery,recoverEmptyDelivery} from './deliveryRecovery.ts';
+import {reconcileRetainedCloudHistory,retainedRecoverySchema,type RetainedTarget} from './retainedCloudRecovery.ts';
+import {verifyDataverseIdentity} from './dataverseIdentity.ts';
+import {handoffRetainedDelivery,rollbackDeliveryHandoff} from './deliveryHandoff.ts';
+import {runNativeTree} from './nativeTree.ts';
+import {journalNativeCommand,journalPinnedPreparation} from './nativeCommandJournal.ts';
 import {acquireDeliveryLease,type DeliveryLease} from './deliveryLease.ts';
 import {connectOwnedFlowAdapter} from './ownedFlowAdapter.ts';
 import { resolveTenancyCommand } from './tenancy.ts';
@@ -19,35 +43,53 @@ import type { DeliveryRun, DeliveryView, DeliveryRelease,DeliveryAttempt } from 
 import {deliveryAttemptSummary} from './deliveryAttempts.ts';
 import {nextPreflightRetry,preflightContext,preflightDeferred} from './deliveryRetry.ts';
 
-import { releasePlanSchema, acceptanceScope } from './releasePlan.ts';
+import { releasePlanSchema, acceptanceScope, type ReleasePlan } from './releasePlan.ts';
+import {assertMonitoringContract,type MonitoringManifest} from './monitoringContract.ts';
 import {architectureReviewSchema,verifyCommittedArchitecture,requireArchitectureReview} from './architectureGate.ts';
 import { verifyIndependently } from './independentVerification.ts';
 import { verifyApiIndependently } from './apiVerification.ts';
 import { discoverSkills, selectSkills } from './skillRegistry.ts';
 import { acquireResourceLease } from './resourceLease.ts';
 import { targetBindingSchema, targetComponentSchema, targetActionSchema, verifyTarget, mapTargetComponents, verifyMappedCanvasUrls, reconcileWorkflowAction, verifyConnectionReference, type Request,type TargetAction } from './targetOperations.ts';
+import {sharepointDeliverySchema,verifySharepointDelivery} from './sharepointDelivery.ts';
+import {inspectSolutionPackage} from './packageInventory.ts';
+import {assertSharepointPackage} from './sharepointPackage.ts';
+import {connectSharepointGraph} from './sharepointGraph.ts';
 import { platformIdentitySchema, verifyPlatformAuthentication,verifyTypedActionAuthentication } from './platformAuth.ts';
 import { connectFlowAdapter, verifyCloudFlowContext, verifyCloudFlowBindings, verifyCloudFlowActivationBindings, verifyCloudFlowRun, type FlowAdapter } from './flowAdapter.ts';
 import { reconcileCloudFlow, reconcileCopilot } from './platformLifecycle.ts';
 import { reconcileAdditionalAction, verifyMigrationCompatibility } from './deploymentAdapters.ts';
 import { canvasResource } from './canvasOwnership.ts';
 import { lifecycleResultSchema,requireLifecycleGovernance, type LifecycleCheck, type GovernancePhase } from './lifecycleGovernance.ts';
+import {PlatformCommandError,providerErrorCode} from './platformCommandError.ts';
+import {verifyBackendJourney} from './backendJourney.ts';
 
 const command = z.object({ executable: z.string().min(1), args: z.array(z.string()).max(100) }).strict();
 export const deliveryManifest = z.object({
   schemaVersion: z.literal(1), solutionUniqueName: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/),
   solutionVersion: z.string().regex(/^\d+\.\d+\.\d+\.\d+$/), solutionZip: z.string().min(1),
   settingsFile: z.string().min(1).optional(),settingsSha256:z.string().regex(/^[a-f0-9]{64}$/).optional(), hasUi: z.boolean(),
+  manualDevelopmentGovernance:z.literal(true).optional(),
+  importTransport:z.enum(['pac','dataverse-tracked']).optional(),
+  preparation:pinnedArtifactSchema.optional(),
   canvasAuthoringApps: z.array(z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i)).max(30).default([]),
-  recovery: z.object({ runbook: z.string().min(1), rehearsalReport: z.string().min(1) }).strict(),
+  recovery: z.object({ runbook: z.string().min(1), rehearsalReport: z.string().min(1).optional(),scope:z.enum(['pilot-owned-development-records','empty-solution-only','functional-owned-request']).optional() }).strict(),
   documentation: z.array(z.string().min(1)).min(3),
-  build: z.array(command).min(1).max(10), test: z.array(command).min(1).max(10),
-  postDeploy: z.array(command).max(10).default([]), verify: z.array(command).min(1).max(10),
+  build: z.array(command).max(10), test: z.array(command).max(10),
+  postDeploy: z.array(command).max(10).default([]), verify: z.array(command).max(10),
   targetBinding: targetBindingSchema.optional(),
   platformIdentity: platformIdentitySchema.optional(),
   targetComponents: z.array(targetComponentSchema).max(100).default([]),
+  sharepoint:sharepointDeliverySchema.optional(),
   postDeployActions: z.array(targetActionSchema).max(30).default([]),
 }).strict().superRefine((manifest, ctx) => {
+  if(manifest.sharepoint&&(!manifest.platformIdentity||manifest.sharepoint.plan.tenantId.toLowerCase()!==manifest.platformIdentity.tenantId.toLowerCase()||manifest.sharepoint.plan.username.toLowerCase()!==manifest.platformIdentity.username.toLowerCase()||manifest.sharepoint.bindings.some(b=>manifest.targetComponents.some(c=>c.key===b.key))))ctx.addIssue({code:'custom',message:'External SharePoint resources require the same platform tenant/user and distinct target keys'});
+  if(manifest.preparation){if(manifest.build.length||manifest.test.length||manifest.verify.length||manifest.postDeploy.length)ctx.addIssue({code:'custom',message:'Pinned preparation forbids custom executable commands'});}
+  else if(!manifest.build.length||!manifest.test.length||!manifest.verify.length)ctx.addIssue({code:'custom',message:'Legacy delivery requires build, test and verification commands'});
+  if(manifest.recovery.scope==='empty-solution-only'&&(!manifest.preparation||!manifest.manualDevelopmentGovernance||manifest.importTransport!=='dataverse-tracked'||manifest.hasUi||manifest.targetComponents.length||manifest.postDeployActions.length||manifest.settingsFile))ctx.addIssue({code:'custom',message:'Empty-solution exclusion requires typed tracked development import with no application components/actions'});
+  if(manifest.importTransport==='dataverse-tracked'&&(!manifest.manualDevelopmentGovernance||manifest.settingsFile))ctx.addIssue({code:'custom',message:'Tracked import currently requires reviewed manual development governance without PAC settings or publish-changes'});
+  if(manifest.importTransport==='dataverse-tracked'&&(!manifest.targetBinding||!manifest.platformIdentity))ctx.addIssue({code:'custom',message:'Tracked import requires the approved target binding and executing platform identity'});
+  if(!manifest.recovery.scope&&!manifest.recovery.rehearsalReport)ctx.addIssue({code:'custom',message:'Production recovery requires a separate-environment rehearsal report'});
   if(!!manifest.settingsFile!==!!manifest.settingsSha256)ctx.addIssue({code:'custom',message:'Deployment settings require both settingsFile and an approved settingsSha256'});
   if ((manifest.targetComponents.length || manifest.postDeployActions.length) && !manifest.targetBinding) ctx.addIssue({ code: 'custom', message: 'Typed target operations require targetBinding' });
   if (new Set(manifest.targetComponents.map((c) => c.key)).size !== manifest.targetComponents.length || new Set(manifest.postDeployActions.map((a) => a.id)).size !== manifest.postDeployActions.length) ctx.addIssue({ code: 'custom', message: 'Component keys and action IDs must be unique' });
@@ -82,6 +124,8 @@ export interface DeliveryDependencies {
   governance?: LifecycleCheck;
   flow?: typeof connectFlowAdapter;
   verify?: typeof verifyIndependently;
+  nativeDenied?: NativeDeniedFactory;
+  sharepoint?: typeof connectSharepointGraph;
   run(command: DeliveryCommand, cwd: string, env: Record<string, string>, signal: AbortSignal): Promise<string>;
 }
 export const deliveryCommands: DeliveryDependencies = {
@@ -89,7 +133,7 @@ export const deliveryCommands: DeliveryDependencies = {
     const cmd = resolveTenancyCommand(command.executable);
     if (signal.aborted) return Promise.reject(new Error('Delivery cancelled'));
     return new Promise((resolve, reject) => {
-      const child = spawn(cmd.file, [...cmd.args, ...command.args], { cwd, env: { ...process.env, ...env }, windowsHide: true,
+      const child = spawn(cmd.file, [...cmd.args, ...command.args], { cwd, env: nativeEnvironment({ ...process.env, ...env },command.args,cmd.file), windowsHide: true,
         detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '', stderr = '', failure = '',bytes=0;
       const outDecoder=new TextDecoder('utf-8',{fatal:true}),errDecoder=new TextDecoder('utf-8',{fatal:true});
@@ -123,7 +167,7 @@ export const deliveryCommands: DeliveryDependencies = {
         clean();
         try{await stopping;}catch{failure='Delivery process-tree cleanup is unverified; inspect native processes before recovery';}
         if(!failure)try{stdout+=outDecoder.decode();stderr+=errDecoder.decode();}catch{failure='Delivery output contained invalid UTF-8';}
-        if (failure || code !== 0 || pacReportedError(command.executable, stdout)) reject(new Error(`${path.basename(command.executable)} failed: ${failure || stderr.slice(-4000) || (pacReportedError(command.executable, stdout) ? stdout.slice(-4000) : `exit ${code}`)}`));
+        if (failure || code !== 0 || pacReportedError(command.executable, stdout)) reject(new PlatformCommandError(`${path.basename(command.executable)} failed: ${failure || stderr.slice(-4000) || (pacReportedError(command.executable, stdout) ? stdout.slice(-4000) : `exit ${code}`)}${providerErrorCode(stdout)?` (provider ${providerErrorCode(stdout)})`:''}`,providerErrorCode(stdout)));
         else resolve(stdout);
       })().catch(reject);});
     });
@@ -155,10 +199,20 @@ export function installedSolution(output: string, name: string, version: string)
 }
 
 /** One real release at a time. An interrupted/failed release never resumes deployment automatically. */
+/** Include the raw owned-record proof on every retry, not just its summary. */
+export async function retainOwnedRecoveryEvidence(scope:string|undefined,directory:string,files:string[]) {
+  if(scope!=='pilot-owned-development-records')return;
+  const required=['independent-recovery.json','independent-recovery-journal.json'];
+  await Promise.all(required.map(file=>containedFile(directory,file)));
+  for(const file of required)if(!files.includes(file))files.push(file);
+}
+
 export class DeliveryService {
   private state: DeliveryStoredState = { schemaVersion: 1, policy: null, runs: [], releases: [], blockers: [], revision: 0 };
   onChange: () => void = () => {};
   checkCapabilities: (repoId: string, cwd: string, environment: string, force: boolean) => Promise<{ status: string; configHash?: string; checks: { id: string; category: string; passed: boolean; remedy: string }[] }> = async () => { throw new Error('Configure capability checks before delivery'); };
+  validateMonitoring?: (repoId:string,plan:ReleasePlan,manifest:MonitoringManifest,environmentUrl:string)=>void;
+  checkDeliveryRecord?: (repo:Pick<RepoView,'id'>,plan:ReleasePlan) => void;
   checkGovernance?: LifecycleCheck;
   private lease: DeliveryLease | null = null;
   private writer = new SerialWriter();
@@ -166,12 +220,13 @@ export class DeliveryService {
   private closed = false;
   private draining = false;
   get isDraining(){return this.draining;}
-  setDraining(value:boolean){if(!value)this.requireReady();this.draining=value;}
+  setDraining(value:boolean){if(!value){this.requireReady();try{unlinkSync(path.join(this.root,'delivery-handoff-maintenance.json'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}this.draining=value;}
   get available(){return this.ready&&!this.closed&&!this.stateFailed&&!this.ownershipLost;}
   private startupUnavailable=false;
   private permanentlyClosed=false;
   private recovering=false;
-  private recoveryWork:Promise<DeliveryView>|null=null;
+  private recoveryWork:Promise<unknown>|null=null;
+  private retainedRecoveryController:AbortController|undefined;
   private stateFailed = false;
   private ownershipLost = false;
   private ready = false;
@@ -185,13 +240,13 @@ export class DeliveryService {
     return this.initializing;
   }
   async recoveryInspection(){if(this.demo||!this.startupUnavailable||this.permanentlyClosed)throw new HttpError(409,'Startup recovery is not available');return inspectDeliveryRecovery(this.root);}
-  recoverStartup(expectedSha256:string):Promise<DeliveryView>{
+  recoverStartup(expectedSha256:string,expectedOwnerPid?:number):Promise<DeliveryView>{
     if(this.demo||!this.startupUnavailable||this.permanentlyClosed||this.recovering||!this.draining)return Promise.reject(new HttpError(409,'Startup recovery requires an unavailable delivery service in maintenance mode'));
     this.recovering=true;
     const assertOpen=()=>{if(this.permanentlyClosed||!this.draining)throw new HttpError(409,'Delivery closed or maintenance changed during recovery');};
-    this.recoveryWork=(async()=>{
+    const work=(async()=>{
       try{
-        await recoverEmptyDelivery(this.root,expectedSha256,assertOpen);
+        await recoverEmptyDelivery(this.root,expectedSha256,assertOpen,expectedOwnerPid);
         assertOpen();
         this.closed=false;this.stateFailed=false;this.ownershipLost=false;this.startupUnavailable=false;
         await this.init({allowUnavailable:true});
@@ -200,9 +255,37 @@ export class DeliveryService {
         return this.view();
       }finally{this.recovering=false;this.recoveryWork=null;}
     })();
-    return this.recoveryWork;
+    this.recoveryWork=work;return work;
+  }
+  reconcileRetainedStartup(input:unknown,externalGuard?:()=>void):Promise<Awaited<ReturnType<typeof reconcileRetainedCloudHistory>>>;
+  reconcileRetainedStartup(input:unknown,externalGuard:(()=>void)|undefined,resume:true):Promise<{scope:'delivery-maintenance-resumption';maintenanceRequired:boolean;releaseApproved:boolean;deploymentOutcomeVerified:boolean}>;
+  reconcileRetainedStartup(input:unknown,externalGuard:()=>void=()=>{},resume=false){
+    if(this.demo||!this.startupUnavailable||this.permanentlyClosed||this.recovering||!this.draining)return Promise.reject(new HttpError(409,'Retained reconciliation requires unavailable delivery in maintenance'));
+    const request=retainedRecoverySchema.parse(input);this.recovering=true;
+    const controller=new AbortController();this.retainedRecoveryController=controller;const timer=setTimeout(()=>controller.abort(),120000);
+    const assertOpen=()=>{externalGuard();if(this.permanentlyClosed||!this.draining||controller.signal.aborted)throw new HttpError(409,'Retained reconciliation cancelled or maintenance changed');};
+    const command=async(executable:string,args:string[])=>{assertOpen();const result=await this.deps.run({executable,args},this.root,{},controller.signal);assertOpen();return result;};
+    const read=async(target:RetainedTarget,resource:string)=>{
+      const result=await command('dataverse',['api','request','--target','dataverse','--environment',target.environmentUrl,'--method','GET','--path',`/api/data/v9.2/${resource}`]);
+      return parseUnambiguousJson(result.trim(),{maxBytes:1024*1024});
+    };
+    const observe=()=>reconcileRetainedCloudHistory(this.root,request,{
+      verifyTarget:target=>verifyDataverseIdentity(command,async(method,resource)=>{if(method!=='GET')throw new HttpError(409,'Reconciliation permits read-only observations');return read(target,resource);},target.environmentUrl,target.binding,target.identity),
+      importJob:(target,id)=>read(target,`importjobs(${id})?$select=importjobid,solutionname,progress,startedon,completedon`),
+    },assertOpen,this.resourceLeaseRoot);
+    const work=(async()=>{
+      if(!resume)return observe();
+      const prior=await rollbackDeliveryHandoff(this.root,this.resourceLeaseRoot,assertOpen);
+      if(prior!=='committed'){const receipt=await observe();assertOpen();await handoffRetainedDelivery(this.root,this.resourceLeaseRoot,receipt,assertOpen);}
+      assertOpen();this.closed=false;this.stateFailed=false;this.ownershipLost=false;this.startupUnavailable=false;
+      await this.init({allowUnavailable:true});if(!this.available)throw new HttpError(409,'Lease handoff completed; delivery initialization remains unavailable');
+      return {scope:'delivery-maintenance-resumption' as const,maintenanceRequired:true,releaseApproved:false,deploymentOutcomeVerified:false};
+    })().finally(()=>{clearTimeout(timer);this.retainedRecoveryController=undefined;this.recovering=false;this.recoveryWork=null;});
+    this.recoveryWork=work;return work;
   }
   private async initialize() {
+    const maintenance=await readBoundedJson(path.join(this.root,'delivery-handoff-maintenance.json'),16384);
+    if(maintenance!==undefined){z.strictObject({schemaVersion:z.literal(1),scope:z.literal('delivery-handoff-maintenance')}).parse(maintenance);this.draining=true;}
     if (this.demo) { this.ready = true; return; }
     try {
       await fs.mkdir(this.root, { recursive: true });
@@ -241,7 +324,7 @@ export class DeliveryService {
   private async command(command:DeliveryCommand,cwd:string,env:Record<string,string>,signal:AbortSignal,additionalOwnership?:()=>Promise<void>){
     await this.assertLeaseOwned();await additionalOwnership?.();signal.throwIfAborted();
     await this.assertLeaseOwned();signal.throwIfAborted();
-    const output=await this.deps.run(command,cwd,env,signal);
+    const output=await journalNativeCommand(this.root,this.lease!.identitySha256,command,cwd,env.SWARM_DELIVERY_RUN_ID,async()=>{await this.assertLeaseOwned();await additionalOwnership?.();signal.throwIfAborted();},context=>{if(this.deps.run===deliveryCommands.run&&process.platform==='win32'){const resolved=resolveTenancyCommand(command.executable);return runNativeTree(resolved.file,[...resolved.args,...command.args],cwd,env,signal,context).then(output=>{if(pacReportedError(command.executable,output))throw new PlatformCommandError('PAC reported an import failure',providerErrorCode(output));return output;});}return this.deps.run(command,cwd,env,signal);});
     await this.assertLeaseOwned();await additionalOwnership?.();signal.throwIfAborted();
     await this.assertLeaseOwned();signal.throwIfAborted();
     return output;
@@ -284,16 +367,20 @@ export class DeliveryService {
     this.requireReady();
     if (this.demo || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Enable real delivery and wait for the active run');
     const plan = releasePlanSchema.parse(input);
+    this.checkDeliveryRecord?.(repo,plan);
     if(!plan.architecture)throw new HttpError(409,'Save and commit an architecture version, then pin its document ID and content hash in the release plan');
     const controller = new AbortController();
-    await this.command({ executable: 'git', args: ['fetch', 'origin', repo.defaultBranch] }, repo.checkoutPath, {}, controller.signal);
+    if(!plan.preparation)await this.command({ executable: 'git', args: ['fetch', 'origin', repo.defaultBranch] }, repo.checkoutPath, {}, controller.signal);
     this.requireReady();
-    const head = (await this.command({ executable: 'git', args: ['rev-parse', `origin/${repo.defaultBranch}`] }, repo.checkoutPath, {}, controller.signal)).trim();
+    const head = plan.preparation?.sourceCommit??(await this.command({ executable: 'git', args: ['rev-parse', `origin/${repo.defaultBranch}`] }, repo.checkoutPath, {}, controller.signal)).trim();
     if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error('Cannot pin release commit');
     const architecturePath=`docs/architecture/drafts/${plan.architecture.docId}`;
-    const artifactJson=await this.command({executable:'git',args:['show',`${head}:${architecturePath}.json`]},repo.checkoutPath,{},controller.signal);
-    const artifactMarkdown=await this.command({executable:'git',args:['show',`${head}:${architecturePath}.md`]},repo.checkoutPath,{},controller.signal);
+    const artifactJson=await this.sourceBlob(repo,head,`${architecturePath}.json`,plan,controller.signal);
+    const artifactMarkdown=await this.sourceBlob(repo,head,`${architecturePath}.md`,plan,controller.signal);
     verifyCommittedArchitecture(artifactJson,artifactMarkdown,repo.id,plan.architecture);
+    if(this.validateMonitoring||plan.firstSlice||plan.qualityEvidence||plan.preparation){const text=await this.sourceBlob(repo,head,'cubefarm.delivery.json',plan,controller.signal),monitoringManifest=deliveryManifest.parse(parseUnambiguousJson(text));this.assertPreparation(plan,head,text,monitoringManifest);assertFirstSliceComponents(plan,monitoringManifest);assertQualityManifest(plan,monitoringManifest);this.validateMonitoring?.(repo.id,plan,monitoringManifest,this.state.policy.environmentUrl);}
+    if(plan.qualityEvidence)for(const c of plan.qualityEvidence.checks)if(c.kind==='documentation'){const bytes=await this.sourceBlob(repo,head,c.document.file,plan,controller.signal);validateQualityDocument(c.document,Buffer.from(bytes));}
+    this.checkDeliveryRecord?.(repo,plan);
     if (this.closed || this.active || !this.state.policy?.enabled) throw new HttpError(409, 'Delivery state changed during release preparation; retry');
     const environmentUrl = this.state.policy.environmentUrl;
     const skillLock = selectSkills(discoverSkills(), `${plan.name} ${plan.components.join(' ')} ${plan.acceptanceCriteria.join(' ')}`)
@@ -310,6 +397,7 @@ export class DeliveryService {
     const release = this.state.releases.find((r) => r.id === id);
     if (!release || release.plan.qaOwner !== reviewer || release.plan.owner === reviewer || release.planHash !== hash) throw new HttpError(403, 'Only the assigned independent QA agent can approve this exact release hash');
     requireArchitectureReview(release);
+    this.checkDeliveryRecord?.({id:release.repoId},release.plan);
     if (!release.approvedAt) { release.approvedAt = new Date().toISOString(); release.approvedBy = reviewer; await this.changed(); }
     return structuredClone(release);
   }
@@ -320,6 +408,7 @@ export class DeliveryService {
     if(!release||release.plan.qaOwner!==reviewer||release.plan.owner===reviewer||release.planHash!==hash)throw new HttpError(403,'Only the assigned independent QA session may review this release architecture');
     if(this.state.runs.some(run=>run.releaseId===id))throw new HttpError(409,'Architecture review is immutable once a delivery run exists; create a new release for changes');
     const review=architectureReviewSchema.parse(input);
+    this.checkDeliveryRecord?.({id:release.repoId},release.plan);
     if(!release.plan.architecture||review.artifactSha256!==release.plan.architecture.sha256)throw new HttpError(409,'Architecture review differs from its pinned version');
     release.architectureReview={...review,reviewer,reviewedAt:new Date().toISOString()};
     // Any changed review requires a fresh release approval, including rejection.
@@ -350,6 +439,7 @@ export class DeliveryService {
       if (!releasePlanSchema.safeParse(release.plan).success) throw new Error('Release plan does not satisfy the current UX and monitoring contract; create an updated release and obtain fresh QA approval');
       if (!release.approvedAt) throw new Error(`Awaiting independent QA approval from ${release.plan.qaOwner} for release ${release.id}`);
       requireArchitectureReview(release);
+      this.checkDeliveryRecord?.(repo,release.plan);
       if (release.skillLock?.length) {
         const current = discoverSkills();
         for (const skill of release.skillLock) if (!current.skills.some((item) => item.id === skill.id && item.sha256 === skill.sha256 && item.file === skill.file && item.version === skill.version)) throw new Error(`Pinned skill ${skill.id} changed or is unavailable; create a new release for QA review`);
@@ -370,14 +460,15 @@ export class DeliveryService {
         const issue = z.object({state:z.enum(['OPEN','CLOSED'])}).parse(parseUnambiguousJson(await this.command({ executable: 'gh', args: ['issue', 'view', String(number), '--repo', repo.fullName ?? repo.id, '--json', 'state'] }, repo.checkoutPath, {}, controller.signal)));
         if (issue.state !== 'CLOSED') throw new Error(`Required issue #${number} is still open`);
       }
-      await git(['fetch', 'origin', repo.defaultBranch]);
+      if(!release.plan.preparation){await git(['fetch', 'origin', repo.defaultBranch]);
       // Never substitute a newer commit after QA approval.
-      await git(['merge-base', '--is-ancestor', release.head, `origin/${repo.defaultBranch}`]);
-      deliveryManifest.parse(parseUnambiguousJson(await git(['show', `${release.head}:cubefarm.delivery.json`])));
-      const run: DeliveryRun = prior ?? { id: crypto.randomUUID(), releaseId: release.id, repoId: repo.id, head: release.head, environmentUrl: release.environmentUrl, phase: 'waiting', startedAt: new Date().toISOString(), appUrls: [], evidence: [], log: [] };
+      await git(['merge-base', '--is-ancestor', release.head, `origin/${repo.defaultBranch}`]);}
+      const text=await this.sourceBlob(repo,release.head,'cubefarm.delivery.json',release.plan,controller.signal);this.assertPreparation(release.plan,release.head,text,deliveryManifest.parse(parseUnambiguousJson(text)));
+      const run: DeliveryRun = prior ?? { id: crypto.randomUUID(), nativeLeaseSha256:this.lease!.identitySha256, releaseId: release.id, repoId: repo.id, head: release.head, environmentUrl: release.environmentUrl, phase: 'waiting', startedAt: new Date().toISOString(), appUrls: [], evidence: [], log: [] };
       if (!prior) { run.previousRunId = this.state.runs.find((r) => r.repoId === repo.id && r.environmentUrl === run.environmentUrl && r.phase === 'complete')?.id; this.state.runs.unshift(run); }
       attempt.runId=run.id;attempt.status='running';run.currentAttemptId=attempt.id;
       run.error = undefined; run.endedAt = undefined; run.phase = 'waiting';
+      run.qualityEvidence=undefined;run.qualityReview=undefined;run.visualReview=undefined;
       run.acceptance = acceptanceScope(release.plan);
       this.state.blockers = this.state.blockers.filter((b) => b.repoId !== repo.id);
       await this.changed();
@@ -408,34 +499,115 @@ export class DeliveryService {
       if (this.active) break;
     }
   }
+  async reconcileNativeClaim(repo:RepoView,reviewer:string,input:unknown,sessionGuard:()=>void){
+    const request=nativeClaimRequestSchema.parse(input);this.requireReady();sessionGuard();
+    if(this.demo||this.draining||this.active||this.preparing||!this.state.policy?.enabled)throw new HttpError(409,'Native claim review requires idle enabled delivery');
+    const release=this.state.releases.find(r=>r.id===request.releaseId&&r.repoId===repo.id);
+    if(!release)throw new HttpError(403,'Release belongs to another project');
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000),snapshot=JSON.stringify(release),policy=JSON.stringify(this.state.policy);
+    let historical:{run:DeliveryRun;release:DeliveryRelease;sha256:string}|undefined;
+    const guard=async()=>{sessionGuard();this.requireReady();controller.signal.throwIfAborted();if(historical&&(!this.state.runs.includes(historical.run)||!this.state.releases.includes(historical.release)||crypto.createHash('sha256').update(JSON.stringify([historical.run,historical.release])).digest('hex')!==historical.sha256))throw new Error('Historical native execution changed');if(this.draining||this.active!==controller||!this.state.releases.includes(release)||JSON.stringify(release)!==snapshot||JSON.stringify(this.state.policy)!==policy||this.state.policy?.environmentUrl!==release.environmentUrl)throw new Error('Native claim review authority changed');this.checkDeliveryRecord?.(repo,release.plan);await this.assertLeaseOwned();sessionGuard();};
+    this.active=controller;
+    const work=reconcileNativeClaimSession(request,{repoId:repo.id,reviewer,release,claimRoot:path.join(this.resourceLeaseRoot,'native-denial-claims'),evidenceRoot:path.join(this.root,'native-reconciliation-evidence'),cwd:repo.checkoutPath,connect:this.nativeFactory(),signal:controller.signal,guard,verifyPreviousRun:async claim=>{
+      await guard();
+      if(claim.diagnosticId){const prior=await inspectNativeDeniedDiagnostic(this.resourceLeaseRoot,claim,repo.id);await guard();if(request.action==='authorize-successor'&&(!prior.captureVerified||!prior.localRequestClosedVerified||!prior.rejectedRequestSettled))throw Error('Original diagnostic request remains uncertain; replay forbidden');return prior;}
+      const run=this.state.runs.find(r=>r.id===claim.context.runId),previous=this.state.releases.find(r=>r.id===claim.context.releaseId);
+      if(!run||!previous||run.repoId!==repo.id||previous.repoId!==repo.id||run.releaseId!==previous.id||run.head!==claim.context.sourceCommit||run.environmentUrl!==claim.context.environmentUrl||run.startedAt!==claim.context.startedAt||previous.planHash!==claim.context.planHash||previous.plan.deliveryRecord?.sha256!==claim.context.recordSha256||!previous.plan.verification.nativeDeniedChecks?.some(c=>crypto.createHash('sha256').update(JSON.stringify(c)).digest('hex')===claim.contractHash))throw new Error('Historical native claim has no matching owned run/release');
+      historical={run,release:previous,sha256:crypto.createHash('sha256').update(JSON.stringify([run,previous])).digest('hex')};
+      const termination=await inspectNativeClaimTermination(this.root,path.join(this.resourceLeaseRoot,'native-denial-claims','captures'),claim,run,this.state.runs);await guard();
+      if(request.action==='authorize-successor'){
+        if(run.phase==='blocked'&&run.endedAt&&termination.localTreeVerified&&termination.captureVerified&&termination.rejectedRequestSettled&&run.operations?.every(op=>op.status==='verified'))return termination;
+        if(run.phase!=='complete'||run.recoveryRequired||!run.endedAt||!previous.plan.qualityEvidence||run.visualReview?.reviewer!==previous.plan.qaOwner||run.visualReview.evidenceHash!==run.evidenceHash||!run.evidenceHash||await this.evidenceHash(run)!==run.evidenceHash||run.operations?.some(op=>op.status!=='verified'))throw new Error('Interrupted or unreviewed native claim cannot be reauthorized; termination and independent evidence required');
+        await this.assertFirstSliceEvidence(run,previous);await this.assertQualityEvidence(run,previous);
+        if(run.qualityReview?.reviewer!==previous.plan.qaOwner||run.qualityReview.evidenceHash!==run.evidenceHash||run.qualityReview.contractHash!==run.qualityEvidence?.contractHash)throw new Error('Independent historical quality review required');assertQualityDecisions(run.qualityEvidence!.checks,run.qualityReview.decisions);await guard();
+      }
+      return termination;
+    }}).finally(()=>{clearTimeout(timer);this.active=null;this.pending=null;});this.pending=work.then(()=>{},()=>{});return work;
+  }
+  private nativeFactory():NativeDeniedFactory{return (check,signal,authority)=>{const connect=this.deps.nativeDenied??createProductionNativeQa((command,cwd,env,commandSignal)=>this.command(command,cwd,{...env,...(authority?.context?{SWARM_DELIVERY_RUN_ID:authority.context.runId}:{})},commandSignal,authority?.owned));return connect(check,signal,authority?{...authority,credentialRoot:path.join(this.root,'native-identities')}:undefined);};}
   private async requireCapabilities(repo: RepoView, release: DeliveryRelease) {
+    if(release.plan.verification.nativeDeniedChecks?.length&&!this.deps.nativeDenied){
+      const signal=this.active?.signal??AbortSignal.timeout(30000);
+      for(const check of release.plan.verification.nativeDeniedChecks){let adapter:Awaited<ReturnType<NativeDeniedFactory>>|undefined;
+        try{adapter=await this.nativeFactory()(check,signal,{phase:'preflight',cwd:repo.checkoutPath,owned:async()=>{if(this.closed||this.draining)throw new Error('Delivery authority unavailable');this.checkDeliveryRecord?.(repo,release.plan);}});const caps=await adapter.capabilities() as Record<string,unknown>;if(!caps.authenticatedIdentity||caps.deniedCreate!==true||caps.exactCorrelation!==true||caps.completeWrites!==true||caps.completeDispatches!==true)throw new Error('Complete authoritative temporal observations unavailable');}
+        catch{throw new Error('Native denied-access adapter unavailable: approved site/list binding, separately authenticated denied and observer caches, and complete historical write/dispatch coverage are required; summarized FlowAgent history is insufficient');}
+        finally{await adapter?.close();}
+      }
+    }
+    this.checkDeliveryRecord?.(repo,release.plan);
+    if(release.plan.verification.functionalShowcase){const check=functionalTransportCheck(release.plan.verification.functionalShowcase.rejection);let adapter:Awaited<ReturnType<NativeDeniedFactory>>|undefined;try{adapter=await this.nativeFactory()(check,this.active?.signal??AbortSignal.timeout(30000),{phase:'preflight',cwd:repo.checkoutPath,owned:async()=>{if(this.closed||this.draining)throw Error('Delivery authority unavailable');this.checkDeliveryRecord?.(repo,release.plan);}});const caps=await adapter.capabilities() as Record<string,unknown>;if(caps.authenticatedIdentity!==true||caps.deniedCreate!==true||caps.exactCorrelation!==true)throw Error('Functional rejection native identity/target contract unavailable');}finally{await adapter?.close();}}
     const result = await this.checkCapabilities(repo.id, repo.checkoutPath, release.environmentUrl, true);
+    this.checkDeliveryRecord?.(repo,release.plan);
     if (result.status !== 'ready') throw new Error(`Capability preflight blocked: ${result.checks.filter((c) => !c.passed).map((c) => `${c.id}: ${c.remedy}`).join('; ')}`);
-    for (const id of release.plan.monitoring.criticalProbeIds) if (!result.checks.some((c) => c.id === id && c.category === 'workflow' && c.passed)) throw new Error(`Critical workflow probe ${id} is missing`);
+    const text=await this.sourceBlob(repo,release.head,'cubefarm.delivery.json',release.plan,this.active?.signal??new AbortController().signal),manifest=deliveryManifest.parse(parseUnambiguousJson(text));this.assertPreparation(release.plan,release.head,text,manifest);
+    assertMonitoringContract(release.plan,manifest,result.checks,true);
     return result.configHash ?? crypto.createHash('sha256').update(JSON.stringify(result.checks.map((c) => ({ id: c.id, category: c.category })))).digest('hex');
   }
   private async verifyArchitecture(repo:RepoView,release:DeliveryRelease,signal:AbortSignal){
     const reference=release.plan.architecture;
     if(!reference)throw new HttpError(409,'Release has no pinned architecture; create a reviewed release');
     const location=`docs/architecture/drafts/${reference.docId}`;
-    const json=await this.command({executable:'git',args:['show',`${release.head}:${location}.json`]},repo.checkoutPath,{},signal);
-    const markdown=await this.command({executable:'git',args:['show',`${release.head}:${location}.md`]},repo.checkoutPath,{},signal);
+    const json=await this.sourceBlob(repo,release.head,`${location}.json`,release.plan,signal);
+    const markdown=await this.sourceBlob(repo,release.head,`${location}.md`,release.plan,signal);
     verifyCommittedArchitecture(json,markdown,repo.id,reference);
+  }
+  private sourceBlob(repo:Pick<RepoView,'checkoutPath'>,head:string,file:string,plan:ReleasePlan,signal:AbortSignal,runId?:string){
+    const execute=(args:string[])=>this.command({executable:'git',args},repo.checkoutPath,runId?{SWARM_DELIVERY_RUN_ID:runId}:{},signal);
+    return plan.preparation?readPinnedBlob(execute,head,file):execute(['show',`${head}:${file}`]);
+  }
+  private assertPreparation(plan:ReleasePlan,head:string,text:string,manifest:z.infer<typeof deliveryManifest>){
+    if(!!plan.preparation!==!!manifest.preparation||plan.preparation&&(plan.preparation.sourceCommit!==head||plan.preparation.manifestSha256!==preparationDigest(text)))throw new Error('Preparation differs from the independently approved commit/manifest');
+    if(manifest.recovery.scope==='empty-solution-only'&&plan.acceptanceProfile!=='functional-development')throw new Error('Empty package exclusion is restricted to functional development');
   }
   private async evidenceHash(run: DeliveryRun) {
     const hash = crypto.createHash('sha256');
     for (const name of [...new Set(run.evidence)].sort()) { hash.update(name); hash.update(await fs.readFile(await containedFile(path.join(this.root, 'delivery-runs', run.id, 'evidence'), name))); }
     return hash.digest('hex');
   }
+  private async assertFirstSliceEvidence(run:DeliveryRun,release:DeliveryRelease){
+    if(!release.plan.firstSlice)return;
+    const evidence=path.join(this.root,'delivery-runs',run.id,'evidence');
+    if(!run.firstSlice||run.firstSlice.contractHash!==firstSliceContractHash(release.plan)||!run.evidence.includes(run.firstSlice.evidenceFile)||!run.recovery)throw new HttpError(409,'Runner-owned first-slice evidence is missing');
+    const bytes=await fs.readFile(await containedFile(evidence,run.firstSlice.evidenceFile),'utf8');
+    const raw=parseUnambiguousJson(await fs.readFile(await containedFile(evidence,release.plan.verification.api?'independent-api.json':'independent-verification.json'),'utf8'));
+    const expected=firstSliceEvidence(release.plan,{runId:run.id,releaseId:release.id,planHash:release.planHash,sourceCommit:run.head,environmentUrl:run.environmentUrl,startedAt:run.startedAt,observedAfter:run.firstSlice.observedAfter,packageSha256:run.recovery.packageSha256},raw);
+    if(crypto.createHash('sha256').update(bytes).digest('hex')!==run.firstSlice.artifactSha256||JSON.stringify(parseUnambiguousJson(bytes))!==JSON.stringify(expected))throw new HttpError(409,'First-slice evidence changed or differs from its release');
+  }
+  private async assertQualityEvidence(run:DeliveryRun,release:DeliveryRelease){
+    if(!release.plan.qualityEvidence)return;
+    if(!run.qualityEvidence||!run.recovery||run.qualityEvidence.contractHash!==qualityContractHash(release.plan)||!run.evidence.includes('quality-evidence.json'))throw new HttpError(409,'Runner-owned QA/documentation evidence is missing');
+    const evidence=path.join(this.root,'delivery-runs',run.id,'evidence'),read=async(file:string)=>fs.readFile(await containedFile(evidence,file));
+    const manifest=deliveryManifest.parse(parseUnambiguousJson((await read('quality-manifest.json')).toString('utf8')));
+    const index=await buildQualityIndex(release.plan,{functionalRecoveryCaptureRoot:path.join(this.resourceLeaseRoot,'functional-recovery-captures'),nativeCaptureLeaseSha256:run.nativeLeaseSha256,nativeClaimRoot:path.join(this.resourceLeaseRoot,'native-denial-claims'),nativeStartedAt:run.startedAt,runId:run.id,releaseId:release.id,planHash:release.planHash,sourceCommit:run.head,environmentUrl:run.environmentUrl,packageSha256:run.recovery.packageSha256,observedAfter:run.qualityEvidence.observedAfter,manifestSha256:manifestDigest(manifest),buildAttempts:this.state.attemptHistory?.attempts.filter(a=>a.runId===run.id&&a.releaseId===release.id&&a.repoId===run.repoId&&a.head===run.head&&a.environmentUrl===run.environmentUrl).map(({id,startedAt})=>({id,startedAt}))??[]},manifest,read);
+    const bytes=await read('quality-evidence.json');
+    if(qualityBytesHash(bytes)!==run.qualityEvidence.artifactSha256||JSON.stringify(parseUnambiguousJson(bytes.toString('utf8')))!==JSON.stringify(index)||JSON.stringify(run.qualityEvidence.checks)!==JSON.stringify(index.checks.map(({checkId,kind,evidenceSha256})=>({checkId,kind,evidenceSha256}))))throw new HttpError(409,'QA/documentation evidence changed or differs from its release');
+  }
+  async verifySliceAcceptance(id:string){
+    this.requireReady();const run=this.state.runs.find(r=>r.id===id),release=this.state.releases.find(r=>r.id===run?.releaseId);
+    if(!run||!release||run.phase!=='complete'||release.approvedBy!==release.plan.qaOwner||run.visualReview?.reviewer!==release.plan.qaOwner||run.visualReview.evidenceHash!==run.evidenceHash)throw new HttpError(409,'Completed independent release acceptance is required');
+    const before=JSON.stringify({run,release});this.checkDeliveryRecord?.({id:release.repoId},release.plan);
+    await this.assertFirstSliceEvidence(run,release);await this.assertQualityEvidence(run,release);
+    if(release.plan.qualityEvidence){if(run.qualityReview?.reviewer!==release.plan.qaOwner||run.qualityReview.evidenceHash!==run.evidenceHash||run.qualityReview.contractHash!==run.qualityEvidence?.contractHash)throw new HttpError(409,'Independent per-check quality approval is required');assertQualityDecisions(run.qualityEvidence!.checks,run.qualityReview.decisions);}
+    if(await this.evidenceHash(run)!==run.evidenceHash||before!==JSON.stringify({run,release}))throw new HttpError(409,'Slice evidence changed after independent approval');
+    this.requireReady();this.checkDeliveryRecord?.({id:release.repoId},release.plan);
+  }
   async approveVisual(id: string, reviewer: string, input: unknown) {
     this.requireReady();
     if (this.demo || this.active) throw new HttpError(409, 'Wait for the active delivery to finish');
     const run = this.state.runs.find((r) => r.id === id); const release = this.state.releases.find((r) => r.id === run?.releaseId);
     if (!run || !release || run.phase !== 'reviewing' || release.plan.qaOwner !== reviewer || reviewer === release.plan.owner) throw new HttpError(403, 'Only the assigned QA reviewer may approve the captured release evidence');
+    this.checkDeliveryRecord?.({id:release.repoId},release.plan);
     const attempt=run.currentAttemptId?this.state.attemptHistory?.attempts.find(row=>row.id===run.currentAttemptId):undefined;
     if(run.currentAttemptId&&attempt?.status!=='reviewing')throw new HttpError(409,'Delivery attempt is not awaiting verified QA review; reconcile or rerun before approval');
-    const review = z.object({ evidenceHash: z.string(), scores: release.plan.verification.api ? z.array(z.number()).length(0) : z.array(z.number().int().min(4).max(5)).length(5), notes: z.string().min(40).max(4000), recoveryReviewed: z.literal(true) }).strict().parse(input);
+    const approvalSnapshot=JSON.stringify({run,release});
+    const review = z.object({ evidenceHash: z.string(), scores: release.plan.verification.api ? z.array(z.number()).length(0) : z.array(z.number().int().min(4).max(5)).length(5), notes: z.string().min(40).max(4000), recoveryReviewed: z.literal(true),qualityDecisions:z.array(qualityDecisionSchema).max(200).optional() }).strict().parse(input);
     if (review.evidenceHash !== run.evidenceHash || await this.evidenceHash(run) !== review.evidenceHash) throw new HttpError(409, 'Evidence changed; repeat verification and review');
+    await this.assertFirstSliceEvidence(run,release);await this.assertQualityEvidence(run,release);
+    if(this.active||run.phase!=='reviewing'||!this.state.runs.includes(run)||!this.state.releases.includes(release)||approvalSnapshot!==JSON.stringify({run,release}))throw new HttpError(409,'Delivery changed during QA evidence review; inspect the current attempt before approval');
+    const decisions=release.plan.qualityEvidence?assertQualityDecisions(run.qualityEvidence!.checks,review.qualityDecisions):undefined;
+    this.requireReady();
+    this.checkDeliveryRecord?.({id:release.repoId},release.plan);
+    if(decisions)run.qualityReview={reviewer,reviewedAt:new Date().toISOString(),evidenceHash:review.evidenceHash,contractHash:run.qualityEvidence!.contractHash,decisions};
     run.visualReview = { reviewer, reviewedAt: new Date().toISOString(), scores: review.scores, notes: review.notes, evidenceHash: review.evidenceHash };
     if(attempt){attempt.status='successful';attempt.endedAt=new Date().toISOString();attempt.evidenceHash=review.evidenceHash;}
     run.phase = 'complete'; run.endedAt = new Date().toISOString(); await this.changed(); return this.view(run.repoId);
@@ -453,7 +625,7 @@ export class DeliveryService {
         const inventory = await this.command({ executable: 'pac', args: ['solution', 'list', '--environment', run.environmentUrl, '--json'] }, repo.checkoutPath, {}, controller.signal);
         if (!installedSolution(inventory, run.solution!, run.version!)) throw new Error('Installed solution/version drift detected');
         const capabilityHash = await this.requireCapabilities(repo, release);
-        const manifest=deliveryManifest.parse(parseUnambiguousJson(await this.command({executable:'git',args:['show',`${run.head}:cubefarm.delivery.json`]},repo.checkoutPath,{},controller.signal)));
+        const manifest=deliveryManifest.parse(parseUnambiguousJson(await this.sourceBlob(repo,run.head,'cubefarm.delivery.json',release.plan,controller.signal)));
         await this.governance(run,manifest,'health');
         if (run.health?.capabilityHash && run.health.capabilityHash !== capabilityHash) throw new Error('Capability configuration drift detected; review and issue a new release');
         run.health = { status: 'healthy', checkedAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + release.plan.monitoring.intervalMinutes * 60000).toISOString(), capabilityHash, governanceEvidence:run.health?.governanceEvidence };
@@ -466,7 +638,7 @@ export class DeliveryService {
     })().finally(() => { this.active = null; this.pending = null; });
     await this.pending;
   }
-  async close() { this.permanentlyClosed=true; this.closed = true; this.active?.abort(); await this.recoveryWork?.catch(()=>{}); await this.initializing?.catch(() => {}); await this.preparing; await this.pending; await this.writer.drain(); await this.releaseLease(); }
+  async close() { this.permanentlyClosed=true; this.closed = true; this.active?.abort();this.retainedRecoveryController?.abort(); await this.recoveryWork?.catch(()=>{}); await this.initializing?.catch(() => {}); await this.preparing; await this.pending; await this.writer.drain(); await this.releaseLease(); }
   async waitForIdle() { await this.pending; }
   private async governance(run:DeliveryRun,manifest:unknown,phase:GovernancePhase) {
     const releaseId=run.releaseId;
@@ -474,7 +646,7 @@ export class DeliveryService {
     const checkout=path.join(this.root,'delivery-runs',run.id,'checkout');
     let packageSha256:string|undefined;
     let settingsSha256:string|undefined;
-    if(['import','post-deploy','verify','health'].includes(phase)) {
+    if(['import','post-deploy','verify','health'].includes(phase)||deliveryManifest.parse(manifest).manualDevelopmentGovernance===true) {
       const parsed=deliveryManifest.parse(manifest),packageFile=await containedFile(checkout,parsed.solutionZip);
       packageSha256=await stablePackageDigest(packageFile,this.active?.signal);
       if(run.recovery&&packageSha256!==run.recovery.packageSha256)throw new Error('Pinned deployment package changed; create a new release');
@@ -487,18 +659,19 @@ export class DeliveryService {
     if(phase==='health') run.health={...(run.health??{status:'pending',nextCheckAt:new Date().toISOString()}),governanceEvidence:`health/${file}`};
     else run.evidence.push(file);
     await this.save();
-    try {await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,settingsSha256,signal:this.active?.signal,evidenceDirectory:directory},directory,index,undefined,async reason=>{
+    try {await requireLifecycleGovernance(this.checkGovernance??this.deps.governance,{phase,sourceCommit:run.head,environmentUrl:run.environmentUrl,releaseId,checkout,manifest,packageSha256,settingsSha256,signal:this.active?.signal,evidenceDirectory:directory,acceptanceProfile:this.state.releases.find(release=>release.id===releaseId)?.plan.acceptanceProfile},directory,index,undefined,async reason=>{
       run.log.push(`${new Date().toISOString()} ${phase} governance ${reason==='deadline'?'deadline exceeded':'cancelled'}; waiting for provider cleanup before releasing delivery ownership`);
       await this.changed();
     });}
     finally {
       const decision=await fs.readFile(path.join(directory,file),'utf8').then(value=>lifecycleResultSchema.parse(parseUnambiguousJson(value))).catch(()=>null);
-      if(phase!=='health')for(const field of ['packageInventoryFile','declaredSchemaFile','advancedPolicyFile','connectorCatalogueFile'] as const){
+      if(phase!=='health')for(const field of ['packageInventoryFile','declaredSchemaFile','advancedPolicyFile','connectorCatalogueFile','manualAssessmentFile'] as const){
         const file=decision?.[field];if(typeof file==='string'&&!run.evidence.includes(file))run.evidence.push(file);
       }
     }
   }
   private async execute(repo: RepoView, run: DeliveryRun, controller: AbortController) {
+    const recordGate=()=>{const release=this.state.releases.find(r=>r.id===run.releaseId);if(!release)throw new Error('Release disappeared during delivery');this.checkDeliveryRecord?.(repo,release.plan);};
     const dir = path.join(this.root, 'delivery-runs', run.id);
     const checkout = path.join(dir, 'checkout'); const evidence = path.join(dir, 'evidence');
     const env: Record<string, string> = { SWARM_DELIVERY_ENVIRONMENT: run.environmentUrl, SWARM_DELIVERY_COMMIT: run.head,
@@ -511,39 +684,80 @@ export class DeliveryService {
     // The target lease is absent only during local checkout preparation. Once acquired,
     // recheck it at every native boundary, including after asynchronous governance.
     let targetLease: Awaited<ReturnType<typeof acquireResourceLease>> | undefined;
-    const command = (executable: string, args: string[], cwd = checkout,boundary?:()=>Promise<void>) => this.command({ executable, args }, cwd, env, controller.signal,async()=>{await boundary?.();await targetLease?.assertOwned();});
+    const command = (executable: string, args: string[], cwd = checkout,boundary?:()=>Promise<void>) => this.command({ executable, args }, cwd, env, controller.signal,async()=>{recordGate();await boundary?.();await targetLease?.assertOwned();recordGate();});
     const step = async (phase: DeliveryRun['phase'], fn: () => Promise<unknown>) => {
-      run.phase = phase; run.log.push(`${new Date().toISOString()} ${phase}`); await this.save(); await fn();
+      recordGate();run.phase = phase; run.log.push(`${new Date().toISOString()} ${phase}`); await this.save(); await fn();recordGate();
     };
-    const commands = async (list: DeliveryCommand[],manifest:unknown,phase:GovernancePhase) => { for (const item of list) {await this.governance(run,manifest,phase);await command(item.executable, item.args);} };
+    const commands = async (list: DeliveryCommand[],manifest:unknown,phase:GovernancePhase) => { for (const [index,item] of list.entries()) {
+      await this.governance(run,manifest,phase);const output=await command(item.executable,item.args);
+      const release=this.state.releases.find(r=>r.id===run.releaseId);
+      if(release?.plan.qualityEvidence&&(phase==='build'||phase==='test')){
+        const outputFile=`quality-command-${phase}-${index}-output.json`,bytes=Buffer.from(JSON.stringify({stdout:output}));
+        await atomicWrite(path.join(evidence,outputFile),bytes.toString('utf8'));
+        const file=qualityCommandFile(phase,index);await atomicWrite(path.join(evidence,file),JSON.stringify({schemaVersion:1,originAttemptId:run.currentAttemptId,runId:run.id,releaseId:release.id,sourceCommit:run.head,manifestSha256:manifestDigest(manifest),phase,index,commandSha256:qualityHash(item),outcome:'returned-success',finishedAt:new Date().toISOString(),outputFile,outputSha256:qualityBytesHash(bytes)}));for(const name of [file,outputFile])if(!run.evidence.includes(name))run.evidence.push(name);
+      }
+    } };
     const authoringLeases: Awaited<ReturnType<typeof acquireResourceLease>>[] = [];
+    let preparationPlan:Awaited<ReturnType<typeof collectPinnedPreparation>>['plan']|undefined;
     let flow: FlowAdapter | undefined;
     try {
       await fs.mkdir(evidence, { recursive: true });
-      if (!(await fs.access(checkout).then(() => true, () => false))) await command('git', ['worktree', 'add', '--detach', checkout, run.head], repo.checkoutPath);
       const release = this.state.releases.find((r) => r.id === run.releaseId);
       if (!release?.approvedAt) throw new Error('Release is not independently approved');
+      if(!release.plan.preparation&&!(await fs.access(checkout).then(() => true, () => false))) await command('git', ['worktree', 'add', '--detach', checkout, run.head], repo.checkoutPath);
       await atomicWrite(path.join(evidence, 'release.json'), JSON.stringify(release, null, 2));
-      run.evidence = ['release.json', ...run.evidence.filter((name) => name.startsWith('recovery-') || name === 'previous-inventory.json' || name === 'target-component-map.json')];
-      await command('git', ['diff', '--quiet', run.head, '--']);
-      const manifest = deliveryManifest.parse(parseUnambiguousJson(await command('git', ['show', `${run.head}:cubefarm.delivery.json`])));
+      run.evidence = ['release.json', ...run.evidence.filter((name) => /^(sharepoint-release-|recovery-|native-operation-|governance-|manual-assessment-|package-inventory-|declared-schema-|advanced-policy-|connector-catalogue-|quality-command-)/.test(name) || name === 'previous-inventory.json' || name === 'target-component-map.json')];
+      if(!release.plan.preparation)await command('git', ['diff', '--quiet', run.head, '--']);
+      const manifestText=await this.sourceBlob(repo,run.head,'cubefarm.delivery.json',release.plan,controller.signal,run.id),manifest = deliveryManifest.parse(parseUnambiguousJson(manifestText));
+      this.assertPreparation(release.plan,run.head,manifestText,manifest);
+      if(release.plan.preparation){
+        const collected=await collectPinnedPreparation(release.plan.preparation,manifestText,manifest,checkout,file=>this.sourceBlob(repo,run.head,file,release.plan,controller.signal,run.id));preparationPlan=collected.plan;
+        const inventory=await journalPinnedPreparation(this.root,this.lease!.identitySha256,run.id,collected.plan,collected.buffers,()=>this.assertLeaseOwned());
+        await atomicWrite(path.join(evidence,'pinned-preparation.json'),JSON.stringify({scope:'runner-owned-pinned-artifact-validation',plan:collected.plan,inventory,applicationBehaviorVerified:false}));run.evidence.push('pinned-preparation.json');
+      }
       if (this.state.policy?.copilotPaused && manifest.targetComponents.some((component) => component.kind === 'copilot')) throw new Error('Copilot Studio delivery is paused by the user');
       if (release.plan.verification.api) {
         if (manifest.hasUi || manifest.targetComponents.some((component) => ['canvas', 'copilot'].includes(component.kind))) throw new Error('API-only verification cannot certify a UI release');
         if (!manifest.targetBinding || JSON.stringify(manifest.targetBinding) !== JSON.stringify(release.plan.verification.api.binding)) throw new Error('API verification must match the approved target binding');
       } else if (!manifest.hasUi) throw new Error('Backend-only releases require API verification');
+      if(release.plan.qualityEvidence){await atomicWrite(path.join(evidence,'quality-manifest.json'),JSON.stringify(manifest));run.evidence.push('quality-manifest.json');}
       run.solution = manifest.solutionUniqueName; run.version = manifest.solutionVersion;
       targetLease = await acquireResourceLease(this.resourceLeaseRoot, `deployment:${canonical(run.environmentUrl)}`, run.id, { reclaimDeadOwner: false });
       for (const appId of [...new Set(manifest.canvasAuthoringApps)].sort()) authoringLeases.push(await acquireResourceLease(this.resourceLeaseRoot, canvasResource(run.environmentUrl, appId), run.id, { reclaimDeadOwner: false }));
       const request: Request = async (method, resource, body, headers) => {
         await targetLease!.assertOwned();
         if(method!=='GET') await this.governance(run,manifest,'post-deploy');
-        const output = await command('dataverse', ['api', 'request', '--target', 'dataverse', '--environment', run.environmentUrl, '--method', method, '--path', `/api/data/v9.2/${resource}`, ...(body ? ['--body', JSON.stringify(body)] : []), ...Object.entries(headers ?? {}).flatMap(([key, value]) => ['--header', `${key}:${value}`])]);
+        const receiptFile=method!=='GET'&&release.plan.verification.api?.transaction?`native-operation-${crypto.randomUUID()}.json`:undefined;
+        const governanceFile=run.evidence.findLast(file=>/^governance-\d+-post-deploy\.json$/.test(file));
+        const decision=receiptFile&&governanceFile?lifecycleResultSchema.parse(await readBoundedJson(path.join(evidence,governanceFile))):undefined;
+        const receipt={schemaVersion:1,runId:run.id,sourceCommit:run.head,releaseId:run.releaseId,environmentUrl:run.environmentUrl,method,resource,body:body??null,headers:headers??{},requestSha256:crypto.createHash('sha256').update(JSON.stringify({method,resource,body:body??null,headers:headers??{}})).digest('hex'),governanceFile,manualAssessmentId:decision?.manualAssessmentId,authorisation:'Phase approval of the exact reviewed transaction code and contract; dynamic GUID/payload guards are runner-owned, not individually approved by a human',at:new Date().toISOString(),outcome:'intent',responseSha256:undefined as string|undefined,errorCode:undefined as string|undefined};
+        if(receiptFile){if(decision?.status!=='clear')throw new Error('Mutation lacks its retained clear phase assessment');await atomicWrite(path.join(evidence,receiptFile),JSON.stringify(receipt,null,2));run.evidence.push(receiptFile);await this.save();}
+        let output:string;
+        try{output=await command('dataverse', ['api', 'request', '--target', 'dataverse', '--environment', run.environmentUrl, '--method', method, '--path', `/api/data/v9.2/${resource}`, ...(body ? ['--body', JSON.stringify(body)] : []), ...Object.entries(headers ?? {}).flatMap(([key, value]) => ['--header', `${key}:${value}`])]);receipt.outcome='returned';receipt.responseSha256=crypto.createHash('sha256').update(output).digest('hex');}
+        catch(error){receipt.outcome='failed-or-unknown';if(error instanceof PlatformCommandError)receipt.errorCode=error.platformErrorCode;throw error;}
+        finally{if(receiptFile)await atomicWrite(path.join(evidence,receiptFile),JSON.stringify(receipt,null,2));}
         if (method !== 'GET' && !output.trim()) return null;
         // Fail closed on unexpected CLI output rather than guessing a JSON fragment.
         return parseUnambiguousJson(output.trim());
       };
       if (manifest.targetBinding) await verifyTarget(request, manifest.targetBinding);
+      const verifyExternalSharepoint=async(stage:'before'|'after')=>{
+        if(!manifest.sharepoint)return;
+        // This adapter only reads metadata. Schema writes retain their separate
+        // bootstrap lease/history; a read must not acquire or adopt that lease.
+        const plan=manifest.sharepoint.plan;
+        const guard=async()=>{controller.signal.throwIfAborted();recordGate();await this.assertLeaseOwned();await targetLease!.assertOwned();for(const lease of authoringLeases)await lease.assertOwned();recordGate();};
+        await guard();const graph=await (this.deps.sharepoint??connectSharepointGraph)(plan.tenantId,plan.username,checkout,controller.signal,()=>{controller.signal.throwIfAborted();recordGate();},{run:async(item,cwd)=>command(item.executable,item.args,cwd,guard),fetch:globalThis.fetch});
+        const observation=await verifySharepointDelivery(manifest.sharepoint,async(method,resource)=>{if(method!=='GET')throw Error('Release SharePoint adapter is metadata-only');await guard();const result=await graph(method,resource);await guard();return result;},guard);
+        const file=`sharepoint-release-${stage}-${crypto.randomUUID()}.json`;await guard();await atomicWrite(path.join(evidence,file),JSON.stringify({runId:run.id,releaseId:run.releaseId,sourceCommit:run.head,...observation}));run.evidence.push(file);
+      };
+      await verifyExternalSharepoint('before');
+      assertFirstSliceComponents(release.plan,manifest);assertQualityManifest(release.plan,manifest);
+      const transaction=release.plan.verification.api?.transaction;
+      if(transaction){const mapping=await mapTargetComponents(request,manifest.solutionUniqueName,manifest.targetComponents,run.environmentUrl);if(!mapping.some(component=>component.kind==='dataverse-table'&&component.entitySet===transaction.entitySet&&component.primaryId===transaction.idField)||!mapping.some(component=>component.kind==='dataverse-table'&&component.entitySet===transaction.childEntitySet&&component.primaryId===transaction.childIdField))throw new Error('Runner transaction must use the declared mapped table and dependent table');}
+      const functional=release.plan.verification.functionalShowcase;
+      if(Boolean(functional)!==(manifest.recovery.scope==='functional-owned-request'))throw Error('Functional request recovery requires its explicit matching release/manifest scope');
+      if(functional){const t=functional.recovery.target,sp=manifest.sharepoint,canvas=manifest.targetComponents.filter(c=>c.kind==='canvas');if(release.plan.acceptanceProfile!=='functional-development'||!manifest.manualDevelopmentGovernance||!manifest.hasUi||!sp||sp.plan.tenantId.toLowerCase()!==functional.rejection.tenantId.toLowerCase()||sp.plan.username.toLowerCase()!==functional.rejection.deniedUsername.toLowerCase()||sp.plan.siteUrl!==t.siteUrl||sp.plan.siteCollectionId.toLowerCase()!==t.siteCollectionId.toLowerCase()||sp.plan.webId.toLowerCase()!==t.webId.toLowerCase()||!sp.bindings.some(b=>b.listId.toLowerCase()===t.listId.toLowerCase())||canvas.length!==1||manifest.canvasAuthoringApps.length!==1||!new URL(release.plan.verification.baseUrl).pathname.toLowerCase().endsWith('/a/'+manifest.canvasAuthoringApps[0].toLowerCase())||!manifest.targetComponents.some(c=>c.key===functional.recovery.flowComponent&&c.kind==='cloud-flow'))throw Error('Functional showcase exact owned app/list/flow/identity binding differs');}
       const cloudComponents = manifest.targetComponents.filter((c) => c.kind === 'cloud-flow');
       for (const component of cloudComponents) if (!release.plan.verification.cloudFlowChecks?.some((check) => check.component === component.key)) throw new Error(`Cloud flow ${component.key} requires a QA-owned correlated runtime check`);
       for (const check of release.plan.verification.cloudFlowChecks ?? []) if (!cloudComponents.some((c) => c.key === check.component)) throw new Error(`Cloud-flow check references unknown component ${check.component}`);
@@ -551,7 +765,7 @@ export class DeliveryService {
       for (const component of copilotComponents) if (!manifest.hasUi || !release.plan.verification.copilotChecks?.some((check) => check.component === component.key)) throw new Error(`Copilot ${component.key} requires QA-owned published-channel conversation checks`);
       for (const check of release.plan.verification.copilotChecks ?? []) if (!copilotComponents.some((c) => c.key === check.component)) throw new Error(`Copilot check references unknown component ${check.component}`);
       if (cloudComponents.length) flow = await connectOwnedFlowAdapter(
-        ()=>(this.deps.flow??connectFlowAdapter)(checkout,controller.signal),
+        ()=>journalNativeCommand(this.root,this.lease!.identitySha256,{executable:'external-flow-adapter',args:[]},checkout,run.id,()=>this.assertLeaseOwned(),()=>(this.deps.flow??connectFlowAdapter)(checkout,controller.signal)),
         async()=>{await this.assertLeaseOwned();await targetLease!.assertOwned();},controller.signal);
       const checkAuthentication = async (action?:TargetAction) => {
         if (!manifest.platformIdentity || !manifest.targetBinding) {if(manifest.targetBinding)await verifyTarget(request,manifest.targetBinding);return;}
@@ -567,38 +781,66 @@ export class DeliveryService {
       for (const doc of manifest.documentation) await containedFile(checkout, doc);
       if (!run.checkpoint || run.checkpoint === 'prepared') await verifyMigrationCompatibility(manifest.postDeployActions, manifest.targetComponents, request);
       if (!run.checkpoint || run.checkpoint === 'prepared') {
-        await step('building', () => commands(manifest.build,manifest,'build'));
-        await step('testing', () => commands(manifest.test,manifest,'test'));
+        await step('building', () => preparationPlan?this.governance(run,manifest,'build'):commands(manifest.build,manifest,'build'));
+        await step('testing', async() => {if(preparationPlan){await this.governance(run,manifest,'test');await verifyLocalPreparation(preparationPlan);}else await commands(manifest.test,manifest,'test');});
         run.checkpoint = 'prepared'; await this.save();
       }
-      for (const identity of release.plan.verification.identities) {
+      if(release.plan.verification.browserSession){
+        if(coordinatorBrowserEnabled())await verifyCoordinatorReadiness(release.plan,this.root,evidence,controller.signal,{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl});
+        else if(!browserBridgeEndpoint())throw new Error('Connect the approved local browser bridge before deployment');
+      }
+      for (const identity of release.plan.verification.browserSession?[]:release.plan.verification.identities) {
         const file = path.join(this.root, 'delivery-identities', `${identity.id}.json`);
         try { z.object({cookies:z.array(z.unknown()),origins:z.array(z.unknown())}).parse(parseUnambiguousJson(await fs.readFile(file, 'utf8'))); }
         catch { throw new Error(`Connect QA identity ${identity.id} in delivery-identities/${identity.id}.json before deployment`); }
       }
       const zip = await containedFile(checkout, manifest.solutionZip);
+      if(manifest.sharepoint){
+        await this.assertLeaseOwned();await targetLease.assertOwned();
+        const bindings=assertSharepointPackage(await inspectSolutionPackage(zip,controller.signal),manifest.sharepoint,manifest.targetComponents);
+        await this.assertLeaseOwned();await targetLease.assertOwned();
+        await atomicWrite(path.join(evidence,'sharepoint-package-bindings.json'),JSON.stringify(bindings));
+        run.evidence.push('sharepoint-package-bindings.json');await this.save();
+      }
       if (run.recovery && await stablePackageDigest(zip,controller.signal) !== run.recovery.packageSha256) throw new Error('Retained deployment package changed; create a new release');
       const settings = manifest.settingsFile ? await containedFile(checkout, manifest.settingsFile) : undefined;
       if(settings)await verifyDeploymentSettings(settings,manifest.settingsSha256!,manifest);
       // Retain the prior deployment inventory and verify a data-preserving rehearsal before import.
       const priorInventory = await command('pac', ['solution', 'list', '--environment', run.environmentUrl, '--json']);
+      if(!run.recovery&&manifest.recovery.scope==='empty-solution-only'){
+        const exclusion=await verifyEmptySolution(zip,manifest.solutionUniqueName);
+        await atomicWrite(path.join(evidence,'empty-solution-exclusion.json'),JSON.stringify({...exclusion,sourceCommit:run.head,runId:run.id}));
+        await atomicWrite(path.join(evidence,'previous-inventory.json'),priorInventory);await fs.copyFile(await containedFile(checkout,manifest.recovery.runbook),path.join(evidence,'recovery-runbook.md'));
+        run.recovery={inventoryFile:'previous-inventory.json',runbook:'recovery-runbook.md',drillReport:'empty-solution-exclusion.json',packageSha256:exclusion.packageSha256};run.evidence.push('empty-solution-exclusion.json','previous-inventory.json','recovery-runbook.md');await this.save();
+      }
+      if(!run.recovery&&manifest.recovery.scope==='functional-owned-request'){
+        if(!functional)throw Error('Functional recovery release scope missing');
+        const bytes=await fs.readFile(await containedFile(checkout,manifest.recovery.runbook));
+        await atomicWrite(path.join(evidence,'previous-inventory.json'),priorInventory);await atomicWrite(path.join(evidence,'recovery-runbook.md'),new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+        await atomicWrite(path.join(evidence,'functional-recovery-pending.json'),JSON.stringify({schemaVersion:1,kind:'functional-request-recovery-pending',runId:run.id,sourceCommit:run.head,solutionRollbackVerified:false,requestRecoveryVerified:false}));
+        run.recovery={inventoryFile:'previous-inventory.json',runbook:'recovery-runbook.md',drillReport:'functional-recovery-pending.json',packageSha256:await stablePackageDigest(zip,controller.signal)};run.evidence.push('previous-inventory.json','recovery-runbook.md','functional-recovery-pending.json');await this.save();
+      }
       if (!run.recovery) {
         const runbook = await containedFile(checkout, manifest.recovery.runbook);
-        const reportFile = await containedFile(checkout, manifest.recovery.rehearsalReport);
+        const reportFile = manifest.recovery.scope?undefined:await containedFile(checkout, manifest.recovery.rehearsalReport!);
         const digest = z.string().regex(/^[a-f0-9]{64}$/);
-        const rehearsal = z.object({ sourceCommit: z.string(), performedAt: z.iso.datetime(), environmentUrl: https, procedureSha256: digest, restored: z.literal(true), dataPreserved: z.literal(true), protectedRecords: z.array(z.object({ table: z.string().min(1), id: z.string().min(1), beforeSha256: digest, afterSha256: digest }).strict()).min(1), evidence: z.array(z.string().min(1)).min(1) }).strict().parse(parseUnambiguousJson(await fs.readFile(reportFile, 'utf8')));
+        const development=manifest.recovery.scope==='pilot-owned-development-records';
+        if(development&&(!manifest.manualDevelopmentGovernance||release.plan.acceptanceProfile!=='functional-development'||!release.plan.verification.api?.transaction||manifest.hasUi))throw new Error('Same-environment recovery is restricted to a reviewed runner-owned development transaction');
         const runbookBytes = await fs.readFile(runbook);
-        if (rehearsal.sourceCommit !== run.head || canonical(rehearsal.environmentUrl) === run.environmentUrl || Date.parse(rehearsal.performedAt) < Date.now() - 30 * 86400000 || Date.parse(rehearsal.performedAt) > Date.now() + 60000 || rehearsal.procedureSha256 !== crypto.createHash('sha256').update(runbookBytes).digest('hex')) throw new Error('Recovery rehearsal must match this commit/runbook, be recent, and use a separate authorized test environment');
+        const drill=development?await verifyBackendJourney(release.plan.verification.api!.transaction!,manifest.targetBinding!,request,evidence,controller.signal,{runId:run.id,sourceCommit:run.head},'recovery',()=>this.governance(run,manifest,'post-deploy')):undefined;
+        const rehearsal = z.object({ sourceCommit: z.string(), performedAt: z.iso.datetime(), environmentUrl: https, procedureSha256: digest, restored: z.literal(true), dataPreserved: z.literal(true), protectedRecords: z.array(z.object({ table: z.string().min(1), id: z.string().min(1), beforeSha256: digest, afterSha256: digest }).strict()).min(1), evidence: z.array(z.string().min(1)).min(1) }).strict().parse(drill?{sourceCommit:run.head,performedAt:drill.result.performedAt,environmentUrl:run.environmentUrl,procedureSha256:crypto.createHash('sha256').update(runbookBytes).digest('hex'),restored:drill.result.restored,dataPreserved:drill.result.dataPreserved,protectedRecords:drill.result.protectedRecords,evidence:[drill.file,'independent-recovery-journal.json']}:parseUnambiguousJson(await fs.readFile(reportFile!, 'utf8')));
+        if (rehearsal.sourceCommit !== run.head || (!development&&canonical(rehearsal.environmentUrl) === run.environmentUrl) || Date.parse(rehearsal.performedAt) < Date.now() - 30 * 86400000 || Date.parse(rehearsal.performedAt) > Date.now() + 60000 || rehearsal.procedureSha256 !== crypto.createHash('sha256').update(runbookBytes).digest('hex')) throw new Error(development?'Recovery rehearsal must match the approved development scope, commit, runbook and environment':'Recovery rehearsal must match this commit/runbook, be recent, and use a separate authorized test environment');
         if (rehearsal.protectedRecords.some((record) => record.beforeSha256 !== record.afterSha256) || new Set(rehearsal.protectedRecords.map((record) => `${record.table}:${record.id}`)).size !== rehearsal.protectedRecords.length) throw new Error('Recovery rehearsal did not preserve every protected record');
-        for (const [i, file] of rehearsal.evidence.entries()) { const original = await containedFile(checkout, file); const name = `recovery-rehearsal-${i}${path.extname(file)}`; await fs.copyFile(original, path.join(evidence, name)); run.evidence.push(name); }
+        for (const [i, file] of rehearsal.evidence.entries()) { const original = await containedFile(development?evidence:checkout, file); const name = `recovery-rehearsal-${i}${path.extname(file)}`; await fs.copyFile(original, path.join(evidence, name)); run.evidence.push(name); }
         await atomicWrite(path.join(evidence, 'previous-inventory.json'), priorInventory);
-        await fs.copyFile(reportFile, path.join(evidence, 'recovery-rehearsal.json'));
+        if(development)await atomicWrite(path.join(evidence,'recovery-rehearsal.json'),JSON.stringify({...rehearsal,scope:manifest.recovery.scope},null,2));else await fs.copyFile(reportFile!, path.join(evidence, 'recovery-rehearsal.json'));
         await fs.writeFile(path.join(evidence, 'recovery-runbook.md'), runbookBytes);
         run.recovery = { inventoryFile: 'previous-inventory.json', runbook: 'recovery-runbook.md', drillReport: 'recovery-rehearsal.json', packageSha256: await stablePackageDigest(zip,controller.signal) };
         run.evidence.push('previous-inventory.json', 'recovery-rehearsal.json', 'recovery-runbook.md'); await this.save();
       }
+      await retainOwnedRecoveryEvidence(manifest.recovery.scope,evidence,run.evidence);
       const capabilityHash = await this.requireCapabilities(repo, release);
-      const mutation = async (id: string, kind: 'import' | 'post-deploy', executable: string, args: string[]) => {
+      const mutation = async (id: string, kind: 'import' | 'post-deploy', executable: string, args: string[], trackedImport?:TrackedImport) => {
         await targetLease!.assertOwned();
         await checkAuthentication();
         if (manifest.targetBinding) await verifyTarget(request, manifest.targetBinding);
@@ -606,17 +848,20 @@ export class DeliveryService {
         if(kind==='import') run.checkpoint='import-started';
         run.operations ??= [];
         if (run.operations.some((op) => op.id === id)) throw new Error(`Operation ${id} already has a recorded outcome; reconcile it before retrying`);
-        const operation: NonNullable<DeliveryRun['operations']>[number] = { id, kind, status: 'intent',
+        const operation: NonNullable<DeliveryRun['operations']>[number] = trackedImport?await recordTrackedImportIntent(run,trackedImport,path.join(this.root,'delivery.json'),()=>this.save(),()=>this.assertLeaseOwned()):{ id, kind, status: 'intent',
           commandSha256: crypto.createHash('sha256').update(JSON.stringify({ executable, args })).digest('hex'), startedAt: new Date().toISOString() };
-        run.operations.push(operation); await this.save();
+        if(!trackedImport){run.operations.push(operation); await this.save();}
         try {
           const output = await command(executable, args,checkout,kind==='import'?async()=>{
+            if(preparationPlan)await verifyLocalPreparation(preparationPlan);
+            if(manifest.recovery.scope==='empty-solution-only')await verifyEmptySolution(zip,manifest.solutionUniqueName);
+            if(trackedImport)await verifyTrackedImport(trackedImport);
             const current=await containedFile(checkout,manifest.solutionZip);
             if(current!==zip||await stablePackageDigest(current,controller.signal)!==run.recovery!.packageSha256)throw new Error('Pinned deployment package changed at native import boundary; reconcile before retrying');
             if(settings){if(await containedFile(checkout,manifest.settingsFile!)!==settings)throw new Error('Deployment settings path changed at import boundary');await verifyDeploymentSettings(settings,manifest.settingsSha256!,manifest);}
           }:undefined);
           operation.status = 'reported-success'; operation.endedAt = new Date().toISOString();
-          if (kind === 'import') operation.platformJobId = importJobId(output);
+          if (kind === 'import'&&!trackedImport) operation.platformJobId = importJobId(output);
           await this.save();
         } catch (error) { operation.status = 'unknown'; operation.endedAt = new Date().toISOString();run.recoveryRequired=true; await this.save(); throw error; }
       };
@@ -629,7 +874,13 @@ export class DeliveryService {
       if (run.checkpoint === 'post-started' && (manifest.postDeploy.length || !manifest.postDeployActions.length)) throw new Error('Post-deployment outcome is ambiguous; inspect activation/sharing/flow state before creating a replacement release');
       await step('deploying', async () => {
         if (run.checkpoint === 'prepared') {
-          await mutation('solution-import', 'import', 'pac', ['solution', 'import', '--environment', run.environmentUrl, '--path', zip, '--publish-changes', ...(settings ? ['--settings-file', settings] : [])]);
+          const referenceDevelopment=manifest.manualDevelopmentGovernance===true&&release.plan.acceptanceProfile==='functional-development';
+          if(manifest.importTransport==='dataverse-tracked'){
+            if(!referenceDevelopment||settings||!manifest.targetBinding||!manifest.platformIdentity)throw new Error('Tracked import requires bound identity and cannot replace PAC publishing/settings semantics');
+            const tracked=await prepareTrackedImport(zip,evidence,run.environmentUrl,run.recovery!.packageSha256,controller.signal),native=trackedImportCommand(tracked);
+            run.evidence.push(path.basename(tracked.requestFile));
+            await mutation('solution-import','import',native.executable,native.args,tracked);
+          }else await mutation('solution-import', 'import', 'pac', ['solution', 'import', '--environment', run.environmentUrl, '--path', zip, ...(!referenceDevelopment?['--publish-changes']:[]), ...(settings ? ['--settings-file', settings] : [])]);
           run.checkpoint = 'imported'; await this.save();
         }
         if (run.checkpoint === 'imported' || run.checkpoint === 'post-started') {
@@ -648,7 +899,7 @@ export class DeliveryService {
               await this.governance(run,manifest,'post-deploy');
               await checkAuthentication(action);
               const component = mapping.find((c) => c.key === action.component)!;
-              const save = () => this.save(), owned = async () => {await this.assertLeaseOwned();await targetLease!.assertOwned();};
+              const save = () => this.save(), owned = async () => {recordGate();await this.assertLeaseOwned();await targetLease!.assertOwned();recordGate();};
               if (action.type === 'workflow-state') await reconcileWorkflowAction(action, component, request, run, save, owned);
               else if (action.type === 'cloud-flow-state') {
                 if (action.state === 'active') await verifyCloudFlowActivationBindings(flow!, manifest.platformIdentity!.environmentId, component.id, manifest.targetComponents, manifest.postDeployActions, async (check) => {
@@ -666,7 +917,7 @@ export class DeliveryService {
           run.checkpoint = 'deployed'; await this.save();
         }
       });
-      await step('verifying', async () => {
+      await step('verifying', () => withVerificationBudget(controller,release.plan.quality.maxVerificationDurationMs,async () => {
         await this.governance(run,manifest,'verify');
         let verifiedMapping: Awaited<ReturnType<typeof mapTargetComponents>> = [];
         if (manifest.targetBinding) {
@@ -699,7 +950,7 @@ export class DeliveryService {
           else if (action.type === 'connection-reference-bind' || action.type === 'record-share' || action.type === 'schema-check') await reconcileAdditionalAction(action, component, request, run, save, owned);
           else await reconcileCopilot(action, component, request, command, run, save, owned);
         }
-        if (flow && manifest.platformIdentity) {
+        const verifyFlowChecks=async()=>{if (flow && manifest.platformIdentity) {
           const observations = [];
           for (const check of release.plan.verification.cloudFlowChecks ?? []) {
             const component = verifiedMapping.find((c) => c.key === check.component)!;
@@ -709,6 +960,18 @@ export class DeliveryService {
           }
           await atomicWrite(path.join(evidence, 'cloud-flow-verification.json'), JSON.stringify({ environmentUrl: run.environmentUrl, sourceCommit: run.head, observations }, null, 2));
           run.evidence.push('cloud-flow-verification.json');
+        }};
+        if(!functional)await verifyFlowChecks();
+        const observedAfter=new Date().toISOString();
+        let independent:string[]|undefined;
+        if(release.plan.verification.api?.transaction){
+          independent=await verifyApiIndependently(release.plan.verification.api,request,evidence,controller.signal,{runId:run.id,sourceCommit:run.head},()=>this.governance(run,manifest,'post-deploy'));
+          const report={environmentUrl:run.environmentUrl,sourceCommit:run.head,solutionUniqueName:manifest.solutionUniqueName,solutionVersion:manifest.solutionVersion,verifiedAt:new Date().toISOString(),authenticatedUser:manifest.platformIdentity!.username,appUrls:[],security:'not-verified',persistence:'passed',tests:[
+            {name:'Runner created a uniquely owned draft',category:'journey',passed:true,evidence:'independent-journey.json'},
+            {name:'Fresh authenticated read preserved pilot business values',category:'persistence',passed:true,evidence:'independent-journey.json'},
+            {name:'Server rejected the overlength write without changing state',category:'error-handling',passed:true,evidence:'independent-journey.json'},
+            {name:'Approved caller and own-record ownership checked before guarded writes',category:'authorization',passed:true,evidence:'independent-journey.json'},
+          ]};await atomicWrite(path.join(evidence,'verification.json'),JSON.stringify(report,null,2));
         }
         const report = verificationReport.parse(parseUnambiguousJson(await fs.readFile(await containedFile(evidence, 'verification.json'), 'utf8')));
         if (manifest.hasUi && !report.appUrls.length) throw new Error('UI verification requires deployed app URLs');
@@ -720,17 +983,33 @@ export class DeliveryService {
         const files = [...report.tests.map((t) => t.evidence), ...(report.ui ? [report.ui.desktop, report.ui.mobile, report.ui.trace] : [])];
         for (const file of files) await containedFile(evidence, file);
         await this.assertLeaseOwned();await targetLease!.assertOwned();
-        const independent = release.plan.verification.api
-          ? await verifyApiIndependently(release.plan.verification.api, request, evidence, controller.signal)
-          : await (this.deps.verify ?? verifyIndependently)(release.plan, this.root, evidence, controller.signal);
+        const qaContext={runId:run.id,releaseId:release.id,planHash:release.planHash,recordSha256:release.plan.deliveryRecord?.sha256??'',sourceCommit:run.head,environmentUrl:run.environmentUrl,startedAt:run.startedAt};
+        const qaOwned=async()=>{controller.signal.throwIfAborted();await this.assertLeaseOwned();await targetLease!.assertOwned();recordGate();};
+        let functionalObserver:Awaited<ReturnType<typeof createFunctionalRecovery>>|undefined;
+        if(functional){if(!flow||!manifest.platformIdentity||!manifest.sharepoint)throw Error('Functional recovery native adapters unavailable');const component=verifiedMapping.find(c=>c.key===functional.recovery.flowComponent)!;await verifyCloudFlowContext(flow,manifest.platformIdentity,component.id,component.id,manifest.solutionUniqueName);const sp=manifest.sharepoint.plan;const graph=await (this.deps.sharepoint??connectSharepointGraph)(sp.tenantId,sp.username,checkout,controller.signal,()=>{controller.signal.throwIfAborted();recordGate();},{run:async(item,cwd)=>command(item.executable,item.args,cwd,qaOwned),fetch:globalThis.fetch});functionalObserver=await createFunctionalRecovery({config:functional,context:qaContext,evidence,captureRoot:path.join(this.resourceLeaseRoot,'functional-recovery-captures'),leaseSha256:this.lease!.identitySha256,procedureSha256:qualityBytesHash(await fs.readFile(path.join(evidence,'recovery-runbook.md'))),flow,flowId:component.id,environmentId:manifest.platformIdentity.environmentId,graph,guard:qaOwned});}
+        independent ??= release.plan.verification.api
+          ? await verifyApiIndependently(release.plan.verification.api, request, evidence, controller.signal,{runId:run.id,sourceCommit:run.head})
+          : await journalNativeCommand(this.root,this.lease!.identitySha256,{executable:'external-browser-verification',args:[]},checkout,run.id,()=>this.assertLeaseOwned(),()=>(this.deps.verify ?? verifyIndependently)(release.plan, this.root, evidence, controller.signal,undefined,functionalObserver?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl,scenarioStarted:functionalObserver.scenarioStarted,scenarioCompleted:functionalObserver.scenarioCompleted}:coordinatorBrowserEnabled()?{runId:run.id,repoId:run.repoId,environmentUrl:run.environmentUrl}:undefined));
         await this.assertLeaseOwned();await targetLease!.assertOwned();
         if (copilotComponents.length) {
           await atomicWrite(path.join(evidence, 'copilot-verification.json'), JSON.stringify({ environmentUrl: run.environmentUrl, sourceCommit: run.head, mapping: verifiedMapping.filter((c) => c.kind === 'copilot'),
             checks: release.plan.verification.copilotChecks, independentEvidence: independent }, null, 2));
           run.evidence.push('copilot-verification.json');
         }
+        if(functional&&functionalObserver){independent.push(await functionalObserver.finish());run.recovery!.drillReport='functional-request-recovery.json';await this.save();await verifyFlowChecks();const file=await verifyFunctionalRejection(functional.rejection,qaContext,evidence,path.join(this.resourceLeaseRoot,'native-denial-claims'),this.lease!.identitySha256,this.nativeFactory(),controller.signal,qaOwned);await atomicWrite(path.join(evidence,'functional-rejection-index.json'),JSON.stringify({schemaVersion:1,file}));independent.push(file,'functional-rejection-index.json');}
+        if(release.plan.verification.nativeDeniedChecks?.length){
+          if(!release.plan.deliveryRecord)throw new Error('Native denied-access contract or adapter unavailable');
+          const entries=[];
+          for(const check of release.plan.verification.nativeDeniedChecks){
+            const files=await verifyNativeDeniedAccess(check,{runId:run.id,releaseId:release.id,planHash:release.planHash,recordSha256:release.plan.deliveryRecord.sha256,sourceCommit:run.head,environmentUrl:run.environmentUrl,startedAt:run.startedAt},evidence,this.nativeFactory(),controller.signal,async()=>{await this.assertLeaseOwned();await targetLease!.assertOwned();},undefined,path.join(this.resourceLeaseRoot,'native-denial-claims'),{leaseSha256:this.lease!.identitySha256});
+            entries.push({testName:check.testName,files});independent.push(...files);
+          }
+          await this.assertLeaseOwned();await targetLease!.assertOwned();
+          await atomicWrite(path.join(evidence,'native-denied-index.json'),JSON.stringify({schemaVersion:1,entries}));independent.push('native-denied-index.json');
+        }
         for (const file of independent) await containedFile(evidence, file);
         // Runner-owned scope is hash-bound with QA evidence; repository reports cannot widen it.
+        await verifyExternalSharepoint('after');
         await atomicWrite(path.join(evidence, 'acceptance-scope.json'), JSON.stringify({ schemaVersion: 1,
           ...acceptanceScope(release.plan), releaseId: release.id, planHash: release.planHash, sourceCommit: run.head,
           environmentUrl: run.environmentUrl, solutionUniqueName: run.solution, solutionVersion: run.version,
@@ -738,8 +1017,23 @@ export class DeliveryService {
           independentMethod: release.plan.verification.api ? 'dataverse-api' : release.plan.verification.frame ? 'browser-frame' : 'browser-dom', identities: release.plan.verification.identities.map(({ id, expectedUser }) => ({ id, expectedUser })),
           privilegeVerification: 'not-established-by-browser-identity-check',
         }, null, 2));
-        run.appUrls = release.plan.verification.api ? [] : [release.plan.verification.baseUrl]; run.evidence = [...run.evidence, 'operation-journal.json', 'acceptance-scope.json', 'verification.json', 'solution-inventory.json', ...new Set(files), ...independent];
-      });
+        if(release.plan.firstSlice){
+          const raw=parseUnambiguousJson(await fs.readFile(await containedFile(evidence,release.plan.verification.api?'independent-api.json':'independent-verification.json'),'utf8'));
+          const result=firstSliceEvidence(release.plan,{runId:run.id,releaseId:release.id,planHash:release.planHash,sourceCommit:run.head,environmentUrl:run.environmentUrl,startedAt:run.startedAt,observedAfter,packageSha256:run.recovery!.packageSha256},raw);
+          const bytes=JSON.stringify(result);await atomicWrite(path.join(evidence,'first-slice-verification.json'),bytes);
+          run.firstSlice={schemaVersion:1,observedAfter,contractHash:firstSliceContractHash(release.plan),artifactSha256:crypto.createHash('sha256').update(bytes).digest('hex'),evidenceFile:'first-slice-verification.json'};run.evidence.push('first-slice-verification.json');
+        }
+        if(release.plan.qualityEvidence){
+          for(const c of release.plan.qualityEvidence.checks)if(c.kind==='documentation'){
+            const source=Buffer.from(await this.sourceBlob(repo,run.head,c.document.file,release.plan,controller.signal,run.id));validateQualityDocument(c.document,source);
+            const file=qualityDocumentFile(c.checkId);await atomicWrite(path.join(evidence,file),source.toString('utf8'));run.evidence.push(file);
+          }
+          const index=await buildQualityIndex(release.plan,{functionalRecoveryCaptureRoot:path.join(this.resourceLeaseRoot,'functional-recovery-captures'),nativeCaptureLeaseSha256:run.nativeLeaseSha256,nativeClaimRoot:path.join(this.resourceLeaseRoot,'native-denial-claims'),nativeStartedAt:run.startedAt,runId:run.id,releaseId:release.id,planHash:release.planHash,sourceCommit:run.head,environmentUrl:run.environmentUrl,packageSha256:run.recovery!.packageSha256,observedAfter,manifestSha256:manifestDigest(manifest),buildAttempts:this.state.attemptHistory?.attempts.filter(a=>a.runId===run.id&&a.releaseId===release.id&&a.repoId===run.repoId&&a.head===run.head&&a.environmentUrl===run.environmentUrl).map(({id,startedAt})=>({id,startedAt}))??[]},manifest,async file=>fs.readFile(await containedFile(evidence,file)));
+          const bytes=JSON.stringify(index);await atomicWrite(path.join(evidence,'quality-evidence.json'),bytes);
+          run.qualityEvidence={schemaVersion:1,contractHash:qualityContractHash(release.plan),artifactSha256:qualityBytesHash(Buffer.from(bytes)),evidenceFile:'quality-evidence.json',observedAfter,checks:index.checks.map(({checkId,kind,evidenceSha256})=>({checkId,kind,evidenceSha256}))};run.evidence.push('quality-evidence.json');
+        }
+        run.appUrls = release.plan.verification.api ? [] : [release.plan.verification.baseUrl]; run.evidence = [...new Set([...run.evidence, 'operation-journal.json', 'acceptance-scope.json', 'verification.json', 'solution-inventory.json', ...files, ...independent])];
+      }));
       run.phase = 'reviewing'; run.recoveryRequired = false;
       run.evidenceHash = await this.evidenceHash(run);
       run.health = { status: 'pending', capabilityHash, nextCheckAt: new Date(Date.now() + release.plan.monitoring.intervalMinutes * 60000).toISOString() };

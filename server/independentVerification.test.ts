@@ -3,12 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { chromium } from 'playwright';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { verifyIndependently } from './independentVerification.ts';
 import { releasePlanSchema } from './releasePlan.ts';
 
 const roots: string[] = [];
-afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks();for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 async function fixture(accessible = true, framed = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-independent-')); roots.push(root);
   const evidence = path.join(root, 'evidence'); await fs.mkdir(evidence);
@@ -48,11 +48,13 @@ async function fixture(accessible = true, framed = false) {
 
 it('executes actual browser writes, reload, denied access and validation for two identities and widths', async () => {
   const { root, evidence, plan, launch } = await fixture();
-  const files = await verifyIndependently(plan, root, evidence, new AbortController().signal, launch);
+  const lifecycle:string[]=[];
+  const files = await verifyIndependently(plan, root, evidence, new AbortController().signal, launch,{runId:crypto.randomUUID(),scenarioStarted:async(name,width)=>{lifecycle.push(`start:${name}:${width}`);},scenarioCompleted:async(name,width)=>{lifecycle.push(`end:${name}:${width}`);}});
   const report = JSON.parse(await fs.readFile(path.join(evidence, 'independent-verification.json'), 'utf8'));
   expect(report.results).toHaveLength(12);
   expect(new Set(report.results.map((r: { identity: string }) => r.identity))).toEqual(new Set(['employee', 'manager']));
   expect(files.filter((f) => f.endsWith('.zip'))).toHaveLength(4);
+  expect(lifecycle).toHaveLength(24);for(let i=0;i<lifecycle.length;i+=2)expect(lifecycle[i+1]).toBe(lifecycle[i].replace('start:','end:'));
   for (const file of files) expect((await fs.stat(path.join(evidence, file))).size).toBeGreaterThan(0);
 }, 30_000);
 
@@ -61,6 +63,11 @@ it('refuses missing authentication state rather than treating a report as a pass
   await fs.unlink(path.join(root, 'delivery-identities', 'employee.json'));
   await expect(verifyIndependently(plan, root, evidence, new AbortController().signal, launch)).rejects.toThrow('not connected');
 });
+it('dispatches no scenario step when the native start observation consumes its task budget',async()=>{
+ const {root,evidence,plan,launch}=await fixture(),realNow=Date.now();let now=realNow,completed=0;vi.spyOn(Date,'now').mockImplementation(()=>now);
+ await expect(verifyIndependently(plan,root,evidence,new AbortController().signal,launch,{runId:crypto.randomUUID(),scenarioStarted:async()=>{now+=plan.quality.maxTaskDurationMs+1;},scenarioCompleted:async()=>{completed++;}})).rejects.toThrow('before browser action');
+ expect(completed).toBe(0);await expect(fs.stat(path.join(evidence,'independent-verification.json'))).rejects.toMatchObject({code:'ENOENT'});
+},30000);
 
 it('runs framed journeys and an actual file-input upload with pinned receipt bytes', async () => {
   const { root, evidence, plan, launch } = await fixture(true, true);

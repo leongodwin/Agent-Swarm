@@ -1,3 +1,6 @@
+import {ZipFile} from 'yazl';
+import {qualityContract,qualityDocument} from './testFixtures/quality.ts';
+import type {DeliveryRun} from '../shared/delivery.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -5,12 +8,16 @@ import crypto from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DeliveryService, deliveryManifest, containedFile, installedSolution, pacReportedError, importJobId, type DeliveryDependencies } from './delivery.ts';
+import { DeliveryService, deliveryManifest, containedFile, installedSolution, pacReportedError, importJobId, retainOwnedRecoveryEvidence, type DeliveryDependencies } from './delivery.ts';
 import type { RepoView } from '../shared/types.ts';
 import { manifestDigest } from './lifecycleGovernance.ts';
 import {generateHldContent} from '../shared/hld.ts';
 import {validateDeliveryState} from './deliveryState.ts';
+import {sharepointHash} from './sharepointProvisioning.ts';
 
+// Full delivery fixtures now flush native intent/result records to disk for each
+// command. Allow bounded filesystem latency without weakening any assertions.
+vi.setConfig({testTimeout:15000});
 const directories: string[] = [];
 it('recognizes PAC import failures printed to stdout even when its exit code is zero', () => {
   expect(pacReportedError('pac', 'Solution Importing...\nError: Cannot start another [Import]')).toBe(true);
@@ -100,6 +107,99 @@ async function fixture(fail?: 'test' | 'inventory' | 'evidence' | 'target' | 'in
   const release = await service.createRelease(repo, plan); await service.reviewArchitecture(release.id, 'sherlock', release.planHash, architectureAssessment); await service.approveRelease(release.id, 'sherlock', release.planHash);
   return { service, repo, calls, root, deps, release };
 }
+it('enforces the suite deadline after browser completion while native post-browser observation is pending',async()=>{
+ const {service,repo,release:baseRelease,deps,calls}=await fixture();let cleaned=false;
+ const check={testName:'authorization 1',scenarioId:'denied',tenantId:'11111111-1111-4111-8111-111111111111',deniedSubject:'22222222-2222-4222-8222-222222222222',observerSubject:'33333333-3333-4333-8333-333333333333',deniedIdentity:'manager',observerIdentity:'employee',deniedUsername:'manager@example.test',observerUsername:'employee@example.test',targetSha256:'a'.repeat(64),contract:{adapter:'native-denied-create-v1',operation:'create-request',assertions:['authenticated-403','no-correlated-write','no-correlated-dispatch'],observationWindowMs:1000,pollIntervalMs:100}};
+ deps.nativeDenied=async()=>({capabilities:async()=>({contract:'native-denied-create-v1',authenticatedIdentity:true,deniedCreate:true,exactCorrelation:true,completeWrites:true,completeDispatches:true}),identity:async role=>({tenantId:check.tenantId,subject:role==='denied'?check.deniedSubject:check.observerSubject,username:role==='denied'?check.deniedUsername:check.observerUsername,authenticated:true,audience:'native-target',targetSha256:check.targetSha256}),observe:async correlationKey=>({targetSha256:check.targetSha256,correlationKey,complete:true,visible:true,from:new Date(Date.now()-60000).toISOString(),through:new Date().toISOString(),writes:[],dispatches:[]}),attempt:async correlationKey=>({status:403,targetSha256:check.targetSha256,subject:check.deniedSubject,correlationKey}),close:async()=>{cleaned=true;}});
+ const release=await service.createRelease(repo,{...baseRelease.plan,deliveryRecord:{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',revision:1,sha256:'a'.repeat(64),purpose:'slice'},quality:{...baseRelease.plan.quality,maxTaskDurationMs:120000,maxVerificationDurationMs:1000},verification:{...baseRelease.plan.verification,nativeDeniedChecks:[check]}});
+ await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);await service.start(repo,true,release.id);await service.waitForIdle();const run=service.view().runs[0];expect(calls).toContain('independent');expect(run.phase).toBe('blocked');expect(run.error).toContain('verification suite deadline');expect(cleaned).toBe(true);expect(run.phase).not.toBe('reviewing');
+});
+it('binds raw recovery proof after retry, detects journal tampering and refuses an incomplete archive',async()=>{
+ const {service,root}=await fixture(),directory=path.join(root,'delivery-runs','retention-test','evidence');await fs.mkdir(directory,{recursive:true});
+ const files=['recovery-rehearsal.json'];await fs.writeFile(path.join(directory,files[0]),'signed summary');
+ await fs.writeFile(path.join(directory,'independent-recovery.json'),'owned result');
+ await expect(retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files)).rejects.toThrow();expect(files).toEqual(['recovery-rehearsal.json']);
+ await fs.writeFile(path.join(directory,'independent-recovery-journal.json'),'six snapshots');
+ await retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files);await retainOwnedRecoveryEvidence('pilot-owned-development-records',directory,files);
+ expect(files).toHaveLength(3);
+ const hash=(service as unknown as {evidenceHash(run:{id:string;evidence:string[]}):Promise<string>}).evidenceHash.bind(service),run={id:'retention-test',evidence:files};
+ const before=await hash(run);await fs.writeFile(path.join(directory,'independent-recovery-journal.json'),'changed snapshots');expect(await hash(run)).not.toBe(before);
+ await expect(retainOwnedRecoveryEvidence(undefined,path.join(root,'missing'),[])).resolves.toBeUndefined();
+});
+it('persists a restart-readable evidence set when project and independent reports share a file',async()=>{
+ const {service,repo,deps,root}=await fixture();deps.verify=async()=>['results.json'];
+ await service.start(repo);await service.waitForIdle();const run=service.view().runs[0];
+ expect(run.phase,run.error).toBe('reviewing');expect(run.evidence.filter(file=>file==='results.json')).toHaveLength(1);
+ const saved=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));expect(()=>validateDeliveryState(saved)).not.toThrow();
+ await service.close();const restarted=new DeliveryService(root,false,deps);services.push(restarted);await restarted.init();
+ expect(restarted.view().runs[0].evidenceHash).toBe(run.evidenceHash);expect(restarted.view().runs[0].phase).toBe('reviewing');
+});
+it.each(['production','functional-development'] as const)('limits broad publication to the original import path: %s',async profile=>{
+ const {service,repo,calls,deps}=await fixture(),base=deps.run,scoped={...manifest,manualDevelopmentGovernance:true};
+ deps.run=async(command,cwd,env,signal)=>{
+  if(command.executable==='git'&&command.args[0]==='show'&&command.args[1].endsWith(':cubefarm.delivery.json'))return JSON.stringify(scoped);
+  const output=await base(command,cwd,env,signal);
+  if(command.executable==='git'&&command.args[0]==='worktree'){await fs.writeFile(path.join(command.args[3],'cubefarm.delivery.json'),JSON.stringify(scoped));await fs.writeFile(path.join(command.args[3],'release.zip'),'PK build artifact');}
+  return output;
+ };
+ const release=await service.createRelease(repo,{...plan,acceptanceProfile:profile});await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);
+ await service.start(repo,true,release.id);await service.waitForIdle();const native=calls.find(call=>call.startsWith('pac solution import'));expect(native).toBeDefined();expect(native!.includes('--publish-changes')).toBe(profile==='production');
+});
+it('dispatches an opted-in tracked import only after its provider job is persisted and never infers success on interruption',async()=>{
+ const {service,repo,calls,deps,root}=await fixture(),base=deps.run,id='11111111-1111-4111-8111-111111111111',scoped={...manifest,manualDevelopmentGovernance:true,importTransport:'dataverse-tracked',targetBinding:{organizationId:id,userId:id},platformIdentity:{tenantId:id,username:'tester@company.test',environmentId:id}};
+ let dispatchedJob:string|undefined;
+ deps.run=async(command,cwd,env,signal)=>{
+  if(command.executable==='git'&&command.args[0]==='show'&&command.args[1].endsWith(':cubefarm.delivery.json'))return JSON.stringify(scoped);
+  if(command.executable==='pac'&&command.args[0]==='org')return `Org ID: ${id}\nUser ID: ${id}\nOrg URL: ${target}\nEnvironment ID: ${id}\nUser Email: tester@company.test`;
+  if(command.executable==='dataverse'&&command.args[0]==='auth')return `Tenant: ${id}\nUser: tester@company.test\nEnvironment: ${target}`;
+  if(command.executable==='dataverse'&&command.args.includes('GET'))return command.args.at(-1)?.includes('RetrieveCurrentOrganization')?JSON.stringify({Detail:{OrganizationId:id,EnvironmentId:id,TenantId:id,State:'Enabled'}}):JSON.stringify({OrganizationId:id,UserId:id});
+  if(command.executable==='dataverse'&&command.args.includes('POST')){
+   const body=JSON.parse(await fs.readFile(command.args.at(-1)!,'utf8')),saved=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));
+   const operation=saved.runs[0].operations[0];expect(operation.platformJobId).toBe(body.ImportJobId);expect(operation.status).toBe('intent');expect(operation.commandSha256).toBe(crypto.createHash('sha256').update(JSON.stringify(command)).digest('hex'));expect(saved.runs[0].checkpoint).toBe('import-started');
+   dispatchedJob=body.ImportJobId;throw new Error('Simulated accepted request followed by caller interruption');
+  }
+  const output=await base(command,cwd,env,signal);
+  if(command.executable==='git'&&command.args[0]==='worktree'){await fs.writeFile(path.join(command.args[3],'cubefarm.delivery.json'),JSON.stringify(scoped));await fs.writeFile(path.join(command.args[3],'release.zip'),'PK build artifact');}
+  return output;
+ };
+ const release=await service.createRelease(repo,{...plan,acceptanceProfile:'functional-development'});await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);
+ await service.start(repo,true,release.id);await service.waitForIdle();const run=service.view().runs[0];
+ expect(dispatchedJob).toBeDefined();expect(run).toMatchObject({phase:'blocked',checkpoint:'import-started',recoveryRequired:true});expect(run.operations?.[0]).toMatchObject({status:'unknown',platformJobId:dispatchedJob});expect(calls.some(call=>call.startsWith('pac solution import'))).toBe(false);
+});
+it('enforces the shared-record gate before release preparation and before deployment starts',async()=>{
+  const {service,repo,calls}=await fixture();const before=calls.length;
+  service.checkDeliveryRecord=()=>{throw new Error('Discovery or independent design review is missing');};
+  await expect(service.createRelease(repo,plan)).rejects.toThrow('Discovery');expect(calls).toHaveLength(before);
+  await expect(service.start(repo)).rejects.toThrow('Discovery');expect(calls).toHaveLength(before);
+});
+it.each(['success','before-drift','after-drift'] as const)('runner owns SharePoint readback before import and after runtime verification: %s',async mode=>{
+ const {service,repo,calls,deps}=await fixture(),base=deps.run,id='11111111-1111-4111-8111-111111111111',listId='22222222-2222-4222-8222-222222222222';
+ const siteUrl='https://example.sharepoint.com/sites/probe',siteId=`example.sharepoint.com,${id},${id}`;
+ const schema={schemaVersion:1,tenantId:id,username:'tester@company.test',siteUrl,siteCollectionId:id,webId:id,resources:[{key:'Requests',displayName:'Probe Requests',template:'genericList',columns:[]}]};
+ const scoped={...manifest,targetBinding:{organizationId:id,userId:id},platformIdentity:{tenantId:id,username:'tester@company.test',environmentId:id},sharepoint:{plan:schema,bindings:[{key:'Requests',listId}]}};
+ let connections=0;const graphCalls:string[]=[];
+ deps.sharepoint=async()=>{const stage=++connections;return Object.assign(async(method:string,resource:string)=>{
+  expect(method).toBe('GET');graphCalls.push(resource);if(resource.endsWith('/columns'))return {value:[]};
+  if(resource.includes('/lists/'))return {id:listId,displayName:'Probe Requests',description:mode==='before-drift'||mode==='after-drift'&&stage===2?'Foreign owner':`CubeFarm:${sharepointHash(schema)}:${id}`,webUrl:siteUrl+'/Lists/Probe',list:{template:'genericList'}};
+  return {id:siteId,webUrl:siteUrl,sharepointIds:{tenantId:id,siteId:id,webId:id}};
+ },{schemaWriteScopeObserved:false}) as Awaited<ReturnType<NonNullable<DeliveryDependencies['sharepoint']>>>;};
+ deps.run=async(command,cwd,env,signal)=>{
+  if(command.executable==='git'&&command.args[0]==='show'&&command.args[1].endsWith(':cubefarm.delivery.json'))return JSON.stringify(scoped);
+  if(command.executable==='pac'&&command.args[0]==='org')return `Org ID: ${id}\nUser ID: ${id}\nOrg URL: ${target}\nEnvironment ID: ${id}\nUser Email: tester@company.test`;
+  if(command.executable==='dataverse'&&command.args[0]==='auth')return `Tenant: ${id}\nUser: tester@company.test\nEnvironment: ${target}`;
+  if(command.executable==='dataverse'&&command.args.includes('GET')){const route=command.args.at(-1)!;if(route.includes('solutions?'))return JSON.stringify({value:[{solutionid:id}]});if(route.includes('solutioncomponents?'))return JSON.stringify({value:[]});return route.includes('RetrieveCurrentOrganization')?JSON.stringify({Detail:{OrganizationId:id,EnvironmentId:id,TenantId:id,State:'Enabled'}}):JSON.stringify({OrganizationId:id,UserId:id});}
+  const output=await base(command,cwd,env,signal);if(command.executable==='git'&&command.args[0]==='worktree')await fs.writeFile(path.join(command.args[3],'cubefarm.delivery.json'),JSON.stringify(scoped));
+  if(command.executable==='build'){
+   const archive=new ZipFile(),chunks:Buffer[]=[];const ready=new Promise<Buffer>((resolve,reject)=>{archive.outputStream.on('data',chunk=>chunks.push(chunk));archive.outputStream.on('end',()=>resolve(Buffer.concat(chunks)));archive.outputStream.on('error',reject);});
+   const entries={'solution.xml':`<ImportExportXml><SolutionManifest><UniqueName>Expenses</UniqueName><Version>1.0.0.1</Version><Managed>0</Managed><RootComponents><RootComponent type="29" id="{${id}}"/></RootComponents></SolutionManifest></ImportExportXml>`,'customizations.xml':`<ImportExportXml><connectionreferences><connectionreference connectionreferencelogicalname="exp_sp"><connectorid>/providers/Microsoft.PowerApps/apis/shared_sharepointonline</connectorid></connectionreference></connectionreferences><Workflows><Workflow WorkflowId="{${id}}"><Category>5</Category><JsonFileName>/Workflows/flow.json</JsonFileName></Workflow></Workflows></ImportExportXml>`,'Workflows/flow.json':JSON.stringify({properties:{connectionReferences:{sp:{api:{name:'shared_sharepointonline'},connection:{connectionReferenceLogicalName:'exp_sp'}}},definition:{triggers:{tick:{type:'Recurrence'}},actions:{read:{type:'OpenApiConnection',inputs:{host:{connectionName:'sp',apiId:'/providers/Microsoft.PowerApps/apis/shared_sharepointonline',operationId:'GetItems'},parameters:{dataset:siteUrl,table:listId}}}}}}})};
+   for(const [name,value] of Object.entries(entries))archive.addBuffer(Buffer.from(value),name);archive.end();await fs.writeFile(path.join(cwd,'release.zip'),await ready);
+  }return output;
+ };
+ const release=await service.createRelease(repo,plan);await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);await service.start(repo,true,release.id);await service.waitForIdle();const run=service.view().runs[0];
+ expect(run.phase,run.error).toBe(mode==='success'?'reviewing':'blocked');expect(calls.some(c=>c.startsWith('pac solution import'))).toBe(mode!=='before-drift');
+ expect(run.evidence.filter(f=>f.startsWith('sharepoint-release-'))).toHaveLength(mode==='success'?2:mode==='before-drift'?0:1);expect(connections).toBe(mode==='before-drift'?1:2);expect(graphCalls.some(c=>c.includes('/items'))).toBe(false);
+});
+it('rejects unregistered monitoring contracts before storing a new release for QA',async()=>{const {service,repo}=await fixture();service.validateMonitoring=()=>{throw new Error('Unregistered monitoring probe');};const before=service.view().releases.length;await expect(service.createRelease(repo,{...plan,name:'Bad monitoring'})).rejects.toThrow('Unregistered monitoring');expect(service.view().releases).toHaveLength(before);});
 it.each(['manifest','escaped-manifest','required-issue','architecture'] as const)('rejects ambiguous %s preflight evidence without building or importing',async mode=>{
  const {service,repo,deps,calls}=await fixture(),native=deps.run;
  deps.run=async(...args)=>{
@@ -212,6 +312,8 @@ it('requires a committed architecture version before creating a new release',asy
   const {architecture:_binding,...unbound}=plan;
   await expect(service.createRelease(repo,unbound)).rejects.toThrow('commit an architecture');expect(calls).toHaveLength(before);
 });
+// This integration fixture launches a real local Git repository lifecycle and
+// flushes each native journal record; it is not a single in-memory assertion.
 it('reads architecture from a real pinned Git commit and denies an uncommitted draft',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'architecture-git-'));directories.push(root);
   const execute=promisify(execFile);
@@ -230,7 +332,7 @@ it('reads architecture from a real pinned Git commit and denies an uncommitted d
   await expect(service.approveRelease(release.id,'sherlock',release.planHash)).rejects.toThrow('Independent review');
   await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);
   await service.close();const restored=new DeliveryService(root,false,{async run(){throw new Error('No command allowed during restored-state check');}});services.push(restored);await restored.init();expect(restored.view().releases[0].architectureReview?.artifactSha256).toBe(architectureHash);
-});
+},30000);
 it('rejects committed architecture drift before recording a release',async()=>{
   const {service,repo,deps}=await fixture();const original=deps.run;
   deps.run=async(...args)=>args[0].executable==='git'&&args[0].args[0]==='show'&&args[0].args[1].endsWith('.md')?'Changed architecture':original(...args);
@@ -592,7 +694,7 @@ describe('Release reliability', () => {
     const targetManifest = { ...manifest, targetBinding: { organizationId: id, userId: id }, platformIdentity: { tenantId: id, username: 'maker@example.com', environmentId: id },
       targetComponents: [{ key: 'approval', kind: 'cloud-flow', logicalName: 'expense_approval' }, { key: 'dataverse', kind: 'connection-reference', logicalName: 'exp_dataverse' }],
       postDeployActions: [{ id: 'activate', type: 'cloud-flow-state', component: 'approval', state: 'active' }, { id: 'binding', type: 'connection-reference-check', component: 'dataverse', connectionId: 'approved', connectorId: 'dataverse-connector' }] };
-    let correlatedRunId = ''; let active = false; let referenceChecked = false;
+    let correlatedRunId = ''; let observedFlowStart=''; let active = false; let referenceChecked = false;
     const flow = { close: vi.fn(async () => {}), call: vi.fn(async (tool: string, args: Record<string, unknown>) => {
       if (tool === 'whoami') {
         if(ownership==='replaced'){
@@ -605,8 +707,9 @@ describe('Release reliability', () => {
       if (tool === 'get_flow') return args.path === 'properties' ? { definition: {}, connectionReferences: {} } : args.path === 'properties.connectionReferences' ? { dataverse: { connectionName: 'approved', connectionReferenceLogicalName: 'exp_dataverse', id: 'dataverse-connector' } } : active ? 'Started' : 'Stopped';
       if (tool === 'preflight_flow') return { overall: 'ready' };
       if (tool === 'publish_flow') { expect(referenceChecked).toBe(true); active = true; return { success: true }; }
-      if (tool === 'get_run_history') return [{ name: 'observed-test-run', status: 'Succeeded', startTime: new Date().toISOString() }];
-      if (tool === 'get_run_action_content') return { content: { body: { releaseId: correlatedRunId, saved: true } } };
+      if (tool === 'get_run_history') { observedFlowStart=new Date().toISOString(); return [{ name: 'observed-test-run', status: 'Succeeded', startTime: observedFlowStart }]; }
+      if (tool === 'get_run_details') return { name:'observed-test-run',id:`/providers/Microsoft.ProcessSimple/environments/${id}/flows/${id}/runs/observed-test-run`,properties:{status:'Succeeded',startTime:observedFlowStart,endTime:observedFlowStart}};
+      if (tool === 'get_run_action_content') return { action:'Audit',which:'outputs',content: { body: { releaseId: correlatedRunId, saved: true } } };
       throw new Error(`Unexpected tool ${tool}`);
     }) };
     deps.flow = async () => flow;
@@ -642,7 +745,9 @@ describe('Release reliability', () => {
     const evidence = path.join(root, 'delivery-runs', run.id, 'evidence');
     expect(JSON.parse(await fs.readFile(path.join(evidence, 'platform-authentication.json'), 'utf8')).providers).toContain('flowagent');
     expect(JSON.parse(await fs.readFile(path.join(evidence, 'platform-authentication-binding.json'), 'utf8'))).toMatchObject({actionId:'binding',providers:['dataverse'],scope:'typed-action-identity-observation'});
-    expect(JSON.parse(await fs.readFile(path.join(evidence, 'cloud-flow-verification.json'), 'utf8')).observations[0].correlationId).toBe(run.id);
+    const dispatch=JSON.parse(await fs.readFile(path.join(evidence, 'cloud-flow-verification.json'), 'utf8')).observations[0];
+    expect(dispatch).toMatchObject({correlationId:run.id,positiveDispatchObserved:true,sharepointCausalityVerified:false,completeDispatches:false,replayAuthorized:false});
+    expect(dispatch.providerRunSha256).toMatch(/^[a-f0-9]{64}$/);expect(flow.call.mock.calls.filter(([tool])=>tool==='get_run_details')).toHaveLength(2);
   });
   it('resumes typed post-deployment reconciliation without another import or activation', async () => {
     const { service, repo, deps, calls, root } = await fixture(); const original = deps.run;
@@ -776,4 +881,120 @@ describe('Quality, recovery and monitoring', () => {
     expect(second.previousRunId).toBe(first.id); expect(second.recovery?.packageSha256).toHaveLength(64);
     expect(second.evidence).toContain('previous-inventory.json'); expect(second.evidence).toContain('recovery-rehearsal.json');
   });
+});
+
+async function firstSliceDelivery(mode:'complete'|'missing-observation'|'missing-component'|'stale'='complete',quality:false|true|'missing-doc'|'bad-section'|'test-fails'|'independent-fails'|'pre-import-fails'=false){
+  const f=await fixture(),{service,repo,deps}=f,native=deps.run;
+  const id='11111111-1111-4111-8111-111111111111',solutionId='22222222-2222-4222-8222-222222222222';
+  if(quality==='pre-import-fails'){const governance=deps.governance!;let refused=false;deps.governance=async request=>{if(request.phase==='import'&&!refused){refused=true;throw new Error('Synthetic pre-import prerequisite unavailable');}return governance(request);};}
+  const contract=quality?qualityContract():undefined;
+  const typed={...manifest,documentation:quality?[...manifest.documentation,'user.md','administrator.md']:manifest.documentation,targetBinding:{organizationId:id,userId:id},targetComponents:mode==='missing-component'?[]:[{key:'expenses',kind:'dataverse-table',logicalName:'exp_expense'}]};
+  deps.run=async(...args)=>{
+    const cmd=args[0];
+    if(quality&&cmd.executable==='build'){const result=await native(...args);const file=path.join(args[1],'recovery.json'),report=JSON.parse(await fs.readFile(file,'utf8'));report.procedureSha256=crypto.createHash('sha256').update(qualityDocument('operations')).digest('hex');await fs.writeFile(file,JSON.stringify(report));return result;}
+    if(quality&&cmd.executable==='test'&&quality==='test-fails')throw new Error('Synthetic compile/test failed');
+    if(contract&&cmd.executable==='git'&&cmd.args[0]==='show'){const doc=contract.checks.find(c=>c.kind==='documentation'&&cmd.args[1].endsWith(`:${c.document.file}`));if(doc?.kind==='documentation'){if(quality==='missing-doc')throw new Error('Pinned handover document unavailable');return quality==='bad-section'?'# Incomplete handover':qualityDocument(doc.document.role);}}
+    if(cmd.executable==='git'&&cmd.args[0]==='show'&&cmd.args[1].endsWith(':cubefarm.delivery.json'))return JSON.stringify(typed);
+    if(cmd.executable==='git'&&cmd.args[0]==='worktree'){const result=await native(...args);await fs.writeFile(path.join(cmd.args[3],'cubefarm.delivery.json'),JSON.stringify(typed));if(contract)for(const c of contract.checks)if(c.kind==='documentation')await fs.writeFile(path.join(cmd.args[3],c.document.file),qualityDocument(c.document.role));return result;}
+    if(cmd.executable==='dataverse'){const resource=cmd.args[cmd.args.indexOf('--path')+1];
+      if(resource.endsWith('WhoAmI'))return JSON.stringify({OrganizationId:id,UserId:id});
+      if(resource.includes('/solutioncomponents?'))return JSON.stringify({value:[{objectid:id,componenttype:1}]});
+      if(resource.includes('/solutions?'))return JSON.stringify({value:[{solutionid:solutionId}]});
+      if(resource.includes('/EntityDefinitions('))return JSON.stringify({MetadataId:id,EntitySetName:'exp_expenses',PrimaryIdAttribute:'exp_expenseid'});
+      throw new Error(`Unexpected synthetic request ${resource}`);
+    }
+    return native(...args);
+  };
+  deps.verify=async(p,_root,evidence)=>{
+    if(quality==='independent-fails')throw new Error('Independent verification failed');
+    const results=p.verification.scenarios.flatMap(s=>[1440,390].map(width=>({...s,passed:true,viewport:{width,height:900}})));
+    if(mode==='missing-observation')results.splice(0,1);
+    await fs.writeFile(path.join(evidence,'independent-verification.json'),JSON.stringify({applicationUrl:p.verification.baseUrl,completedAt:mode==='stale'?'2000-01-01T00:00:00Z':new Date().toISOString(),results}));return ['independent-verification.json'];
+  };
+  const firstSlice={schemaVersion:1,components:[{componentId:'data',targetKey:'expenses',platform:'dataverse'}],cases:[0,1,3].map((n,i)=>({checkId:'runtime',scenarioId:['happy','denied','failure'][i],testName:plan.verification.scenarios[n].name}))};
+  const release=await service.createRelease(repo,{...plan,deliveryRecord:{id,revision:1,sha256:'c'.repeat(64),purpose:'slice'},firstSlice,...(contract?{qualityEvidence:contract}:{})});await service.reviewArchitecture(release.id,'sherlock',release.planHash,architectureAssessment);await service.approveRelease(release.id,'sherlock',release.planHash);
+  await service.start(repo,false,release.id);await service.waitForIdle();return {...f,release};
+}
+it('writes hash-bound first-slice proof only after independent execution, revalidates at approval and acceptance, and survives restart',async()=>{
+  const {service,repo,root,deps,release}=await firstSliceDelivery();let run=service.view().runs[0];expect(run.error).toBeUndefined();expect(run.phase).toBe('reviewing');expect(run.firstSlice).toBeDefined();
+  const file=path.join(root,'delivery-runs',run.id,'evidence','first-slice-verification.json'),proof=JSON.parse(await fs.readFile(file,'utf8'));
+  expect(proof).toMatchObject({runId:run.id,releaseId:release.id,planHash:release.planHash,sourceCommit:sha,environmentUrl:target,packageSha256:run.recovery!.packageSha256,deliveryRecord:release.plan.deliveryRecord});
+  await service.approveVisual(run.id,'sherlock',{evidenceHash:run.evidenceHash,scores:[5,5,5,5,5],notes:'Independent synthetic review of mapped scenarios, recovery and source bindings.',recoveryReviewed:true});await service.verifySliceAcceptance(run.id);
+  await service.close();const reopened=new DeliveryService(root,false,deps);services.push(reopened);await reopened.init();run=reopened.view(repo.id).runs[0];expect(run.firstSlice?.artifactSha256).toBe(service.view(repo.id).runs[0].firstSlice?.artifactSha256);await reopened.verifySliceAcceptance(run.id);
+  await fs.writeFile(file,JSON.stringify({...proof,sourceCommit:'d'.repeat(40)}));await expect(reopened.verifySliceAcceptance(run.id)).rejects.toThrow('First-slice evidence changed');
+});
+it.each(['missing-observation','stale'] as const)('holds incomplete first-slice %s evidence before QA acceptance',async mode=>{
+  const {service}=await firstSliceDelivery(mode),run=service.view().runs[0];expect(run.phase).toBe('blocked');expect(run.firstSlice).toBeUndefined();expect(run.visualReview).toBeUndefined();
+
+});
+it('detects tampered first-slice proof before independent visual approval',async()=>{
+  const {service,root}=await firstSliceDelivery(),run=service.view().runs[0];await fs.writeFile(path.join(root,'delivery-runs',run.id,'evidence','first-slice-verification.json'),'changed');
+  await expect(service.approveVisual(run.id,'sherlock',{evidenceHash:run.evidenceHash,scores:[5,5,5,5,5],notes:'Independent review must refuse modified first-slice evidence.',recoveryReviewed:true})).rejects.toThrow('Evidence changed');
+});
+
+it('rejects missing first-slice component mappings during release preparation before any deployment',async()=>{
+  await expect(firstSliceDelivery('missing-component')).rejects.toThrow('typed target mapping');
+});
+
+const qualityAssessment=(run:DeliveryRun)=>({evidenceHash:run.evidenceHash!,scores:[5,5,5,5,5],notes:'Independent synthetic review of screenshots, recovery, per-check results and handover limitations.',recoveryReviewed:true,qualityDecisions:run.qualityEvidence!.checks.map(c=>({checkId:c.checkId,evidenceSha256:c.evidenceSha256,decision:'approved' as const,notes:`Inspected the synthetic ${c.checkId} evidence, expected behavior, source binding and declared limits.`}))});
+it('requires exact per-check independent decisions and retains pinned documentation/command proof across restart',async()=>{
+  const {service,root,deps}=await firstSliceDelivery('complete',true);const run=service.view().runs[0];expect(run.error).toBeUndefined();expect(run.phase).toBe('reviewing');expect(run.qualityEvidence?.checks).toHaveLength(9);
+  const directory=path.join(root,'delivery-runs',run.id,'evidence'),index=JSON.parse(await fs.readFile(path.join(directory,'quality-evidence.json'),'utf8'));
+  expect(index).toMatchObject({runId:run.id,sourceCommit:sha,environmentUrl:target,packageSha256:run.recovery!.packageSha256});
+  expect(await fs.readFile(path.join(directory,'quality-document-doc-user.md'),'utf8')).toBe(qualityDocument('user'));
+  const receipt=JSON.parse(await fs.readFile(path.join(directory,'quality-command-test-0.json'),'utf8'));expect(receipt).toMatchObject({originAttemptId:run.currentAttemptId,outcome:'returned-success',sourceCommit:sha});
+  const good=qualityAssessment(run);
+  for(const input of [
+    {...good,qualityDecisions:undefined}, {...good,qualityDecisions:good.qualityDecisions.slice(1)},
+    {...good,qualityDecisions:good.qualityDecisions.map((c,i)=>i===1?good.qualityDecisions[0]:c)},
+    {...good,qualityDecisions:good.qualityDecisions.map((c,i)=>i===0?{...c,decision:'rejected'}:c)},
+    {...good,qualityDecisions:good.qualityDecisions.map((c,i)=>i===0?{...c,evidenceSha256:'f'.repeat(64)}:c)},
+  ])await expect(service.approveVisual(run.id,'sherlock',input)).rejects.toThrow();
+  await expect(service.approveVisual(run.id,'ada',good)).rejects.toThrow('assigned QA');
+  await service.approveVisual(run.id,'sherlock',good);expect(service.view().runs[0].qualityReview?.decisions).toHaveLength(9);await service.verifySliceAcceptance(run.id);
+  const stored=JSON.parse(await fs.readFile(path.join(root,'delivery.json'),'utf8'));delete stored.runs[0].qualityReview;expect(()=>validateDeliveryState(stored)).toThrow('per-check');
+  await service.close();const reopened=new DeliveryService(root,false,deps);services.push(reopened);await reopened.init();expect(reopened.view().runs[0].qualityReview?.reviewer).toBe('sherlock');await reopened.verifySliceAcceptance(run.id);
+  await fs.appendFile(path.join(directory,'quality-document-doc-user.md'),'Changed after review');await expect(reopened.verifySliceAcceptance(run.id)).rejects.toThrow('evidence changed');
+});
+it.each(['missing-doc','bad-section'] as const)('rejects %s handover before storing a release or deploying',async quality=>{
+  await expect(firstSliceDelivery('complete',quality)).rejects.toThrow(quality==='missing-doc'?'document unavailable':'missing required section');
+});
+it.each(['test-fails','independent-fails'] as const)('withholds the quality index after %s execution',async quality=>{
+  const {service}=await firstSliceDelivery('complete',quality),run=service.view().runs[0];expect(run.phase).toBe('blocked');expect(run.qualityEvidence).toBeUndefined();expect(run.qualityReview).toBeUndefined();
+});
+it('reuses command provenance only for the unchanged prepared package when retrying verification',async()=>{
+  const {service,repo,release,root}=await firstSliceDelivery('complete',true);const before=service.view().runs[0];
+  const file=path.join(root,'delivery-runs',before.id,'evidence','quality-command-test-0.json'),receipt=await fs.readFile(file,'utf8');
+  await service.start(repo,true,release.id);await service.waitForIdle();const after=service.view().runs[0];expect(after.error).toBeUndefined();expect(after.phase).toBe('reviewing');expect(after.currentAttemptId).not.toBe(before.currentAttemptId);expect(await fs.readFile(file,'utf8')).toBe(receipt);expect(after.qualityEvidence).toBeDefined();
+},15000);
+it('denies QA approval if a retry begins during the asynchronous evidence assessment',async()=>{
+  const {service,repo,release}=await firstSliceDelivery('complete',true),run=service.view().runs[0];
+  const internal=service as unknown as {assertQualityEvidence:(run:DeliveryRun,release:unknown)=>Promise<void>};const original=internal.assertQualityEvidence.bind(service);let resume!:()=>void,entered=false;
+  const spy=vi.spyOn(internal,'assertQualityEvidence').mockImplementationOnce(async(r,p)=>{await original(r,p);entered=true;await new Promise<void>(resolve=>{resume=resolve;});});
+  const pending=service.approveVisual(run.id,'sherlock',qualityAssessment(run));const refused=expect(pending).rejects.toThrow('Delivery changed');await vi.waitFor(()=>expect(entered).toBe(true));
+  await service.start(repo,true,release.id);resume();await refused;spy.mockRestore();await service.waitForIdle();expect(service.view().runs[0].phase).toBe('reviewing');expect(service.view().runs[0].qualityReview).toBeUndefined();
+},15000);
+
+it('keeps resumed build/test receipts unique through a pre-import retry and restart',async()=>{
+  const {service,repo,release,root,deps}=await firstSliceDelivery('complete','pre-import-fails');const before=service.view().runs[0];expect(before.phase).toBe('blocked');expect(before.checkpoint).toBe('prepared');
+  await service.start(repo,true,release.id);await service.waitForIdle();const after=service.view().runs[0];expect(after.error).toBeUndefined();expect(after.phase).toBe('reviewing');expect(new Set(after.evidence).size).toBe(after.evidence.length);
+  const receipt=JSON.parse(await fs.readFile(path.join(root,'delivery-runs',after.id,'evidence','quality-command-test-0.json'),'utf8'));expect(receipt.originAttemptId).toBe(after.currentAttemptId);
+  await service.close();const reopened=new DeliveryService(root,false,deps);services.push(reopened);await reopened.init();expect(reopened.view().runs[0].qualityEvidence).toBeDefined();
+},15000);
+
+it('journals every release preparation command under the exact lease before dispatch',async()=>{
+ const {service,repo,root,deps}=await fixture(),original=deps.run;
+ const lease=await fs.readFile(path.join(root,'delivery.lock'));
+ const leaseSha=crypto.createHash('sha256').update(lease).digest('hex'),directory=path.join(root,'delivery-native',leaseSha);
+ const prior=(await fs.readdir(directory)).filter(name=>name.endsWith('.intent.json')).length;
+ let observed=0;
+ deps.run=async(...args)=>{
+  const names=await fs.readdir(directory),intents=names.filter(name=>name.endsWith('.intent.json')),results=names.filter(name=>name.endsWith('.result.json'));
+  expect(intents.length-results.length).toBe(1);
+  const active=intents.find(name=>!names.includes(name.replace('.intent.json','.result.json')))!;
+  expect(JSON.parse(await fs.readFile(path.join(directory,active),'utf8'))).toMatchObject({leaseSha256:leaseSha,commandSha256:crypto.createHash('sha256').update(JSON.stringify(args[0])).digest('hex')});
+  observed++;return original(...args);
+ };
+ await service.createRelease(repo,plan);expect(observed).toBeGreaterThan(0);
+ const names=await fs.readdir(directory);expect(names.filter(name=>name.endsWith('.intent.json'))).toHaveLength(prior+observed);expect(names.filter(name=>name.endsWith('.result.json'))).toHaveLength(prior+observed);
 });

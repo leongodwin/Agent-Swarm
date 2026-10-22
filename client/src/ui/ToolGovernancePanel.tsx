@@ -1,3 +1,4 @@
+import {ExecutionEfficiencyPanel} from './ExecutionEfficiencyPanel';
 import { useEffect, useRef } from 'react';
 import { api } from '../api';
 import { useResource } from '../useResource';
@@ -21,6 +22,7 @@ export function ToolGovernancePanel() {
     <p className="muted small">Recorded request safeguards. These counts cover observed checkpoints, not all tool calls or verified tenant compliance.</p>
     <WorkflowReliabilityPanel/>
     <DeliveryAttemptPanel/>
+    <ExecutionEfficiencyPanel/>
     <OfficeRuntimePanel/>
     {sessions&&<div className="card" aria-label="Shared session budget"><strong>Shared session budget</strong><p>Occupied slots: {sessions.used} · limit {sessions.limit||'unlimited'} · {sessions.agentSessions} coding-agent sessions</p>{sessions.blockedReason&&<p role="alert">Session capacity is unverified: {sessions.blockedReason}{sessions.cleanupFailureCode&&` · diagnostic: ${sessions.cleanupFailureCode}`}</p>}<ul>{sessions.auxiliary.map(item=><li key={item.jobId}>Architecture {item.jobId} · {item.repoId} · {item.state}</li>)}{sessions.readiness?.map(item=><li key={item.id}>Runtime readiness · {agents[item.agentId]?.name??(item.agentId||'unknown worker')} · {item.cli} · {item.state==='cancelled'?'Cancelled; waiting for check to finish':'Checking'}</li>)}{sessions.cleanup?.map(item=><li key={item.id}>Runtime cleanup · {agents[item.agentId]?.name??(item.agentId||'unknown worker')} · {item.cli} · PID {item.pid||'pending'} · {item.state}</li>)}</ul><p className="muted small">Cancelled readiness checks retain capacity until they settle. Stopping runtimes keep capacity quarantined until native root exit is acknowledged. These counts do not certify descendant termination or cross-machine capacity.</p></div>}
     <div className="card" aria-label="Tenant policy inventory">
