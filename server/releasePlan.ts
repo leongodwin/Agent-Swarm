@@ -52,6 +52,8 @@ export const releasePlanSchema = z.object({
   }).strict(),
 }).strict().superRefine((plan, ctx) => {
   const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
+  const historyPolicy=plan.verification.headlessFlow?.historyPolicy;
+  if(historyPolicy&&(!plan.deliveryRecord||historyPolicy.recordId!==plan.deliveryRecord.id||historyPolicy.recordSha256!==plan.deliveryRecord.sha256))fail('History policy must bind the exact independently reviewed delivery record');
   if(plan.verification.browserSession&&(plan.acceptanceProfile!=='functional-development'||plan.verification.api||plan.verification.copilotChecks||new Set(plan.verification.identities.map(i=>i.expectedUser.toLowerCase())).size!==1||plan.verification.scenarios.some(s=>s.steps.some(step=>step.action==='upload'))))fail('Connected-browser verification requires single-user functional development without API, Copilot or uploads');
   if(plan.qualityEvidence&&!plan.deliveryRecord)fail('Quality evidence requires a pinned delivery record');
   if(plan.qualityEvidence&&plan.verification.api)fail('Quality acceptance requires a runner-owned denied-action adapter; API-only evidence is insufficient');

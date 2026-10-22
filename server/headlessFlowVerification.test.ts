@@ -8,6 +8,7 @@ function plan(dispatch=false){const modes=['dry-run','recipient-denied','attachm
 async function fixture(dispatch=false,change?: (tool:string,args:any,value:any)=>any){const root=await fs.mkdtemp(path.join(os.tmpdir(),'headless-flow-'));roots.push(root);const p=plan(dispatch);let body:any={},runId='',status='';const runs=new Map<string,any>();const calls:string[]=[];const adapter:FlowAdapter={close:vi.fn(async()=>{}),call:vi.fn(async(tool,args:any)=>{calls.push(tool);let value:any;
  if(tool==='whoami')value={azIdentity:{tenantId:tenant,user:owner},tokenIdentity:{tenantId:tenant,username:owner},effectiveConnectivityIdentity:{tenantId:tenant,username:owner},identityMismatch:false,connectivityIdentityMismatch:false};
  else if(tool==='get_flow')value=definition();
+ else if(tool==='get_flow_context')value={flowId,ownerId:env,category:5,inSolution:true,isManaged:false,workflowIsManaged:false,isCustomizable:true,warning:null};
  else if(tool==='run_flow'){body=args.body;runId='run-'+runs.size;status=p.checks.find(c=>c.mode===body.mode)!.expectedStatus;runs.set(runId,{id:`/providers/Microsoft.ProcessSimple/environments/${env}/flows/${flowId}/runs/${runId}`,name:runId,properties:{status,startTime:new Date().toISOString(),endTime:new Date().toISOString()}});value={runId};}
  else if(tool==='get_run_details')value=runs.get(args.run);
  else if(tool==='get_run_actions')value=[{name:'Send_report',status:body.dispatch?'Succeeded':'Skipped'},{name:'Read_receipt',status:body.dispatch?'Succeeded':'Skipped'}];
@@ -96,4 +97,38 @@ it('also rejects attachment download routes through the generic Outlook GET oper
  const d:any=definition();d.actions.Attachment={type:'OpenApiConnection',inputs:{host:{apiId:'/providers/Microsoft.PowerApps/apis/shared_office365',operationId:'HttpRequest'},parameters:{Method:'GET',Uri:'https://graph.microsoft.com/v1.0/me/messages/mail-id/attachments/file-id/$value'}}};
  expect(()=>assertHeadlessDefinition(d,owner,url,'Send_report',undefined,undefined,'standard-mail-v1')).toThrow('read-only mail Graph routes');
  expect(()=>assertHeadlessDefinition(d,owner,url,'Send_report')).not.toThrow();
+});
+it('runs reviewed synthetic validation under verification admission only and labels retained evidence',async()=>{
+ const f=await fixture();f.p.operationScope='standard-mail-v1';f.p.dataMode='synthetic';const admit=vi.fn(async()=>{});
+ await verifyHeadlessFlow(f.p,url,f.root,new AbortController().signal,f.connect,undefined,undefined,undefined,undefined,admit);
+ expect(admit.mock.calls.map(c=>(c as unknown[])[0])).not.toContain('private-data');
+ expect(vi.mocked(f.adapter.call).mock.calls.filter(([tool])=>tool==='run_flow').every(([,args])=>(args.body as any).dataMode==='synthetic'&&(args.body as any).dispatch===false)).toBe(true);
+ const report=JSON.parse(await fs.readFile(path.join(f.root,'independent-verification.json'),'utf8'));expect(report.dataMode).toBe('synthetic');
+ expect(()=>assertHeadlessEvidence({...f.p,dataMode:'mailbox'},f.p.checks.map(c=>({testName:c.name})),url,new Date(0).toISOString(),report)).toThrow('data mode');
+});
+it.each(['unguarded','else','wrong-guard'])('refuses %s mailbox reads before synthetic invocation',async placement=>{
+ const d:any=definition(),read={type:'OpenApiConnection',inputs:{host:{apiId:'/providers/Microsoft.PowerApps/apis/shared_office365',operationId:'GetEmailsV3'},parameters:{}}};
+ if(placement==='unguarded')d.actions.Read=read;else d.actions.Mailbox={type:'If',expression:{equals:["@triggerBody()?['dataMode']",placement==='wrong-guard'?'synthetic':'mailbox']},...(placement==='else'?{actions:{},else:{actions:{Read:read}}}:{actions:{Read:read}})};
+ const f=await fixture(false,(tool,_args,value)=>tool==='get_flow'?d:value);f.p.operationScope='standard-mail-v1';f.p.dataMode='synthetic';f.p.definitionSha256=hash(d);
+ await expect(verifyHeadlessFlow(f.p,url,f.root,new AbortController().signal,f.connect)).rejects.toThrow('exact mailbox data-mode');expect(f.calls).not.toContain('run_flow');
+});
+it('admits standard mailbox reads only beneath the exact data-mode guard and refuses synthetic dispatch',()=>{
+ const d:any=definition();d.actions.Mailbox={type:'If',expression:{equals:["@triggerBody()?['dataMode']",'mailbox']},actions:{Read:{type:'OpenApiConnection',inputs:{host:{apiId:'/providers/Microsoft.PowerApps/apis/shared_office365',operationId:'GetEmailsV3'},parameters:{}}}}};
+ expect(()=>assertHeadlessDefinition(d,owner,url,'Send_report',undefined,undefined,'standard-mail-v1')).not.toThrow();
+ expect(()=>headlessFlowSchema.parse({...plan(true),operationScope:'standard-mail-v1',dataMode:'synthetic'})).toThrow('Synthetic validation');
+ expect(()=>headlessFlowSchema.parse({...plan(),dataMode:'synthetic'})).toThrow('Synthetic validation');
+});
+it.each(['valid','foreign-owner','warning','managed'])('checks a fresh reviewed private-mode ownership baseline before triggering: %s',async mode=>{
+ const f=await fixture(false,(tool,_args,value)=>tool==='get_flow_context'?{...value,displayName:'PRIVATE_METADATA_LABEL',...(mode==='foreign-owner'?{ownerId:tenant}:mode==='warning'?{warning:'workflow-not-found'}:mode==='managed'?{isManaged:true}:{})}:value);
+ f.p.operationScope='standard-mail-v1';f.p.historyPolicy={kind:'existing-tenant-run-history-v1',recordId:env,recordSha256:'a'.repeat(64),ownerId:env};
+ const admit=vi.fn(async()=>{}),pending=verifyHeadlessFlow(f.p,url,f.root,new AbortController().signal,f.connect,undefined,undefined,undefined,undefined,admit);
+ if(mode==='valid'){
+  const files=await pending;expect(f.calls.filter(t=>t==='get_flow_context')).toHaveLength(f.p.checks.length);expect(files).toContain('headless-0-history-baseline.json');
+  const baseline=await fs.readFile(path.join(f.root,'headless-0-history-baseline.json'),'utf8');expect(baseline).not.toContain('PRIVATE_METADATA_LABEL');expect(JSON.parse(baseline).policy).toEqual(f.p.historyPolicy);
+  expect(admit.mock.calls.map(c=>(c as unknown[])[0])).toContain('private-data');
+ }else{await expect(pending).rejects.toThrow();expect(f.calls).not.toContain('run_flow');}
+});
+it('requires a policy binding for standard mailbox execution and consistent local report record',()=>{
+ expect(()=>headlessFlowSchema.parse({...plan(),operationScope:'standard-mail-v1'})).toThrow('history policy binding');
+ expect(()=>headlessFlowSchema.parse({...plan(),operationScope:'standard-mail-v1',privateReport:{recordId:env,action:'Private_report'},historyPolicy:{kind:'existing-tenant-run-history-v1',recordId:tenant,recordSha256:'a'.repeat(64),ownerId:env}})).toThrow('record differ');
 });
