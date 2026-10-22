@@ -23,7 +23,7 @@ export function submitCodexPaste(options:{text:string;screen:()=>string;write:(t
     let remaining=options.text.trimEnd();
     for(const [index,row] of active.split('\n').entries()){
       const line=index>0&&row.startsWith('  ')?row.slice(2):row;
-      if(index>0){if(!remaining.startsWith('\n')&&!remaining.startsWith(' '))return false;remaining=remaining.slice(1);}
+      if(index>0&&(remaining.startsWith('\n')||remaining.startsWith(' ')))remaining=remaining.slice(1);
       if(!remaining.startsWith(line))return false;
       remaining=remaining.slice(line.length);
     }

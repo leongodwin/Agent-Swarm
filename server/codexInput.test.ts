@@ -23,6 +23,10 @@ it('recognizes the complete native word-wrapped editor without replay',async()=>
   f.setScreen('› Manager message:\n  Actual evidence with a long\n  continuation and exact identifier abc123.\n  tab to queue message');
   await vi.advanceTimersByTimeAsync(150);expect(f.write).toHaveBeenCalledTimes(2);expect(f.write).toHaveBeenLastCalledWith('\r');expect(f.failed).not.toHaveBeenCalled();
 });
+it('recognizes native hard wrapping inside an exact document name',async()=>{
+  const f=fixture('Read HEADLESS-FLOW and exact abc123.');f.setScreen('› Read HEADLESS-\n  FLOW and exact abc\n  123.\n  tab to queue message');
+  await vi.advanceTimersByTimeAsync(150);expect(f.write).toHaveBeenLastCalledWith('\r');expect(f.failed).not.toHaveBeenCalled();
+});
 it.each(['abc124.','abc123. extra'])('rejects changed or extra wrapped content %s',async suffix=>{
   const f=fixture('Actual evidence with identifier abc123.');f.setScreen('› Actual evidence with\n  identifier '+suffix);
   await vi.advanceTimersByTimeAsync(20000);expect(f.write).toHaveBeenCalledTimes(1);expect(f.failed).toHaveBeenCalledOnce();
