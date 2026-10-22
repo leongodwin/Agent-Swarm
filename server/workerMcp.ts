@@ -72,6 +72,25 @@ export function bindWorkerMcpTargets(servers:Record<string,WorkerMcpServer>,prob
   if(targets.some(target=>typeof target!=='string'||!/^(?:Default-)?[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(target))||new Set(targets).size!==1)throw Error('FlowAgent requires one exact reviewed environment GUID');
   return {...servers,flowagent:{...servers.flowagent,env:{...servers.flowagent.env,PA_DEFAULT_ENVIRONMENT:targets[0] as string}}};
 }
+/** Native FlowAgent returns a JSON array for this read. Preserve exact numeric
+ * assertion pointers without admitting arbitrary arrays as readiness evidence. */
+export function flowConnectionProbeObservation(tool:string,raw:unknown):Record<string,unknown>|null{
+ if(tool!=='mcp__flowagent__list_connections')return null;
+ try{let value=raw;for(let depth=0;depth<6;depth++){
+  if(typeof value==='string'){value=parseUnambiguousJson(value,{maxBytes:768*1024,maxDepth:32,maxSyntaxTokens:50000});continue;}
+  if(Array.isArray(value)){
+   const rows=z.array(z.object({name:z.string().min(1),connector:z.string().regex(/^\/providers\/Microsoft\.PowerApps\/apis\/shared_[a-z0-9_]+$/i),status:z.string().min(1),accountName:z.string().nullable(),statuses:z.array(z.object({status:z.string()})).optional()}).passthrough()).max(1000).parse(value);
+   if(new Set(rows.map(row=>row.name)).size!==rows.length||rows.some(row=>row.error||row.isError===true||row.statuses?.some(status=>status.status!==row.status)))return null;
+   return Object.fromEntries(rows.map((row,index)=>[String(index),row]));
+  }
+  if(!value||typeof value!=='object')return null;const row=value as Record<string,unknown>;
+  if(row.isError===true||row.error)return null;
+  if(row.structuredContent!==undefined){value=row.structuredContent;continue;}
+  if(Array.isArray(row.content)&&row.content.length===1&&row.content[0]?.type==='text'){value=row.content[0].text;continue;}
+  return null;
+ }}catch{/* Malformed, ambiguous or failed native output is never readiness. */}
+ return null;
+}
 
 /** The native Canvas server returns anchored prose, not JSON, for these reads.
  * Only exact observed contracts are normalized; generic success text grants nothing. */

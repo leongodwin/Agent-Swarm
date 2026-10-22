@@ -8,7 +8,7 @@ import {toolObservation} from './toolObservation.ts';
 import {SharepointFlowContract} from './sharepointFlowContract.ts';
 import {evidenceHash} from './sessionEvidence.ts';
 import {readWorkerCanvasSnapshot,nativeCanvasSyncCount} from './workerCanvasSnapshot.ts';
-import {workerMcpBindingSchema,resolveWorkerMcp,bindWorkerMcpTargets,canvasProbeObservation,type WorkerMcpServer} from './workerMcp.ts';
+import {workerMcpBindingSchema,resolveWorkerMcp,bindWorkerMcpTargets,canvasProbeObservation,flowConnectionProbeObservation,type WorkerMcpServer} from './workerMcp.ts';
 
 const hash=z.string().regex(/^[a-f0-9]{64}$/);
 const scalar=z.union([z.string().max(2000),z.number().finite(),z.boolean()]);
@@ -160,7 +160,7 @@ export class WorkerPreflight {
     if(call.name==='mcp__office__read_skill'&&typeof call.input.id==='string')this.reads.delete(call.input.id);
     if(failed||name!==undefined&&name!==call.name)return;
     try{
-      const adapted=canvasProbeObservation(probes[0]?.tool??call.name,raw),data=adapted??toolObservation(raw).data;if(!data||data.success===false||data.found===false||data.valid===false)return;
+      const canvas=canvasProbeObservation(probes[0]?.tool??call.name,raw),connections=flowConnectionProbeObservation(probes[0]?.tool??call.name,raw),adapted=canvas??connections,data=adapted??toolObservation(raw).data;if(!data||data.success===false||data.found===false||data.valid===false)return;
       if(call.name==='mcp__office__read_skill'){
         const skill=this.plan!.skills.find(s=>s.id===call.input.id&&s.sha256===call.input.sha256);
         if(skill&&data.id===skill.id&&data.sha256===skill.sha256&&typeof data.content==='string'&&digest(data.content)===skill.sha256)this.reads.add(skill.id);
@@ -168,7 +168,7 @@ export class WorkerPreflight {
       for(const probe of probes)if(probe.assertions.every(a=>{
         let value:unknown=data;for(const key of a.pointer)value=value&&typeof value==='object'&&Object.hasOwn(value,key)?(value as Record<string,unknown>)[key]:undefined;
         return value===a.equals;
-      })){this.observations.set(probe.id,this.now());this.proofs.set(probe.id,{callId:id,resultSha256:evidenceHash(raw),adapter:adapted?'canvas-native-text-v1':'native-json-object-v1'});}
+      })){this.observations.set(probe.id,this.now());this.proofs.set(probe.id,{callId:id,resultSha256:evidenceHash(raw),adapter:canvas?'canvas-native-text-v1':connections?'flow-native-connection-array-v1':'native-json-object-v1'});}
     }catch{/* Malformed/failed output never establishes readiness. */}
   }
   cancel(id:string){this.pending.delete(id);}
