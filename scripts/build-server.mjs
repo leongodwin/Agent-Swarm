@@ -34,3 +34,4 @@ for (const file of ['deliveryPermissions.ts','canvasPackagingRecovery.ts','canva
   fs.copyFileSync(path.join(root, 'server', file), path.join(out, file));
 }
 console.log(`built ${path.relative(root, out)}/index.js`);
+fs.copyFileSync(path.join(root,'server','headlessFlowVerification.ts'),path.join(out,'headlessFlowVerification.ts'));

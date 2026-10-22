@@ -1,5 +1,7 @@
 # QA and documentation evidence (Phase 5)
 
+The explicit [headless flow adapter](HEADLESS-FLOW.md) supplies native run/guard/receipt evidence for single-owner email workflows without a UI. All existing independent per-check review and hash binding remain required. This does not enable the Dataverse API-only path or certify multi-user isolation.
+
 New releases pinned to an application specification require `qualityEvidence` schema version 1. Legacy plans remain readable without rewriting hashes. They do not gain Phase 5 assurance: implementation/expansion for an application specification needs an independently accepted quality receipt. To upgrade, save a revised specification/check matrix, obtain fresh design review and create a new scoped release; do not patch saved approval history.
 
 ## Planning and handover

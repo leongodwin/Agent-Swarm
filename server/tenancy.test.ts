@@ -23,6 +23,13 @@ it('recognizes the active marker only immediately after the profile index',()=>{
 it('accepts an existing absolute executable without searching PATH', () => {
   expect(resolveTenancyCommand(process.execPath)).toEqual({ file: process.execPath, args: [] });
 });
+it.each(['confirmed','wrong-account','wrong-target','initial-account'])('selects an environment with the existing identity and fails closed for %s',async mode=>{
+ const r=runner(),target='https://next.crm.dynamics.com',service=make(r);let selected=false;
+ r.run.mockImplementation(async(_name,args)=>{if(args[0]==='org'&&args[1]==='select'){selected=true;return'';}if(args[0]==='org')return orgIdentity.replace('https://org.crm.dynamics.com/',mode==='wrong-target'?'https://wrong.crm.dynamics.com/':target+'/').replace('user@example.com',mode==='wrong-account'?'other@example.com':'user@example.com');return profiles.replace('https://org.crm.dynamics.com/',selected?target+'/':'https://org.crm.dynamics.com/');});
+ const work=service.selectEnvironment!(target,mode==='initial-account'?'other@example.com':'user@example.com');
+ if(mode==='confirmed')await expect(work).resolves.toMatchObject({ok:true});else await expect(work).rejects.toThrow();
+ expect(service.activity().busy).toBe(false);expect(r.start).not.toHaveBeenCalled();if(mode==='initial-account')expect(selected).toBe(false);
+});
 const services: ReturnType<typeof createTenancyService>[] = [];
 afterEach(() => { for (const service of services.splice(0)) service.close(); vi.useRealTimers();for(const root of stateRoots.splice(0))fsSync.rmSync(root,{recursive:true,force:true}); });
 function make(runner: TenancyRunner, demo = false) { const service = createTenancyService(demo, runner,stateRoot()); services.push(service); return service; }

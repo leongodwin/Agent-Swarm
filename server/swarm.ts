@@ -3066,6 +3066,10 @@ export class Swarm {
    * free developer is least needed elsewhere, so nobody sits idle while there is work that can start.
    */
   private startIssueWork(repo: PersistedRepo): boolean {
+    // Planning publishes scope/task revisions. Admit workers only after that
+    // transaction finishes; later scope drift still revokes their authority.
+    const planning=this.state.ceo.job;
+    if(planning&&['onboard','plan'].includes(planning.kind)&&'repoId' in planning&&planning.repoId===repo.id)return false;
     if (!repo.autoAssign || !this.mayStart('issue')) return false;
     const free = this.available(repo, 'dev');
     const ready = free.length ? this.readyIssues(repo).filter((item) => {

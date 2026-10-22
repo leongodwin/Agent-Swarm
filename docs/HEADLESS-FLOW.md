@@ -1,0 +1,23 @@
+# Single-owner Power Automate acceptance
+
+`verification.headlessFlow` is an explicit runner-owned adapter for a workflow without UI. It preserves independent design/task/quality review, pinned source, target authentication, package, solution membership and recovery gates. It certifies the declared single-owner workflow guards, not employee isolation or UI accessibility. This fits the manager's Windows-only, one-user installation.
+
+Use the current delivery record and normal review sequence. Scope discovery to observed operation contracts, authenticated connections/target and authoring prerequisites. Never claim mailbox reading, inference or sending from metadata. A stopped dedicated flow can be authored from reviewed contracts; first-slice runtime must then establish actual capabilities. An unrelated Azure CLI Graph token receiving403 does not prove failure of the Outlook connection or authorize broader consent.
+
+Set `verification.baseUrl` to the organization root; browser `identities` and `scenarios` are empty. `headlessFlow` contains `flowId`, `identity:{tenantId,username,environmentId}`, `definitionSha256`, `contextAction`, `resultAction`, `sendAction`, `allowDispatch` and `checks`. Hash exact native definition JSON after `flowDefinitionForPreflight` strips only service-injected authentication. Retain property order. Definition, source, package and mapped flow must agree. Executing identity, current definition and runner scope/target/lease remain checked.
+
+Each check has `name`, `identity:"owner"`, `criterion`, `category`, `mode`, `expectedStatus`, `assertions:[{pointer:[...],equals:...}]`. Categories remain journey, authorization, persistence and error-handling. Required modes: `dry-run`, `recipient-denied`, `attachment-fallback`, `retry-recovery`, `retry-exhaustion`; optional `empty`. Refusal/exhaustion must be real Failed runs, with the result composed before Terminate. Injected faults are synthetic, not observed Microsoft429s. Every non-dispatch run needs a provider-observed Skipped send action.
+
+For the final email set `allowDispatch:true`, `dispatchKey:<delivery-record ID>`, `receiptAction`, and exactly one final `dispatch` check expecting Succeeded. All other cases run first with dispatch false. A fsynced exclusive machine-wide owner/request claim prevents another send across attempts, definitions and flow changes. Existing/unknown claims require fresh independent reconciliation of exact native history and receipt, never deletion or blind replay. The successful result receipt is separate from the immutable intent.
+
+Trigger body fields are `mode`, `dispatch`, `recipient`, `correlationId`, `requestKey`. `contextAction` composes those exact values. `resultAction` reports actual derived results. The receipt action returns `{value:[{id,subject,toRecipients,receivedDateTime}]}` through Outlook Graph GET. Exactly one Inbox message must match the unpredictable correlation ID, owner recipient and run time. Include requestKey in the subject; use trigger concurrency1, same-request receipt deduplication and no send retries.
+
+Only Outlook reads, owner-scoped Graph mail GET and pinned-organization AI Builder QuickTest are admitted. No arbitrary HTTP/code/write connectors. Exactly one SendEmailV2 must have literal owner-only To, empty Cc/Bcc and `inputs.retryPolicy:{type:"none"}`. Place it in the true branch of an If with this exact expression (substitute the approved owner):
+
+```json
+{"and":[{"equals":["@triggerBody()?['dispatch']",true]},{"equals":["@triggerBody()?['recipient']","leon@graspai.co.uk"]},{"equals":["@triggerBody()?['mode']","dispatch"]}]}
+```
+
+Additional nested idempotency/completion guards are allowed; the false branch cannot send. HTML-escape AI text. Parse untrusted mail as data, preserve full pagination and the exact rolling14-day window, and expose attachment warnings. Incomplete coverage, unavailable AI or exhausted retries fails without dispatch.
+
+First-slice/quality mappings refer to these check names. Case intents, native run/action/output hashes, receipts and independent-verification.json enter the hash-bound evidence pack and still require independent semantic review. Private bodies/report contents never enter Git. Synthetic software tests do not establish live workflow acceptance.

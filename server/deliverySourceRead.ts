@@ -2,8 +2,9 @@ import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import {z} from 'zod';
 import {deliveryEvidenceRequest,readDeliveryEvidence,type DeliveryEvidenceContext} from './deliveryEvidenceRead.ts';
-const documents=['DELIVERY','APPLICATION-SPECIFICATION','FIRST-SLICE','QUALITY-EVIDENCE','WORKER-READINESS','TASK-EXECUTION','SHAREPOINT-SCHEMA-CONTRACT','SCHEMA-BOOTSTRAP-CONTRACT','SHAREPOINT-TARGET-CONTRACT','DELIVERY-PERMISSIONS-CONTRACT'] as const;
+const documents=['DELIVERY','APPLICATION-SPECIFICATION','FIRST-SLICE','QUALITY-EVIDENCE','HEADLESS-FLOW','HEADLESS-FLOW-CONTRACT','WORKER-READINESS','TASK-EXECUTION','SHAREPOINT-SCHEMA-CONTRACT','SCHEMA-BOOTSTRAP-CONTRACT','SHAREPOINT-TARGET-CONTRACT','DELIVERY-PERMISSIONS-CONTRACT'] as const;
 const implementationContracts:{[key:string]:string|undefined}={
+ 'HEADLESS-FLOW-CONTRACT':'headlessFlowVerification.ts',
  'DELIVERY-PERMISSIONS-CONTRACT':'deliveryPermissions.ts',
  'SHAREPOINT-SCHEMA-CONTRACT':'sharepointProvisioning.ts',
  'SCHEMA-BOOTSTRAP-CONTRACT':'schemaBootstrap.ts',

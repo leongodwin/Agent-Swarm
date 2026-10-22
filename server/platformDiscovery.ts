@@ -25,7 +25,7 @@ import {recordReference,type DeliveryRecord} from '../shared/deliveryRecord.ts';
 import {readBoundedText} from './boundedJson.ts';
 import {parseUnambiguousJson} from './unambiguousJson.ts';
 
-const connector=z.enum(['shared_sharepointonline','shared_teams','shared_approvals']);
+const connector=z.enum(['shared_sharepointonline','shared_teams','shared_approvals','shared_office365','shared_commondataserviceforapps']);
 export const platformDiscoveryRequest=z.discriminatedUnion('kind',[
  z.strictObject({kind:z.literal('identity')}),
  z.strictObject({kind:z.literal('assigned-licenses')}),

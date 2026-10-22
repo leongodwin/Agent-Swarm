@@ -1,5 +1,5 @@
 import {prepareCodexHooks} from './codexHookTrust.ts';
-import {createCodexInstructionProfile,verifyCodexInstructionProfile,finishCodexInstructionProfile,assertWindowsCommandBound,type CodexInstructionProfile} from './codexInstructionProfile.ts';
+import {createCodexInstructionProfile,codexTrustedProjects,verifyCodexInstructionProfile,finishCodexInstructionProfile,assertWindowsCommandBound,type CodexInstructionProfile} from './codexInstructionProfile.ts';
 import {submitGeminiPaste} from './geminiInput.ts';
 import {submitCodexPaste,type PendingCodexPaste} from './codexInput.ts';
 import {WorkerPreflight} from './workerPreflight.ts';
@@ -969,7 +969,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
     fs.writeFileSync(files.settings, JSON.stringify(cli==='gemini'?geminiSettings(geminiHookCommand(process.execPath,path.join(BIN_DIR,'gemini-hook.cjs')),geminiServers):settings, null, 2));
     if (files.mcp) fs.writeFileSync(files.mcp, JSON.stringify({ mcpServers: servers }, null, 2));
     effectiveInstructions=[effectiveInstructions,browserInstructions].filter(Boolean).join('\n\n');fs.writeFileSync(files.system,effectiveInstructions);
-    if(cli==='codex'&&process.platform==='win32'&&fs.statSync(files.system).size>4000){files.codexProfile=createCodexInstructionProfile(dir,fs.readFileSync(files.system,'utf8'));const observed=verifyCodexInstructionProfile(dir)!;codexProfile={name:observed.name,sha256:observed.sha256};}
+    if(cli==='codex'&&process.platform==='win32'&&fs.statSync(files.system).size>4000){files.codexProfile=createCodexInstructionProfile(dir,fs.readFileSync(files.system,'utf8'),undefined,codexTrustedProjects(opts.cwd));const observed=verifyCodexInstructionProfile(dir)!;codexProfile={name:observed.name,sha256:observed.sha256};}
     if (prompt.length > INLINE_PROMPT_MAX) {
       const file = path.join(dir, 'task.md');
       fs.writeFileSync(file, prompt);
@@ -1055,7 +1055,10 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
       const screen = term.screen();
       if(cli==='gemini'&&live?.governanceReady&&!geminiPromptSent&&/Type your message|Type a message|Send a message/i.test(screen)){geminiPromptSent=true;clearTimeout(geminiStartupTimer);handle.send(`${effectiveInstructions}\n\n${prompt}`);}
       const review = hookReviewKey(screen);
-      const key = trustKeys < 12 && Date.now() - trustedAt > 3000 ? (trustKey(screen) ?? (cli==='codex'?null:review)) : null;
+      // Office hooks were independently attested before launch. Unknown plugin
+      // hooks stay untrusted; dismissing their native review does not enable
+      // them or disable any office admission/authorization hook.
+      const key = trustKeys < 12 && Date.now() - trustedAt > 3000 ? (trustKey(screen) ?? (cli==='codex'&&!codexTrustReady?null:review)) : null;
       if (key === 'down') {
         trustKeys += 1;
         quietly(() => p.write(term.appCursor ? '\x1bOB' : '\x1b[B'));

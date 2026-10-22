@@ -5,6 +5,7 @@ import {firstSliceSchema} from '../shared/firstSlice.ts';
 import { z } from 'zod';
 import { cloudFlowCheckSchema } from './flowAdapter.ts';
 import { apiVerificationSchema } from './apiVerification.ts';
+import {headlessFlowSchema} from './headlessFlowVerification.ts';
 import {hldResultSchema} from '../shared/hldArtifact.ts';
 import {recordReferenceSchema} from '../shared/deliveryRecord.ts';
 import {pinnedSourceSchema} from './pinnedPreparationContracts.ts';
@@ -37,6 +38,7 @@ export const releasePlanSchema = z.object({
     functionalShowcase:functionalShowcaseSchema.optional(),
     nativeDeniedChecks:z.array(nativeDeniedCheckSchema).min(1).max(20).refine(rows=>new Set(rows.map(r=>r.testName)).size===rows.length,'Duplicate native denied checks').optional(),
     api: apiVerificationSchema.optional(),
+    headlessFlow:headlessFlowSchema.optional(),
     cloudFlowChecks: z.array(cloudFlowCheckSchema).min(1).max(20).optional(),
     copilotChecks: z.array(z.object({ component: id, channelUrl: z.url(), cases: z.array(z.object({ kind: z.enum(['grounding', 'fallback', 'tool-action', 'authorization', 'safety', 'multi-turn']), scenario: text }).strict()).min(6).max(30) }).strict()).min(1).max(10).optional(),
     frame: z.object({ selector: text, origin: z.url().refine((value) => { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash; }) }).strict().optional(),
@@ -55,10 +57,17 @@ export const releasePlanSchema = z.object({
   if(plan.firstSlice&&plan.deliveryRecord?.purpose!=='slice')fail('First-slice execution requires a pinned slice release');
   if(plan.verification.api&&plan.verification.nativeDeniedChecks)fail('Native denied checks require browser and native verification together');
   for(const check of plan.verification.nativeDeniedChecks??[]){if(check.contract.observationWindowMs+60000>plan.quality.maxTaskDurationMs)fail('Native denied observation and request budget exceed the approved task duration');const test=plan.verification.scenarios.find(t=>t.name===check.testName);if(!test||test.category!=='authorization'||test.identity!==check.deniedIdentity||!plan.verification.identities.some(i=>i.id===check.deniedIdentity&&i.expectedUser.toLowerCase()===check.deniedUsername.toLowerCase())||!plan.verification.identities.some(i=>i.id===check.observerIdentity&&i.id!==check.deniedIdentity&&i.expectedUser.toLowerCase()===check.observerUsername.toLowerCase()))fail('Native denied check identity or scenario binding differs');}
-  const testNames=(plan.verification.api?.checks??plan.verification.scenarios).map(t=>t.name);
+  const testNames=(plan.verification.headlessFlow?.checks??plan.verification.api?.checks??plan.verification.scenarios).map(t=>t.name);
   if((plan.firstSlice||plan.qualityEvidence)&&new Set(testNames).size!==testNames.length)fail('Verification test names must be unique');
   for(const c of plan.firstSlice?.cases??[])if(!testNames.includes(c.testName))fail('First-slice case refers to an unknown executable test');
   if (plan.owner === plan.qaOwner) fail('Delivery owner and QA reviewer must be different agents');
+  if(plan.verification.headlessFlow){
+    if(plan.verification.headlessFlow.allowDispatch&&plan.verification.headlessFlow.dispatchKey!==plan.deliveryRecord?.id)fail('Dispatch claim must bind the delivery record identity across revisions and retries');
+    if(plan.verification.api||plan.verification.identities.length||plan.verification.scenarios.length||plan.verification.browserSession||plan.verification.frame||plan.verification.nativeDeniedChecks||plan.verification.copilotChecks)fail('Headless flow acceptance cannot mix UI, Dataverse API or other identity adapters');
+    for(const check of plan.verification.headlessFlow.checks)if(check.criterion>=plan.acceptanceCriteria.length)fail('Headless check has an unknown acceptance criterion');
+    plan.acceptanceCriteria.forEach((_,i)=>{if(!plan.verification.headlessFlow!.checks.some(c=>c.criterion===i))fail('Headless acceptance criterion has no executable check');});
+    return;
+  }
   if (plan.verification.api) {
     if (plan.acceptanceProfile !== 'functional-development') fail('API-only acceptance currently requires explicit functional-development scope');
     if (plan.verification.identities.length || plan.verification.scenarios.length || plan.verification.frame || plan.verification.copilotChecks) fail('API-only verification cannot include browser or Copilot verification');

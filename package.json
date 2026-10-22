@@ -29,6 +29,7 @@
     "dist",
     "dist-server",
     "docs/DELIVERY.md",
+    "docs/HEADLESS-FLOW.md",
     "docs/RELIABILITY.md",
     "docs/WORKER-READINESS.md",
     "docs/APPLICATION-SPECIFICATION.md",

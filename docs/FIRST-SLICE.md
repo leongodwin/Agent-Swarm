@@ -1,5 +1,7 @@
 # First-slice execution (Phase 4)
 
+The explicit [single-owner headless flow adapter](HEADLESS-FLOW.md) supplies runner-owned refusal, failure and receipt evidence for a workflow without UI. The Dataverse API-only restrictions below remain unchanged.
+
 Phase 4 connects a declared first user journey to the existing delivery runner. It adds no tenant permissions or invented platform commands. For application specifications, a slice release requires explicit `firstSlice` mappings. Legacy records without a specification retain their existing gates; adopting a specification requires this stronger evidence before expansion.
 
 ## Planning contract

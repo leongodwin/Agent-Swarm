@@ -2,6 +2,7 @@ import {verificationNavigationUrl,verificationScenario,type BrowserVerificationC
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { createRequire } from 'node:module';
 import type { Browser, Page, Frame } from 'playwright';
 import type { ReleasePlan } from './releasePlan.ts';
@@ -9,6 +10,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { acceptanceScope } from './releasePlan.ts';
 import {verifyConnectedBrowser} from './bridgeVerification.ts';
 import {coordinatorBrowserEnabled} from './browserTools.ts';
+import {verifyHeadlessFlow} from './headlessFlowVerification.ts';
 import {verifyCoordinatorBrowser} from './coordinatorBrowserVerification.ts';
 const require = createRequire(import.meta.url);
 
@@ -18,6 +20,7 @@ async function launchBrowser() {
   return playwright.chromium.launch({ channel: 'chrome', headless: true });
 }
 export async function verifyIndependently(plan: ReleasePlan, root: string, evidence: string, signal: AbortSignal, launch: () => Promise<Browser> = launchBrowser, execution?:BrowserVerificationContext) {
+  if(plan.verification.headlessFlow){if(!execution?.assertOwned)throw Error('Headless verification requires a runner-owned lease/scope guard');return verifyHeadlessFlow(plan.verification.headlessFlow,plan.verification.baseUrl,evidence,signal,undefined,execution.assertOwned,path.join(os.homedir(),'.cubefarm','headless-dispatch-claims'));}
   if(plan.verification.browserSession)return coordinatorBrowserEnabled()?verifyCoordinatorBrowser(plan,root,evidence,signal,execution):verifyConnectedBrowser(plan,evidence,signal,undefined,execution);
   if (signal.aborted) throw new Error('Verification cancelled');
   const browser = await launch();

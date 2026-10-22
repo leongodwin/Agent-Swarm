@@ -57,6 +57,7 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(()=>vi.useFakeTimers());
+it('does not dispatch workers while their coordinator is publishing a planning revision',async()=>{const {swarm}=await office(true),m=swarm as any,repo=m.state.repos[0];repo.autoAssign=true;const available=vi.spyOn(m,'available').mockReturnValue([]);m.state.ceo.job={kind:'plan',repoId:repo.id,at:Date.now()};expect(m.startIssueWork(repo)).toBe(false);expect(available).not.toHaveBeenCalled();m.state.ceo.job={kind:'plan',repoId:'other/project',at:Date.now()};expect(m.startIssueWork(repo)).toBe(false);expect(available).toHaveBeenCalled();m.state.ceo.job=null;});
 afterEach(async()=>{vi.useRealTimers();await Promise.all(offices.splice(0).map(s=>s.shutdown().catch(()=>{})));for(const name of await fs.readdir(HOME_DIR))await fs.rm(path.join(HOME_DIR,name),{recursive:true,force:true});vi.restoreAllMocks();});
 afterAll(()=>fs.rm(HOME_DIR,{recursive:true,force:true}));
 // Exercise the actual office through its public commands and inspect externally visible state.
