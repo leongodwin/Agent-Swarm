@@ -28,6 +28,7 @@
     "bin",
     "dist",
     "dist-server",
+    "docs/PHASE-EVIDENCE.md",
     "docs/DELIVERY.md",
     "docs/HEADLESS-FLOW.md",
     "docs/RELIABILITY.md",

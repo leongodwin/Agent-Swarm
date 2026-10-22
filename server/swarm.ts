@@ -358,6 +358,7 @@ export class Swarm {
   deliveryRecordTool?: import('./ceo.ts').RecordToolHandler;
   requestRecordReview: (repoId:string) => Promise<string> = async () => {throw new Error('Delivery records unavailable');};
   deliveryWorkGate: (repoId:string,issue:number) => void = () => {};
+  executionEvidenceCheck:(repoId:string,issue:number,actor:string,attemptId:string,guard:()=>void)=>Promise<void>=async()=>{};
   deliveryTaskStage: (repoId:string,issue:number) => string|undefined = () => undefined;
   deliveryTaskFingerprint: (repoId:string,issue:number) => string = () => '';
   deliveryTaskContract:(repoId:string,issue:number)=>{owner:string;qaOwner:string;components:string[];resources:string[]}|null=()=>null;
@@ -2207,10 +2208,15 @@ export class Swarm {
     const projects = [repo, ...this.linkedRepos(repo)];
     let refreshing: Promise<string | null> | undefined;
     const signal = this.taskStops.get(a.id)?.signal;
+    const executionAttemptId=this.executionAttempts.get(a.id)?.id??crypto.randomUUID();
     const authorizeTool: SessionAuthorization = async () => {
       const denied = authority(); if (denied) return denied;
       refreshing ??= this.projectReadiness(projects, how.cli ?? 'node', signal).finally(() => {refreshing = undefined;});
       const blocker = await refreshing;
+      if(!blocker&&deliveryIssue!==null&&!['discovery','design'].includes(this.deliveryTaskStage(repo.id,deliveryIssue)??'')){
+        try{await this.executionEvidenceCheck(repo.id,deliveryIssue,a.id,executionAttemptId,()=>{const denied=authority();if(denied)throw new Error(denied);});}
+        catch{return 'Fresh phase execution evidence is unavailable; authoring remains blocked';}
+      }
       return authority() ?? blocker;
     };
     this.emitAgent(a);

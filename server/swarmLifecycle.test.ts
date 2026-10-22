@@ -93,6 +93,14 @@ it.each(['discovery','design','slice'])('binds assigned %s work to its preflight
     await vi.advanceTimersByTimeAsync(1000);expect(fake.startSession).toHaveBeenCalledOnce();
   }
 });
+it('blocks subsequent worker tools on refused fresh execution evidence and preserves discovery access',async()=>{
+ const {swarm,fake}=await office(true);swarm.deliveryTaskStage=()=> 'slice';
+ swarm.executionEvidenceCheck=vi.fn(async()=>{throw Error('Synthetic stale observation');});
+ const agent=swarm.hireAgent('synthetic/repo',{});await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());
+ const options=fake.startSession.mock.calls[0][0] as SessionOptions;
+ expect(await options.authorizeTool!()).toContain('Fresh phase execution evidence');
+ expect(swarm.executionEvidenceCheck).toHaveBeenCalledWith('synthetic/repo',1,agent.id,expect.any(String),expect.any(Function));
+});
 it('holds CEO profile and job edits while a worker is active without invalidating its context',async()=>{
   const {swarm,fake}=await office(true);const agent=swarm.hireAgent('synthetic/repo',{});
   await swarm.assign(agent.id,1);await vi.waitFor(()=>expect(fake.startSession).toHaveBeenCalledOnce());

@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {isExecutionEvidence} from './executionEvidence.ts';
 
 const id=z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),text=z.string().trim().min(1).max(4000);
 const links=z.array(id).min(1).max(100).refine(rows=>new Set(rows).size===rows.length,'Links must be unique'),refs=z.array(id).max(100).refine(rows=>new Set(rows).size===rows.length,'References must be unique');
@@ -6,7 +7,7 @@ export const applicationSpecSchema=z.strictObject({
   schemaVersion:z.literal(1),
   journeys:z.array(z.strictObject({id,actor:text,outcome:text,requirementIds:links,scenarios:z.array(z.strictObject({id,kind:z.enum(['happy','denied','failure']),given:text,when:text,then:text})).min(1).max(30)})).min(1).max(50),
   decisions:z.array(z.strictObject({id,question:text,owner:id,requirementIds:links,material:z.boolean(),status:z.enum(['open','answered']),answer:text.optional(),answerSource:text.optional()})).max(100),
-  assumptions:z.array(z.strictObject({id,statement:text,owner:id,requirementIds:links,critical:z.boolean(),status:z.enum(['unverified','validated','rejected']),findingIds:refs})).max(100),
+  assumptions:z.array(z.strictObject({id,statement:text,owner:id,requirementIds:links,critical:z.boolean(),status:z.enum(['unverified','validated','rejected']),validationPhase:z.literal('execution').optional(),findingIds:refs})).max(100),
   components:z.array(z.strictObject({id,platform:z.enum(['dataverse','sharepoint','canvas','flow','model-driven','power-pages','code-apps','copilot-studio','other']),owner:id,requirementIds:links,contractIds:refs,dependsOn:refs,findingIds:refs})).min(1).max(100),
   securityBoundaries:z.array(z.strictObject({id,actor:text,allowed:text,denied:text,requirementIds:links,findingIds:refs})).min(1).max(100),
   checks:z.array(z.strictObject({id,kind:z.enum(['compile','package','runtime','access','recovery','documentation']),requirementIds:links,componentIds:links,scenarioIds:refs,expectedEvidence:text})).min(1).max(200),
@@ -23,11 +24,15 @@ export const applicationSpecSchema=z.strictObject({
   for(const component of spec.components)visit(component.id);
 });
 export type ApplicationSpec=z.infer<typeof applicationSpecSchema>;
-type Finding={id:string;status:string;conclusion?:string;evidence:{observedAt:string;expiresAt:string}[]};
+type Finding={id:string;status:string;conclusion?:string;executionEvidence?:import('./executionEvidence.ts').ExecutionEvidenceContract;evidence:{observedAt:string;expiresAt:string}[]};
 export function applicationSpecBlockers(spec:ApplicationSpec,findings:Finding[],now=Date.now()):string[]{
   const blockers=spec.decisions.filter(d=>d.material&&d.status==='open').map(d=>`${d.id}: answer ${d.question} (owner: ${d.owner})`);
   for(const assumption of spec.assumptions){
     const observed=assumption.findingIds.map(id=>findings.find(f=>f.id===id));
+    if(assumption.validationPhase==='execution'){
+      if(assumption.status!=='unverified'||!observed.length||!observed.every(f=>isExecutionEvidence(f?.executionEvidence)))blockers.push(`${assumption.id}: execution assumption requires explicit fixed admission contracts and unverified status`);
+      continue;
+    }
     const valid=assumption.status==='validated'&&observed.length>0&&observed.every(f=>f?.status==='observed'&&f.conclusion==='ready'&&f.evidence.length>0&&f.evidence.every(e=>Date.parse(e.observedAt)<=now+60000&&Date.parse(e.expiresAt)>now));
     if(assumption.critical&&!valid)blockers.push(`${assumption.id}: validate or reconcile the critical assumption (owner: ${assumption.owner})`);
   }

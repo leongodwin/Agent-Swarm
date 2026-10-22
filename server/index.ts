@@ -1,4 +1,6 @@
 import {prepareTaskReconciliationReview} from './taskReconciliationReview.ts';
+import {ExecutionAdmission,type ExecutionAttempt} from './executionAdmission.ts';
+import {platformDiscoveryBinding} from './platformDiscovery.ts';
 import {BrowserHandoff,browserCoordinatorAction,browserTargetConfiguration} from './browserHandoff.ts';
 import {connectFlowAdapter} from './flowAdapter.ts';
 import {ExecutionLedger} from './executionLedger.ts';
@@ -85,7 +87,7 @@ try{await deliveryRecords.init();}catch{console.warn('Delivery records unavailab
 const recordContext=(repoId:string)=>{
   const repo=swarm.snapshot().repos.find(repo=>repo.id===repoId);
   if(!repo)throw new HttpError(404,'Repository is not connected');
-  return {brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId,checkoutPath:repo.checkoutPath};
+  return {brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId,checkoutPath:repo.checkoutPath,executionEvidenceVersion:1 as const};
 };
 const bootstrapFor=(repoId:string,outerGuard:()=>void=()=>{})=>{
  const context=recordContext(repoId),record=deliveryRecords.current(repoId),config=capabilities.configuration(repoId);
@@ -170,7 +172,7 @@ await toolGovernance.init();
 const tenantDlp = new TenantDlpService(path.join(HOME_DIR, backend.demo ? 'demo-governance' : 'governance'));
 await tenantDlp.init();
 const manualSourceFiles=['index.ts','sharepointWriteReadiness.ts','deliveryPermissions.ts','resourcePermissions.ts','userEntitlements.ts','delegatedEvidenceReader.ts','standardDlpEvidence.ts','callerLicensing.ts','platformDiscovery.ts','deliveryEvidenceRead.ts','deliverySourceRead.ts','synthesisEvidence.ts','flowAdapter.ts','headlessFlowVerification.ts','headlessAcceptedReport.ts','aiPromptMetadata.ts','privateReportMetadata.ts','repositoryAccessMetadata.ts','sharepointRestAuth.ts','sharepointProvisioning.ts','sharepointGraph.ts','sharepointOffice.ts','monitoringContract.ts','manualGovernance.ts','deliveryGovernance.ts','lifecycleGovernance.ts','delivery.ts','backendJourney.ts','apiVerification.ts','packageInventory.ts','platformCommandError.ts','columnContracts.ts','tableStructure.ts','platformAuth.ts','identityContracts.ts','operationReconciliation.ts','deliveryRecords.ts','deliveryRecordTools.ts','firstSlice.ts','qualityEvidence.ts','taskScope.ts','taskIntegration.ts','nativeDeniedAccess.ts','productionNativeQa.ts','nativeClaimReconciliation.ts','nativeClaimSession.ts','nativeHistory.ts','nativeHistoryCapture.ts','nativeClaimTermination.ts','providerImportHistory.ts','sharepointProviderHistory.ts','taskInputs.ts','taskExecution.ts','executionLedger.ts','nativeUsage.ts','sessionEvidence.ts','releasePlan.ts','targetOperations.ts','ceo.ts','swarm.ts','../shared/governanceProfile.ts','../shared/deliveryRecord.ts','../shared/firstSlice.ts','../shared/qualityEvidence.ts','../shared/taskPlan.ts','../shared/nativeQa.ts','../shared/applicationSpec.ts','../shared/delivery.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url)));
-manualSourceFiles.push(...['sharepointSchemaWriter.ts','sharepointResourceApproval.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url))));
+manualSourceFiles.push(...['sharepointSchemaWriter.ts','sharepointResourceApproval.ts','executionAdmission.ts','../shared/executionEvidence.ts'].map(file=>fileURLToPath(new URL(file,import.meta.url))));
 const manualRuntimeFiles=[...new Set([fileURLToPath(import.meta.url),...(manualSourceFiles.every(file=>fs.existsSync(file))?manualSourceFiles:[])])];
 const manualRuntimeEvidence=manualRuntimeFiles.map(file=>({file,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}));
 const manualGovernance=new ManualGovernance(HOME_DIR,id=>delivery.view().releases.find(release=>release.id===id),()=>{if(officeShutdown.closed||swarm.isDraining||backend.demo)throw new HttpError(409,'Manual governance is paused or unavailable');},{sha256:crypto.createHash('sha256').update(JSON.stringify(manualRuntimeEvidence)).digest('hex'),evidence:manualRuntimeEvidence});
@@ -180,6 +182,45 @@ setToolGovernanceGate((name, input, checkpoint) => toolGovernance.check(name, in
 const capabilities = new CapabilityService(HOME_DIR, backend.demo);
 await capabilities.init();
 const platformDiscovery=new PlatformDiscovery(HOME_DIR,{run:deliveryCommands.run,connect:connectFlowAdapter,dlpObservation:identity=>tenantDlp.observation(identity)});
+const executionAdmission=new ExecutionAdmission(HOME_DIR,{
+ configuration(record){
+  const config=capabilities.configuration(record.repoId);if(!config)throw Error('Execution configuration is missing');
+  const identity=platformDiscoveryBinding(config);
+  if(identity.environmentUrl!==record.content.environmentUrl?.replace(/\/$/,''))throw Error('Execution identity target differs');
+  for(const api of ['shared_office365','shared_commondataserviceforapps']){
+   const checks=config.checks.filter(c=>c.probe.kind==='pac-connection'&&c.probe.api===api&&c.probe.account?.toLowerCase()===identity.username.toLowerCase()&&c.probe.environmentUrl.replace(/\/$/,'')===identity.environmentUrl&&c.probe.connectionId);
+   if(checks.length!==1)throw Error('Execution requires exact reviewed Outlook and Dataverse connections');
+  }
+  return{sha256:crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex'),identity:{...identity,authenticationFingerprint:backend.tenancy.activity().profileMutation?.fingerprint}};
+ },
+ async observe(probe,record,attempt,guard){
+  const config=capabilities.configuration(record.repoId),context=recordContext(record.repoId);if(!config)throw Error('Execution configuration missing');guard();
+  if(probe==='project-readiness'){
+   const result=await capabilities.check(record.repoId,context.checkoutPath,context.environmentUrl,'git',true);guard();
+   const details={repoId:result.repoId,configHash:result.configHash,checkedAt:result.checkedAt,expiresAt:result.expiresAt,checks:result.checks.map(c=>({id:c.id,category:c.category,passed:c.passed}))};
+   return{passed:result.status==='ready'&&result.repoId===record.repoId&&result.checks.length>0&&result.checks.every(c=>c.passed),observedAt:result.checkedAt,expiresAt:result.expiresAt,sourceSha256:crypto.createHash('sha256').update(JSON.stringify(details)).digest('hex'),details};
+  }
+  const issue=attempt.issue??record.content.taskPlan?.tasks[0]?.issue;if(!issue)throw Error('Execution probe requires a bound task');
+  const input={kind:probe==='headless-authoring-rights'?'headless-authoring-rights':'private-report-metadata'};
+  const result=await platformDiscovery.inspect(config,context.checkoutPath,input,guard,AbortSignal.timeout(45_000),record.repoId,schemaBootstrapConfigurationRoot(HOME_DIR,record.repoId),{record,issue});guard();
+  const data=result.observation.data as Record<string,unknown>;
+  return{passed:data.status==='observed'&&(probe==='headless-authoring-rights'?data.requiredGlobalPrivilegesPresent===true:data.protectedOwnerOnly===true),observedAt:result.evidence.observedAt,expiresAt:result.evidence.expiresAt,sourceSha256:result.evidence.sha256,sourceReference:result.evidence.reference};
+ }
+});
+const checkPhaseExecution=async(repoId:string,attempt:ExecutionAttempt,outerGuard:()=>void)=>{
+ const record=deliveryRecords.current(repoId);if(!record||!record.content.findings.some(f=>f.executionEvidence))return;
+ const approvalState=(r:typeof record|undefined)=>JSON.stringify([r?.designReview,r?.taskReviews,r?.taskAcceptances,r?.sliceReceipt]);
+ const approvals=approvalState(record),config=capabilities.configurationFingerprint([repoId]),context=JSON.stringify(recordContext(repoId)),profile=backend.tenancy.activity().profileMutation?.fingerprint;
+ const guard=()=>{outerGuard();const current=deliveryRecords.current(repoId);if(officeShutdown.closed||swarm.isDraining||current?.sha256!==record.sha256||approvalState(current)!==approvals||JSON.stringify(recordContext(repoId))!==context||capabilities.configurationFingerprint([repoId])!==config||backend.tenancy.activity().profileMutation?.status!=='clear'||backend.tenancy.activity().profileMutation?.fingerprint!==profile)throw Error('Phase execution context changed');};
+ guard();await executionAdmission.check(record,attempt,guard);guard();
+};
+swarm.executionEvidenceCheck=(repoId,issue,actor,attemptId,guard)=>checkPhaseExecution(repoId,{phase:'authoring',issue,actor,attemptId},guard);
+delivery.checkExecutionEvidence=async(repoId,plan,runId,phase,guard)=>{
+ const record=deliveryRecords.current(repoId);if(!record?.content.findings.some(f=>f.executionEvidence))return;
+ if(!plan.verification.headlessFlow)throw Error('Execution evidence requires the supported headless adapter');
+ const owned=()=>{guard();deliveryRecords.assertRelease(repoId,plan,recordContext(repoId));};
+ await checkPhaseExecution(repoId,{phase,actor:'delivery-runner',attemptId:runId},owned);
+};
 const platformMetadataFor=(agentId:string,repoId:string,role:'dev'|'qa')=>async(input:unknown)=>{
  const config=capabilities.configuration(repoId);if(!config)throw new HttpError(409,'Configure the reviewed platform target before discovery');
  const context=recordContext(repoId),fingerprint=capabilities.configurationFingerprint([repoId]),session=swarm.planningSessionGuard(agentId),authentication=backend.tenancy.activity().profileMutation?.fingerprint;
@@ -189,7 +230,7 @@ const platformMetadataFor=(agentId:string,repoId:string,role:'dev'|'qa')=>async(
  const discoveryRecord=deliveryRecords.current(repoId);if(['delivery-permissions','delivery-authoring-prerequisites'].includes((input as {kind?:string})?.kind??'')&&(!task||!discoveryRecord||!discoveryRecord.content.taskPlan?.tasks.some(t=>t.issue===task&&(role==='qa'||t.owner===agentId))))throw new HttpError(403,'Delivery permissions require the assigned task owner');
  return platformDiscovery.inspect(config,context.checkoutPath,input,guard,AbortSignal.timeout(platformDiscoveryBudget(input)),repoId,configurationRoot,discoveryRecord&&(task||role==='qa'&&discoveryRecord.content.qaOwner===agentId)?{record:discoveryRecord,...(task?{issue:task}:{}),independentReview:role==='qa'&&discoveryRecord.content.qaOwner===agentId}:undefined);
 };
-swarm.capabilityStatus = () => JSON.stringify(capabilities.view());
+swarm.capabilityStatus = () => JSON.stringify({...capabilities.view(),executionAdmission:executionAdmission.view()});
 swarm.engineeringTools = (authorize,agentId,repoId) => createEngineeringTools(swarm.capabilityStatus, {
   async acquire(app, owner) {
     if (backend.demo) throw new HttpError(409, 'Demo cannot acquire tenant authoring ownership');
