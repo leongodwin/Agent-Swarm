@@ -26,6 +26,7 @@ import { OfficeMaintenance } from './officeMaintenance.ts';
 import {DeliveryRecords} from './deliveryRecords.ts';
 import {observeWorkflowReliability} from './workflowReliability.ts';
 import {unavailableGovernance} from './lifecycleGovernance.ts';
+import {phaseRecordFixture} from './testFixtures/phaseRecord.ts';
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -109,6 +110,12 @@ it('uses the approved tenant when displaying a licence-aware governance baseline
   expect(body.blockers.join(';')).not.toContain('Brief or deployment target changed');
   record.content.governanceProfile.tenantId='22222222-2222-4222-8222-222222222222';
   expect((await (await f.request('/api/repos/synthetic%2Frepo/delivery-record')).json()).blockers.join(';')).toContain('Brief or deployment target changed');
+});
+it('recognises the installed phase-admission host for read-only record status without granting execution',async()=>{
+ const f=await office(),record=phaseRecordFixture(),snapshot=f.swarm.snapshot();snapshot.repos[0].mission=record.content.brief;snapshot.repos[0].targetTenancy={tenantId,tenantName:'Synthetic',tenantDomain:'synthetic.test',user:'synthetic@example.com',environmentName:'Synthetic',environmentUrl:record.content.environmentUrl!};
+ vi.spyOn(f.swarm,'snapshot').mockReturnValue(snapshot);vi.spyOn(f.deliveryRecords,'current').mockReturnValue(record);
+ const endpoint='/api/repos/synthetic%2Frepo/delivery-record';expect((await (await f.request(endpoint)).json()).blockers.join(';')).toContain('Brief or deployment target changed');
+ f.delivery.checkExecutionEvidence=vi.fn(async()=>{});const body=await (await f.request(endpoint)).json();expect(body.blockers.join(';')).not.toContain('Brief or deployment target changed');expect(f.delivery.checkExecutionEvidence).not.toHaveBeenCalled();expect(body.record).toEqual(record);
 });
 it.each(['stale','not-real','ambiguous','no-active','unsafe-root'])('blocks tenant writes from %s profile discovery before provider calls',async mode=>{
   const f=await office();if(mode==='stale')f.tenancy.status='stale';if(mode==='not-real')f.tenancy.isReal=false;

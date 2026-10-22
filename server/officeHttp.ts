@@ -138,7 +138,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
     if(!services.deliveryRecords)throw new HttpError(503,'Delivery records unavailable');
     const record=services.deliveryRecords.current(repo.id);
     let scopeError:string|undefined;
-    if(record)try{services.deliveryRecords.assertContext(record,{brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId});}catch{scopeError='Brief or deployment target changed. Refresh discovery and design review.';}
+    if(record)try{services.deliveryRecords.assertContext(record,{brief:repo.mission,environmentUrl:repo.targetTenancy?.environmentUrl??delivery.view().policy?.environmentUrl,tenantId:repo.targetTenancy?.tenantId,...(delivery.checkExecutionEvidence?{executionEvidenceVersion:1 as const}:{})});}catch{scopeError='Brief or deployment target changed. Refresh discovery and design review.';}
     return {record,readiness:planningReadiness(record,delivery.view().policy,scopeError),phase:scopeError?'discovery':record?recordPhase(record):'not-started',blockers:[...(scopeError?[scopeError]:[]),...(record?[...discoveryBlockers(record),...taskPlanningBlockers(record)]:['Ask the CEO to create the delivery record and discovery tasks'])],demo:backend.demo};
   }));
   app.post('/api/repos/:repo/delivery-record',route(async req=>{
