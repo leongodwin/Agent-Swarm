@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { blockers, holdUps, setDependsOn } from '../shared/issues.ts';
 import type { CeoJobKind } from '../shared/types.ts';
 import {parseUnambiguousJson} from './unambiguousJson.ts';
+import {deliverySourceRequest,readDeliverySource} from './deliverySourceRead.ts';
 
 // The CEO: a coding-agent session in the lobby that runs the company instead of writing code.
 // It studies each floor's repo, shapes the team (hire / let-go proposals the manager approves),
@@ -94,6 +95,14 @@ export function createOfficeTools(h: OfficeHandlers, authorize?: SessionAuthoriz
     }
   };
   let defs = [
+    ...sourceTools(async input=>{
+      const request=deliverySourceRequest.parse(input);
+      if(request.kind!=='office-document')throw new Error('Coordinator source reader admits approved office documents only');
+      const result=await readDeliverySource(request,{repoId:'__office__',sourceCommit:null,read:async()=>{throw new Error('Repository reader unavailable');},guard:()=>{}});
+      const denied=authorize?await sessionAuthority(authorize):null;
+      if(denied)throw new Error(denied.reason);
+      return result;
+    }),
     ...recordTools(h.deliveryRecord),
     tool('review_delivery_record','Start the assigned independent QA agent on discovery and design before implementation.',{repo_id:z.string()},a=>run(()=>h.reviewDeliveryRecord?h.reviewDeliveryRecord(a.repo_id):'Delivery record review unavailable')),
     ...skillTools(),

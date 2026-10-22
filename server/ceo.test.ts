@@ -159,13 +159,19 @@ describe('office tools', () => {
   it('lists every tool the CEO relies on', async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['agent_detail', 'capability_status', 'company_status', 'create_release', 'delivery_record', 'delivery_status', 'file_issue', 'implementation_templates', 'installed_skills', 'propose_hire', 'propose_let_go', 'read_skill', 'review_delivery_record', 'review_release', 'route_issue', 'set_floor_profile', 'update_job']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['agent_detail', 'capability_status', 'company_status', 'create_release', 'delivery_record', 'delivery_status', 'file_issue', 'implementation_templates', 'installed_skills', 'propose_hire', 'propose_let_go', 'read_delivery_source', 'read_skill', 'review_delivery_record', 'review_release', 'route_issue', 'set_floor_profile', 'update_job']);
   });
 
   it('still takes preview_env as a map of strings', async () => {
     const { client, floors } = await connect();
     await client.callTool({ name: 'set_floor_profile', arguments: { floor: 1, preview_env: { VITE_API: 'http://localhost:{port}' } } });
     expect(floors).toEqual([{ floor: 1, preview_env: { VITE_API: 'http://localhost:{port}' } }]);
+  });
+  it('reads hash-bound headless guidance while refusing repository expansion',async()=>{
+    const {client}=await connect();const args={request_json:JSON.stringify({kind:'office-document',document:'HEADLESS-FLOW',maxLines:2})};
+    const result=await client.callTool({name:'read_delivery_source',arguments:args});expect(result.isError).not.toBe(true);const page=JSON.parse((result.content as any)[0].text);expect(page).toMatchObject({scope:'approved-office-guidance',document:'HEADLESS-FLOW',startLine:1,endLine:2,sourceCommit:null});expect(page.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect((await client.callTool({name:'read_delivery_source',arguments:{request_json:JSON.stringify({kind:'repository-file',file:'README.md'})}})).isError).toBe(true);
+    expect((await client.callTool({name:'read_delivery_source',arguments:{request_json:JSON.stringify({kind:'office-document',document:'../../secret'})}})).isError).toBe(true);await client.close();
   });
 
   it.each(['primary','fresh'] as const)('revokes CEO mutation authority on the %s native transport',async kind=>{
