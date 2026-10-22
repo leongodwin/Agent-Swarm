@@ -2,10 +2,26 @@ import {beforeEach,expect,it,vi} from 'vitest';
 const h=vi.hoisted(()=>({latest:vi.fn(),version:vi.fn()}));
 vi.mock('./hldArtifacts.ts',()=>({loadLatestHld:h.latest,loadHldVersion:h.version}));
 import {deliveryRecordHandler} from './deliveryRecordTools.ts';
+import {DeliveryRecords} from './deliveryRecords.ts';
 import {recordReference} from '../shared/deliveryRecord.ts';
 let record:any,records:any,deps:any,context:any;
 const hash='a'.repeat(64),head='b'.repeat(40),uuid='11111111-1111-4111-8111-111111111111',docId=`HLD-${uuid}`;
 const notes='Independent assessment based on actual inspected evidence and explicit limitations; the current scope requires further verification.';
+it.each([
+  ['https://SYNTHETIC.crm4.dynamics.com/',false,true],
+  ['https://foreign.crm4.dynamics.com/',false,false],
+  ['https://synthetic.crm4.dynamics.com/other',false,false],
+  ['https://synthetic.crm4.dynamics.com',true,false],
+  [undefined,false,false],
+] as const)('reports the same brief/target decision as the approval guard: %s, changed brief=%s',async(environment,changedBrief,expected)=>{
+  context.environmentUrl=environment;if(changedBrief)context.brief+=' changed';
+  const authority=new DeliveryRecords('synthetic-never-read');
+  const check=()=>authority.assertContext(record,context);
+  if(expected)expect(check).not.toThrow();else expect(check).toThrow('Brief or target changed');
+  const result=JSON.parse(await handler()(input('read')));
+  expect(result.contextMatches).toBe(expected);
+  expect(records.save).not.toHaveBeenCalled();expect(records.reviewTask).not.toHaveBeenCalled();
+});
 beforeEach(()=>{vi.clearAllMocks();h.latest.mockResolvedValue(null);h.version.mockResolvedValue({result:{deliveryRecord:{id:uuid,revision:1,sha256:hash}}});context={brief:'Synthetic expense capture',environmentUrl:'https://synthetic.crm4.dynamics.com',tenantId:uuid,checkoutPath:'synthetic-never-read'};record={id:uuid,revision:1,sha256:hash,content:{brief:context.brief,outcome:'Persist one valid expense',successMeasure:'Submission survives reload and denies unauthorized reads',users:['Employee'],scope:['Expense submission'],exclusions:['Payroll'],owner:'dev',qaOwner:'qa',sourceCommit:head,environmentUrl:context.environmentUrl,requirements:[{id:'r1',description:'Persist expenses',acceptance:'Persist after reload'}],findings:[],contracts:[{id:'expense',owner:'dev',description:'Unique revision contract',requirementIds:['r1']}],tasks:[{issue:1,stage:'discovery',requirementIds:['r1']}],slice:{description:'Submit one valid expense',requirementIds:['r1'],acceptanceCriteria:['Persists after reload']}}};records={current:vi.fn(()=>record),view:vi.fn(()=>[]),assertContext:vi.fn(),save:vi.fn(async(_repo,_revision,content,_actor,guard)=>{guard?.();return {content};}),reviewTask:vi.fn(async()=>({reviewed:true})),review:vi.fn(async()=>({reviewed:true})),acceptSlice:vi.fn(async(_repo,_reference,_release,_run,_context,guard)=>{guard();return {accepted:true};})};deps={assertOpen:vi.fn(),repo:vi.fn(()=>({...context})),agents:()=>[{id:'dev',repoId:'project',role:'dev'},{id:'qa',repoId:'project',role:'qa'}],delivery:vi.fn(()=>({runs:[],releases:[]}))};});
 function handler(role:'ceo'|'dev'|'qa'|'manager'='dev',extra:any={}){return deliveryRecordHandler(records,deps,{id:role==='manager'?'manager':role,role,repoId:'project',...extra});}
 const input=(action:any,payload:any={},expected_revision=1)=>({repo_id:'project',action,payload_json:JSON.stringify(payload),expected_revision});

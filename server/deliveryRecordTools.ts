@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {DeliveryRecords, type RecordContext} from './deliveryRecords.ts';
+import {DeliveryRecords,recordScopeMatches, type RecordContext} from './deliveryRecords.ts';
 import {originalTaskQaSchema,deliveryRecordContentSchema, findingSchema,inputReviewSchema, recordReferenceSchema, recordReference, recordPhase, discoveryBlockers} from '../shared/deliveryRecord.ts';
 import {hldResultSchema} from '../shared/hldArtifact.ts';
 import {loadHldVersion,loadLatestHld,hldAbsenceGuard} from './hldArtifacts.ts';
@@ -46,7 +46,7 @@ export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolCon
       let architectureDraft:unknown=null;
       try{const artifact=await loadLatestHld(context.checkoutPath,guard,input.repo_id);if(artifact)architectureDraft={docId:artifact.result.docId,artifactSha256:artifact.sha256,deliveryRecord:artifact.result.deliveryRecord,method:artifact.result.generationMethod,result:artifact.result,jsonPath:`docs/architecture/drafts/${artifact.result.docId}.json`,markdownPath:`docs/architecture/drafts/${artifact.result.docId}.md`};}
       catch{architectureDraft={unavailable:'Saved architecture is unreadable; inspect its artifacts before review'};}
-      guard();return JSON.stringify({record:current,architectureDraft,taskScopes:current?.content.taskPlan?.tasks.map(t=>({issue:t.issue,taskHash:taskScopeHash(current,t.issue)}))??[],history:records.view(input.repo_id).map(({id,revision,sha256,updatedAt,updatedBy})=>({id,revision,sha256,updatedAt,updatedBy})),phase:current?recordPhase(current):'not-started',blockers:current?[...discoveryBlockers(current),...taskPlanningBlockers(current)]:['Create the shared delivery record'],contextMatches:current?current.content.brief===context.brief&&current.content.environmentUrl===context.environmentUrl:false});
+      guard();return JSON.stringify({record:current,architectureDraft,taskScopes:current?.content.taskPlan?.tasks.map(t=>({issue:t.issue,taskHash:taskScopeHash(current,t.issue)}))??[],history:records.view(input.repo_id).map(({id,revision,sha256,updatedAt,updatedBy})=>({id,revision,sha256,updatedAt,updatedBy})),phase:current?recordPhase(current):'not-started',blockers:current?[...discoveryBlockers(current),...taskPlanningBlockers(current)]:['Create the shared delivery record'],contextMatches:current?recordScopeMatches(current,context):false});
     }
     // Complete manager saves include retained findings and executable task contracts.
     // Match the authenticated browser JSON ceiling without enlarging worker actions.

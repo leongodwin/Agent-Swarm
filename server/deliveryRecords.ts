@@ -13,6 +13,9 @@ import type {DeliveryRelease, DeliveryRun} from '../shared/delivery.ts';
 
 const stateSchema = recordSnapshotSchema;
 export interface RecordContext {brief:string; environmentUrl?:string;tenantId?:string;executionEvidenceVersion?:1}
+export function recordScopeMatches(record:Pick<DeliveryRecord,'content'>,context:RecordContext){
+  return record.content.brief===context.brief&&record.content.environmentUrl?.replace(/\/$/,'').toLowerCase()===context.environmentUrl?.replace(/\/$/,'').toLowerCase();
+}
 const digest = (record: Pick<DeliveryRecord,'id'|'repoId'|'revision'|'previousSha256'|'content'>) => crypto.createHash('sha256').update(JSON.stringify({id:record.id,repoId:record.repoId,revision:record.revision,previousSha256:record.previousSha256,content:record.content})).digest('hex');
 export class DeliveryRecords {
   private records: DeliveryRecord[] = [];
@@ -60,7 +63,7 @@ export class DeliveryRecords {
   }
   assertContext(record:Pick<DeliveryRecord,'content'>, context:RecordContext) {
     if(record.content.findings.some(f=>f.executionEvidence)&&context.executionEvidenceVersion!==1)throw new HttpError(409,'Phase execution admission is not configured; approval and execution remain blocked');
-    if(record.content.brief !== context.brief || record.content.environmentUrl?.replace(/\/$/,'').toLowerCase() !== context.environmentUrl?.replace(/\/$/,'').toLowerCase()) throw new HttpError(409,'Brief or target changed; update discovery and obtain a fresh design review');
+    if(!recordScopeMatches(record,context)) throw new HttpError(409,'Brief or target changed; update discovery and obtain a fresh design review');
     if(record.content.governanceProfile&&record.content.governanceProfile.tenantId.toLowerCase()!==context.tenantId?.toLowerCase())throw new HttpError(409,'Governance entitlement profile does not match the approved tenant');
   }
   private async publish(next: DeliveryRecord[], guard:()=>void) {
