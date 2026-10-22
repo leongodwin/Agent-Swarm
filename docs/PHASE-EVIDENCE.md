@@ -1,6 +1,6 @@
 # Phase-specific execution evidence, version 1
 
-When whole captured evidence texts cannot fit, each affected entry is marked `status: "unavailable"` and `textOmitted: true`. A single `capturedEvidenceOmissionRule` states that the model must not infer those texts. Original references, digests and pre-existing failure reasons are retained. Whole texts that fit retain their original captured entries. The source files and the 256 KiB limit are unchanged.
+When whole captured evidence texts cannot fit, each affected entry is marked `status: "unavailable"` and `textOmitted: true`. A single `capturedEvidenceOmissionRule` states that the model must not infer those texts. Original identities and pre-existing failure reasons are retained; fitting texts remain whole. A `sourceEvidenceIndex` may link only the exact reference and digest to an existing same-prompt evidence-pool entry. `capturedEvidenceIdentityRule` forbids inferring freshness, approval or readiness from that link; unmatched identities remain literal. Original source verification still uses the unmodified capture. The source files and the 256 KiB limit are unchanged.
 
 Design approval approves requirements and named validation contracts. It cannot certify that a sixty-second authentication or connection observation remains current throughout synthesis and independent review.
 

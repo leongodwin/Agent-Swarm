@@ -38,7 +38,10 @@ export function synthesisRecordContext(record:DeliveryRecord|undefined){
 /** Keep whole verified texts when they fit; never silently truncate evidence. */
 export function boundedSynthesisPrompt(base:Record<string,unknown>,captured:readonly {reference:string;sha256:string;status:string;reason?:string;text?:string}[],maxBytes=256*1024){
  const items: {reference:string;sha256:string;status:string;reason?:string;text?:string;textOmitted?:true}[]=captured.map(({text,...item})=>({...item,...(text!==undefined?{status:'unavailable',textOmitted:true as const}:{})}));
- const encode=()=>JSON.stringify({...base,capturedEvidenceOmissionRule:items.some(item=>item.textOmitted)?'For each textOmitted:true entry, verified text was omitted from model input to respect the planning budget; do not infer its contents. References and digests are retained.':undefined,capturedEvidence:items});
+ const context=base.discoveryEvidence as {projection?:unknown;evidencePool?:unknown}|null|undefined;
+ const pool=context?.projection==='planning-only-exact-evidence-pool-v5'&&Array.isArray(context.evidencePool)?context.evidencePool:[];
+ const indices=items.map(item=>pool.findIndex(e=>e&&typeof e==='object'&&Object.hasOwn(e,'reference')&&Object.hasOwn(e,'sha256')&&e.reference===item.reference&&e.sha256===item.sha256));
+ const encode=()=>JSON.stringify({...base,capturedEvidenceIdentityRule:indices.some(index=>index>=0)?'For each sourceEvidenceIndex, copy ONLY reference and sha256 from discoveryEvidence.evidencePool at that index. This is an exact source-identity link; no observation time, expiry, approval or readiness is inferred from that receipt.':undefined,capturedEvidenceOmissionRule:items.some(item=>item.textOmitted)?'For each textOmitted:true entry, verified text was omitted from model input to respect the planning budget; do not infer its contents. References and digests are retained.':undefined,capturedEvidence:items.map((item,i)=>{if(indices[i]<0)return item;const {reference,sha256,...rest}=item;return{...rest,sourceEvidenceIndex:indices[i]};})});
  if(Buffer.byteLength(encode())>maxBytes)throw new Error('Architecture planning scope exceeds its bound; split the current scope without deleting history');
  // Keep inference input bounded even when omitted history frees capacity.
  // Whole evidence texts only; larger sources remain available to independent

@@ -36,6 +36,27 @@ it('shares omission instructions without losing any source identity or original 
  expect(value.capturedEvidence[24]).toEqual(refs[24]);expect(JSON.stringify(refs)).toBe(before);
  expect(()=>boundedSynthesisPrompt({...base,additionalContract:'y'.repeat(3000)},refs)).toThrow('scope exceeds');
 });
+it('links captured identities losslessly to existing receipts without borrowing their freshness or changing source verification',()=>{
+ const pool=Array.from({length:24},(_,i)=>({reference:'C:/owned/'+('path/'.repeat(40))+i+'.json',sha256:i.toString(16).padStart(64,'0'),observedAt:'2026-10-01T00:00:00Z',expiresAt:'2026-10-01T00:01:00Z'}));
+ const refs:{reference:string;sha256:string;status:string;text?:string;reason?:string}[]=[...pool.map(({reference,sha256})=>({reference,sha256,status:'captured',text:'x'.repeat(32768)})),{reference:'C:/different/source.json',sha256:pool[0].sha256,status:'unavailable',reason:'Original source unavailable'}];
+ const base={criticalContract:'x'.repeat(245000),discoveryEvidence:{projection:'planning-only-exact-evidence-pool-v5',evidencePool:pool}},before=JSON.stringify({base,refs});
+ const text=boundedSynthesisPrompt(base,refs),value=JSON.parse(text);
+ expect(Buffer.byteLength(text)).toBeLessThanOrEqual(262144);expect(value.criticalContract).toBe(base.criticalContract);expect(value.discoveryEvidence).toEqual(base.discoveryEvidence);
+ expect(value.capturedEvidenceIdentityRule).toContain('ONLY reference and sha256');expect(value.capturedEvidenceIdentityRule).toContain('no observation time, expiry, approval or readiness');
+ const expanded=value.capturedEvidence.map(({sourceEvidenceIndex,...item}:any)=>sourceEvidenceIndex===undefined?item:{reference:pool[sourceEvidenceIndex].reference,sha256:pool[sourceEvidenceIndex].sha256,...item});
+ expect(expanded.slice(0,24)).toEqual(refs.slice(0,24).map(({text,...item})=>({...item,status:'unavailable',textOmitted:true})));
+ expect(expanded[24]).toEqual(refs[24]);expect(JSON.stringify({base,refs})).toBe(before);
+ expect(()=>boundedSynthesisPrompt({...base,additional:'y'.repeat(10000)},refs)).toThrow('scope exceeds');
+});
+it.each([null,{projection:'other',evidencePool:[]},{projection:'planning-only-exact-evidence-pool-v5',evidencePool:null}])('retains literal source identity without a compatible same-prompt pool: %j',discoveryEvidence=>{
+ const ref={reference:'exact.json',sha256:'a'.repeat(64),status:'captured',text:'Complete text'};
+ const value=JSON.parse(boundedSynthesisPrompt({discoveryEvidence},[ref]));expect(value.capturedEvidence).toEqual([ref]);expect(value).not.toHaveProperty('capturedEvidenceIdentityRule');
+});
+it('does not merge identities with different digests and preserves indices around malformed or historical entries',()=>{
+ const ref={reference:'exact.json',sha256:'a'.repeat(64),status:'captured',text:'Complete text'},pool=[null,'invalid',Object.create({reference:ref.reference,sha256:ref.sha256}),{reference:ref.reference,sha256:'b'.repeat(64)},{reference:ref.reference,sha256:ref.sha256,observedAt:'2020-01-01T00:00:00Z'}];
+ const value=JSON.parse(boundedSynthesisPrompt({discoveryEvidence:{projection:'planning-only-exact-evidence-pool-v5',evidencePool:pool}},[ref]));
+ expect(value.capturedEvidence).toEqual([{status:'captured',text:ref.text,sourceEvidenceIndex:4}]);expect(value.discoveryEvidence.evidencePool).toEqual(pool);expect(value.capturedEvidence[0]).not.toHaveProperty('observedAt');
+});
 it('keeps accumulated historical context within the existing bound and detects changes beyond an excerpt',()=>{
  const record={id:'record',revision:105,sha256:'b'.repeat(64),content:{contracts:['current executable contract'],findings:Array.from({length:160},(_,i)=>({id:'history-'+i,critical:false,status:'observed',conclusion:'blocked',statement:'Historical detail '.repeat(300),remedy:'Original remedy '.repeat(300),evidence:[{reference:'retained-'+i+'.json',sha256:'a'.repeat(64)}]}))}} as unknown as DeliveryRecord;
  const original=JSON.stringify(record),view=synthesisRecordContext(record)!;
