@@ -29,10 +29,12 @@ export function flowDefinitionForPreflight(definition: Record<string, unknown>):
   };
   walk(copy); return copy;
 }
-export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admission?:{beforeRequest():Promise<void>;maxPages?:number;expectedEntrySha256?:string}): Promise<FlowAdapter> {
+export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admission?:{beforeRequest():Promise<void>;maxPages?:number;expectedEntrySha256?:string;entryPath?:string;requiredTools?:readonly ('create_standalone_flow'|'read_standalone_flow_owners')[]}): Promise<FlowAdapter> {
   const maxPages=z.number().int().min(1).max(20).parse(admission?.maxPages??20);
   const skill = discoverSkills().skills.find((s) => s.id === 'power-automate:manage-flows');
-  const entry = process.env.SWARM_FLOWAGENT_ENTRY ?? (skill ? path.resolve(path.dirname(skill.file), '..', '..', 'server', 'mcp.mjs') : '');
+  const entry = admission?.entryPath ?? process.env.SWARM_FLOWAGENT_ENTRY ?? (skill ? path.resolve(path.dirname(skill.file), '..', '..', 'server', 'mcp.mjs') : '');
+  const requiredTools=z.array(z.enum(['create_standalone_flow','read_standalone_flow_owners'])).max(2).parse(admission?.requiredTools??[]);
+  if(admission?.entryPath){const stat=await fs.lstat(entry);if(!admission.expectedEntrySha256||!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||await fs.realpath(entry)!==path.resolve(entry))throw Error('Explicit FlowAgent entry requires canonical reviewed source and its approved hash');}
   if (!entry || !(await fs.stat(entry).catch(() => null))?.isFile()) throw new Error('FlowAgent runtime is unavailable; install/enable the Power Automate plugin or configure SWARM_FLOWAGENT_ENTRY');
   const entrySha256=crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex');
   if(admission?.expectedEntrySha256!==undefined&&entrySha256!==z.string().regex(/^[a-f0-9]{64}$/).parse(admission.expectedEntrySha256))throw Error('FlowAgent approved entry differs before launch');
@@ -48,6 +50,7 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admiss
     for (let page = 0; page < maxPages; page++) { await admission?.beforeRequest();signal.throwIfAborted();cleanup.assertOpen();const list = await client.listTools({ cursor }, { signal, timeout: 15000 });signal.throwIfAborted();cleanup.assertOpen();list.tools.forEach((tool) => names.add(tool.name));cursor = list.nextCursor;if (!cursor) break;if(cursors.has(cursor))throw new Error('FlowAgent tool discovery returned a repeated cursor');cursors.add(cursor); }
     if (cursor) throw new Error('FlowAgent tool discovery exceeded its pagination limit');
     for (const tool of ['whoami', 'get_flow', 'get_flow_context', 'preflight_flow', 'publish_flow', 'disable_flow', 'get_run_history', 'get_run_details', 'get_run_actions', 'get_run_action_content']) if (!names.has(tool)) throw new Error(`FlowAgent tool ${tool} is missing`);
+    for(const tool of requiredTools)if(!names.has(tool))throw Error(`FlowAgent tool ${tool} is missing`);
     const server=client.getServerVersion();if(!server||crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex')!==entrySha256)throw Error('FlowAgent runtime changed during admission');
     const metadata=z.object({name:z.string().min(1).max(200),version:z.string().min(1).max(100),entrySha256:z.string().regex(/^[a-f0-9]{64}$/)}).parse({...server,entrySha256});
     return { metadata,close, async call(tool, args) {
