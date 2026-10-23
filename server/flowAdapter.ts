@@ -29,21 +29,23 @@ export function flowDefinitionForPreflight(definition: Record<string, unknown>):
   };
   walk(copy); return copy;
 }
-export async function connectFlowAdapter(cwd: string, signal: AbortSignal): Promise<FlowAdapter> {
+export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admission?:{beforeRequest():Promise<void>;maxPages?:number;expectedEntrySha256?:string}): Promise<FlowAdapter> {
+  const maxPages=z.number().int().min(1).max(20).parse(admission?.maxPages??20);
   const skill = discoverSkills().skills.find((s) => s.id === 'power-automate:manage-flows');
   const entry = process.env.SWARM_FLOWAGENT_ENTRY ?? (skill ? path.resolve(path.dirname(skill.file), '..', '..', 'server', 'mcp.mjs') : '');
   if (!entry || !(await fs.stat(entry).catch(() => null))?.isFile()) throw new Error('FlowAgent runtime is unavailable; install/enable the Power Automate plugin or configure SWARM_FLOWAGENT_ENTRY');
   const entrySha256=crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex');
+  if(admission?.expectedEntrySha256!==undefined&&entrySha256!==z.string().regex(/^[a-f0-9]{64}$/).parse(admission.expectedEntrySha256))throw Error('FlowAgent approved entry differs before launch');
   const transport = new StdioClientTransport({ command: process.execPath, args: [entry], cwd, stderr: 'ignore', env: flowAdapterEnvironment() });
   const client = new Client({ name: 'swarm-flow-delivery', version: '1' });
   const cleanup=flowCleanup(client,transport);
   const close = () => {signal.removeEventListener('abort',abort);return cleanup.close();};
   const abort = () => { void close().catch(()=>{/* Explicit finally/close preserves cleanup failure; cancellation cannot acknowledge exit. */}); }; signal.addEventListener('abort', abort, { once: true });
   try {
-    signal.throwIfAborted();cleanup.started(); await client.connect(transport, { timeout: 15000 });
+    signal.throwIfAborted();await admission?.beforeRequest();signal.throwIfAborted();cleanup.started(); await client.connect(transport, { timeout: 15000 });
     signal.throwIfAborted();cleanup.assertOpen();
     const names = new Set<string>(),cursors=new Set<string>(); let cursor: string | undefined;
-    for (let page = 0; page < 20; page++) { const list = await client.listTools({ cursor }, { signal, timeout: 15000 });signal.throwIfAborted();cleanup.assertOpen();list.tools.forEach((tool) => names.add(tool.name));cursor = list.nextCursor;if (!cursor) break;if(cursors.has(cursor))throw new Error('FlowAgent tool discovery returned a repeated cursor');cursors.add(cursor); }
+    for (let page = 0; page < maxPages; page++) { await admission?.beforeRequest();signal.throwIfAborted();cleanup.assertOpen();const list = await client.listTools({ cursor }, { signal, timeout: 15000 });signal.throwIfAborted();cleanup.assertOpen();list.tools.forEach((tool) => names.add(tool.name));cursor = list.nextCursor;if (!cursor) break;if(cursors.has(cursor))throw new Error('FlowAgent tool discovery returned a repeated cursor');cursors.add(cursor); }
     if (cursor) throw new Error('FlowAgent tool discovery exceeded its pagination limit');
     for (const tool of ['whoami', 'get_flow', 'get_flow_context', 'preflight_flow', 'publish_flow', 'disable_flow', 'get_run_history', 'get_run_details', 'get_run_actions', 'get_run_action_content']) if (!names.has(tool)) throw new Error(`FlowAgent tool ${tool} is missing`);
     const server=client.getServerVersion();if(!server||crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex')!==entrySha256)throw Error('FlowAgent runtime changed during admission');

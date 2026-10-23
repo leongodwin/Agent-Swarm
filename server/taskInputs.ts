@@ -46,7 +46,14 @@ export function taskInputPrompt(record:RecordInput,issue:number){
  // stay literal; every source byte and task/authority hash remains unchanged.
  const {inputIndex,...rest}=manifest;
  const compact=JSON.stringify({...prompt,taskInputs:{...rest,projection:'exact-task-input-index-v2',inputIndexEncoding:'Each inputIndexRows entry is [section,id,bytes,sha256], in original order. Expand those exact four values before task_input retrieval. This shares field labels only; no input, size, digest, scope or authority is omitted or inferred.',inputIndexRows:inputIndex.map(({section,id,bytes,sha256})=>[section,id,bytes,sha256])}});
- return Buffer.byteLength(compact)<Buffer.byteLength(literal)?compact:literal;
+ const selected=Buffer.byteLength(compact)<Buffer.byteLength(literal)?compact:literal;
+ if(Buffer.byteLength(selected)<=TASK_CONTEXT_BYTES)return selected;
+ // Share only repeated critical-finding field names when the existing exact
+ // index still overflows. Full API/source rows and both authority hashes stay
+ // unchanged; an irreducible packet is still refused by admission.
+ const {criticalFindings,...indexed}=rest;
+ const rows=JSON.stringify({...prompt,taskInputs:{...indexed,projection:'exact-task-input-index-v3',inputIndexEncoding:'inputIndexRows=[section,id,bytes,sha256]; criticalFindingRows=[id,area,owner,status,conclusion]. Expand every tuple exactly in original order. Complete source retrieval, scope and authority hashes are unchanged; no finding or input is omitted.',inputIndexRows:inputIndex.map(({section,id,bytes,sha256})=>[section,id,bytes,sha256]),criticalFindingRows:criticalFindings.map(({id,area,owner,status,conclusion})=>[id,area,owner,status,conclusion])}});
+ return Buffer.byteLength(rows)<Buffer.byteLength(selected)?rows:selected;
 }
 /** Admission-only checks preserve historical records for audit and correction. */
 export function taskPlanningBlockers(record:RecordInput):string[]{

@@ -31,19 +31,62 @@ hash-bound source/control reads and an explicit five-control review. Review
 expires after at most one hour and at the earliest evidence expiry; changes
 invalidate its proposal hash. No business record decision is rewritten.
 
-This change deliberately exposes **no execution endpoint**. The fixed runner,
-same-resource management setup/readback, protected native output capture,
-durable unknown-outcome holds and stopped-state cleanup must be implemented and
-independently reviewed before any probe may run. A review of this code cannot
-establish those missing capabilities. A future implementation must be included
-in the proposal's complete pinned sources and needs fresh independent approval.
-No root script, direct tenant API or generic worker authority may substitute.
+POST to `/execute` accepts only the exact reviewed proposal hash through the
+authenticated normal host. The fixed runner and managed-CLI same-resource
+setup/readback, Windows protected capture, provider identity, resource lease
+and durable unknown-outcome handling are included in the proposal's complete
+sources. Only the assigned QA actor may approve the current five controls.
+An explicit reviewed technical exception to business-authoring order is still
+required in same-resource evidence; selecting this profile never silently
+waives the existing project contract. No root script, direct tenant API or
+generic worker authority may substitute.
+
+Setup refuses existing publisher/solution/reference/workflow names, records a
+durable fsynced intent before each creation, creates one stopped flow without
+duplicate override, checks its actual owner and workflow ID and exact unmanaged
+solution membership. It cannot adopt, delete, retry or restore partial setup.
+Every error retains the exclusive original probe intent and lease. A future
+reconciliation requires a separately reviewed implementation, not deleting the
+intent or forcing the lease. A known terminal run is disabled and read back as
+Stopped before output capture. Unknown trigger outcomes are held without flow
+cancellation or a second invocation.
+
+Raw native outputs stay under the existing protected Windows leaf with fresh
+ACL/path admission before and after each exclusive write. Shared evidence
+contains only IDs and hashes. Bounded capture retains unknown native shapes;
+it explicitly does not accept their semantics. A later independent source
+review must determine what those actual outputs establish. Positive folder
+counts or an attempted invalid folder do not prove message retrieval, pagination,
+throttling, attachment handling, report correctness or mail delivery.
 
 Limits retained: one host trigger, at most 64 management/capture calls,
 256000 bytes per native output, 120 seconds per check, stop new work at 90
 seconds, one-hour release bound, no cancellation/replay of unknown operations.
 No 24/8/12 scenario, four-real-run, quality, recovery, source/report checker,
 native receipt or guarded final-send credit is earned by these synthetic tests.
+
+The 64-operation counter admits MCP initialization and every tool-list request
+at dispatch. This fixed probe accepts one complete discovery page and refuses
+continuation before resource setup; the general adapter retains its existing
+twenty-page default. All later tool, managed-CLI and ACL operations use the same
+counter. No count or deadline was increased.
+
+The review includes the full command-runner module and an explicitly labelled
+runtime-assembled supporting source capsule. The capsule contains complete
+original UTF8 text and SHA256 for cleanup, environment, CLI resolution, errors,
+JSON/file readers and configuration helpers. Its logical Markdown key does not
+claim a physical file exists. The existing sixteen-entry,128KiB-per-entry and
+384KiB-total source bounds still apply; no underlying source is excerpted.
+
+Each normal-host proposal/authority check also obtains the existing service's
+live standard-policy observation, validates its tenant/caller and unchanged
+15-minute freshness bound, and evaluates the one complete Outlook-only flow.
+Unknown or blocked classifications refuse admission. Approval binds the exact
+evaluated policy content. An authentic reread of identical policy content may
+refresh the live observation without changing the reviewed proposal; it never
+renews an old documentary receipt or approval expiry. Changed policy content
+changes the configuration/proposal hash and needs fresh review. Advanced policy
+and actual provider operation eligibility remain distinct controls.
 
 Primary endpoint contracts are Microsoft Graph Get mailFolder and mailFolder
 resource documentation and the Office 365 Outlook connector's Send an HTTP
