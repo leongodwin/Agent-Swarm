@@ -15,6 +15,8 @@ export const sourceInitialUriExpression=`concat('https://graph.microsoft.com/v1.
 export const sourceUriGuardExpression={and:[{or:[{equals:["@variables('Next_page')",`@${sourceInitialUriExpression}`]},{and:[{equals:["@length(split(uriQuery(variables('Next_page')), '&'))",4]},{equals:[`@startsWith(variables('Next_page'), concat(${sourceInitialUriExpression}, '&$skiptoken='))`,true]},{not:{equals:["@variables('Next_page')",`@concat(${sourceInitialUriExpression}, '&$skiptoken=')`]}}]}]},...['#','\\'].map(character=>({equals:[`@contains(variables('Next_page'), '${character}')`,false]})),...['%0D','%0A','%09'].map(encoded=>({equals:[`@contains(variables('Next_page'), uriComponentToString('${encoded}'))`,false]}))]};
 
 export const sourceDigest=(value:unknown)=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+/** The final send reuses the accepted report; it must not rescan the Inbox. */
+export const sourceMailboxGuardExpression={and:[{equals:["@triggerBody()?['dataMode']",'mailbox']},{equals:["@triggerBody()?['dispatch']",false]}]};
 const hash=z.string().regex(/^[a-f0-9]{64}$/);
 /** Optional new capability; a plan must explicitly select this reviewed method.
  * Its source-only cap does not change report, transport, timing or planning caps. */
@@ -29,7 +31,7 @@ const after=(action:Record<string,any>,name:string)=>same(action.runAfter,{[name
  * Independent QA must accept this provenance method and visibility baseline. */
 export function assertSourceCapsuleDefinition(value:unknown){
  const definition=object(value),top=object(definition.actions),mode=object(top[sourceNames.mode]);
- if(mode.type!=='If'||!same(mode.expression,{equals:["@triggerBody()?['dataMode']",'mailbox']}))throw Error('SOURCE_MODE_GUARD_REQUIRED');
+ if(mode.type!=='If'||!same(mode.expression,sourceMailboxGuardExpression))throw Error('SOURCE_MODE_GUARD_REQUIRED');
  const live=object(mode.actions),loop=object(live[sourceNames.loop]);
  if(loop.expression!=="@equals(variables('Next_page'), '')"||loop.limit?.timeout!=='PT2M')throw Error('SOURCE_TERMINATION_REQUIRED');
  const locations:{parent:Record<string,any>;action:Record<string,any>;loops:number}[]=[];
