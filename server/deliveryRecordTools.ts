@@ -30,6 +30,7 @@ export interface RecordToolContext {
   verifySliceAcceptance?(runId:string):Promise<void>;
   verifyAcceptedTask?(repoId:string,issue:number,source:import('../shared/deliveryRecord.ts').DeliveryRecord,receipt:NonNullable<import('../shared/deliveryRecord.ts').DeliveryRecord['taskAcceptances']>[number],originalQa?:import('./taskReconciliation.ts').OriginalTaskQa):Promise<import('./taskReconciliation.ts').OriginalTaskQa>;
   schemaBootstrap?(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void):Promise<unknown>;
+  connectorProbe?(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void):Promise<unknown>;
   canvasPackaging?(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void):Promise<unknown>;
   synthesis?:Pick<HldSynthesisService,'start'|'view'|'result'>;
   inspectRepository?(checkoutPath:string,guard:()=>void):Promise<{evidence:{reference:string;sha256:string;observedAt:string;expiresAt:string};observation:{sourceCommit:string}}>;
@@ -37,7 +38,7 @@ export interface RecordToolContext {
 export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolContext,actor:{id:string;role:'ceo'|'dev'|'qa'|'manager';repoId?:string;reviewOnly?:boolean}):RecordToolHandler {
   return async input => {
     deps.assertOpen();
-    if(actor.reviewOnly&&!['browser_handoff','read','evidence_index','accepted_reports','task_input','review','reject_inputs','review_task','reconcile_task','accept_preparation','accept_slice','schema_bootstrap','canvas_packaging'].includes(input.action))throw new HttpError(403,'Independent review cannot change its discovery inputs; report findings in the review notes');
+    if(actor.reviewOnly&&!['browser_handoff','read','evidence_index','accepted_reports','task_input','review','reject_inputs','review_task','reconcile_task','accept_preparation','accept_slice','schema_bootstrap','connector_probe','canvas_packaging'].includes(input.action))throw new HttpError(403,'Independent review cannot change its discovery inputs; report findings in the review notes');
     if(actor.repoId&&actor.repoId!==input.repo_id)throw new HttpError(403,'Delivery record belongs to another project');
     const context=deps.repo(input.repo_id);
     const guard=()=>{deps.assertOpen();const current=deps.repo(input.repo_id);if(current.brief!==context.brief||current.environmentUrl!==context.environmentUrl||current.tenantId!==context.tenantId||current.checkoutPath!==context.checkoutPath)throw new HttpError(409,'Project scope changed during record update');};
@@ -65,6 +66,10 @@ export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolCon
     if(input.action==='schema_bootstrap'){
       if(!current||!deps.schemaBootstrap||actor.role!=='qa'||actor.id!==current.content.qaOwner)throw new HttpError(403,'Schema bootstrap belongs to assigned independent QA');
       records.assertContext(current,context);return JSON.stringify(await deps.schemaBootstrap(input.repo_id,payload,actor,guard));
+    }
+    if(input.action==='connector_probe'){
+      if(!current||!deps.connectorProbe||actor.role!=='qa'||actor.id!==current.content.qaOwner)throw new HttpError(403,'Connector probe belongs to assigned independent QA');
+      records.assertContext(current,context);return JSON.stringify(await deps.connectorProbe(input.repo_id,payload,actor,guard));
     }
     if(input.action==='evidence_index'){
       if(!current)throw new HttpError(409,'Discovery record is missing');
