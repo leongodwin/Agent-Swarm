@@ -37,7 +37,7 @@ export interface RecordToolContext {
 export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolContext,actor:{id:string;role:'ceo'|'dev'|'qa'|'manager';repoId?:string;reviewOnly?:boolean}):RecordToolHandler {
   return async input => {
     deps.assertOpen();
-    if(actor.reviewOnly&&!['browser_handoff','read','evidence_index','accepted_reports','task_input','review','reject_inputs','review_task','reconcile_task','accept_slice','schema_bootstrap','canvas_packaging'].includes(input.action))throw new HttpError(403,'Independent review cannot change its discovery inputs; report findings in the review notes');
+    if(actor.reviewOnly&&!['browser_handoff','read','evidence_index','accepted_reports','task_input','review','reject_inputs','review_task','reconcile_task','accept_preparation','accept_slice','schema_bootstrap','canvas_packaging'].includes(input.action))throw new HttpError(403,'Independent review cannot change its discovery inputs; report findings in the review notes');
     if(actor.repoId&&actor.repoId!==input.repo_id)throw new HttpError(403,'Delivery record belongs to another project');
     const context=deps.repo(input.repo_id);
     const guard=()=>{deps.assertOpen();const current=deps.repo(input.repo_id);if(current.brief!==context.brief||current.environmentUrl!==context.environmentUrl||current.tenantId!==context.tenantId||current.checkoutPath!==context.checkoutPath)throw new HttpError(409,'Project scope changed during record update');};
@@ -151,6 +151,6 @@ export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolCon
     if(!run||!release)throw new HttpError(404,'Slice release/run not found in this project');
     if(current.content.applicationSpec){if(!deps.verifySliceAcceptance)throw new HttpError(409,'Trusted first-slice evidence verification is unavailable');await deps.verifySliceAcceptance(run.id);guard();}
     const acceptanceGuard=()=>{guard();const live=deps.delivery(input.repo_id);const fresh=live.runs.find(r=>r.id===run.id),pinned=live.releases.find(r=>r.id===release.id);if(fresh?.phase!=='complete'||fresh.evidenceHash!==run.evidenceHash||fresh.visualReview?.evidenceHash!==run.evidenceHash||pinned?.planHash!==release.planHash)throw new HttpError(409,'Deployment acceptance changed while recording the slice; refresh evidence');};
-    return JSON.stringify(await records.acceptSlice(input.repo_id,data.reference,release,run,context,acceptanceGuard));
+    return JSON.stringify(await (input.action==='accept_preparation'?records.acceptPreparation(input.repo_id,data.reference,release,run,context,acceptanceGuard):records.acceptSlice(input.repo_id,data.reference,release,run,context,acceptanceGuard)));
   };
 }

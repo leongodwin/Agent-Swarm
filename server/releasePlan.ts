@@ -27,7 +27,7 @@ export const releasePlanSchema = z.object({
   preparation:pinnedSourceSchema.optional(),
   // Optional only for loading historical state. New release creation requires it.
   architecture: z.strictObject({docId:hldResultSchema.shape.docId,sha256:z.string().regex(/^[a-f0-9]{64}$/)}).optional(),
-  deliveryRecord: recordReferenceSchema.extend({purpose:z.enum(['slice','expansion'])}).optional(),
+  deliveryRecord: recordReferenceSchema.extend({purpose:z.enum(['preparation','slice','expansion'])}).optional(),
   firstSlice:firstSliceSchema.optional(),
   qualityEvidence:qualityContractSchema.optional(),
   name: text, owner: id, qaOwner: id, requiredIssues: z.array(z.number().int().positive()).min(1).max(100),
@@ -52,6 +52,8 @@ export const releasePlanSchema = z.object({
   }).strict(),
 }).strict().superRefine((plan, ctx) => {
   const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
+  if(plan.deliveryRecord&&plan.deliveryRecord.purpose!=='preparation'&&plan.verification.headlessFlow?.dataMode==='synthetic')fail('Synthetic execution cannot receive real slice or expansion credit');
+  if(plan.deliveryRecord?.purpose==='preparation'&&(!plan.verification.headlessFlow||plan.verification.headlessFlow.operationScope!=='standard-mail-v1'||plan.verification.headlessFlow.dataMode!=='synthetic'||plan.verification.headlessFlow.allowDispatch||plan.verification.headlessFlow.privateReport||plan.firstSlice))fail('Preparation is a synthetic standard-only flow without private report capture, dispatch or first-slice credit');
   const historyPolicy=plan.verification.headlessFlow?.historyPolicy;
   if(historyPolicy&&(!plan.deliveryRecord||historyPolicy.recordId!==plan.deliveryRecord.id||historyPolicy.recordSha256!==plan.deliveryRecord.sha256))fail('History policy must bind the exact independently reviewed delivery record');
   if(plan.verification.browserSession&&(plan.acceptanceProfile!=='functional-development'||plan.verification.api||plan.verification.copilotChecks||new Set(plan.verification.identities.map(i=>i.expectedUser.toLowerCase())).size!==1||plan.verification.scenarios.some(s=>s.steps.some(step=>step.action==='upload'))))fail('Connected-browser verification requires single-user functional development without API, Copilot or uploads');

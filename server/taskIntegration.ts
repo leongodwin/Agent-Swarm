@@ -1,6 +1,7 @@
 import type {DeliveryRecordContent} from '../shared/deliveryRecord.ts';
 import type {ReleasePlan} from './releasePlan.ts';
 import {HttpError} from './httpError.ts';
+import {headlessChecks} from './headlessFlowVerification.ts';
 /** Bind recorded independent integration work to the existing native runner.
  * No command/model/tenant action is dispatched by planning or validation. */
 export function assertTaskIntegrationPlan(content:DeliveryRecordContent,plan:ReleasePlan){
@@ -20,7 +21,8 @@ export function assertTaskIntegrationPlan(content:DeliveryRecordContent,plan:Rel
  const functional=plan.verification.functionalShowcase?.rejection;
  if(functional&&!q.cases.some(c=>c.testName===functional.testName&&c.scenarioId===functional.scenarioId&&c.functionalAssertion&&JSON.stringify(c.functionalAssertion)===JSON.stringify(functional.contract)))fail('unrecorded functional rejection scope');
  for(const c of q.cases)if(c.functionalAssertion&&(!functional||functional.testName!==c.testName||functional.scenarioId!==c.scenarioId||JSON.stringify(c.functionalAssertion)!==JSON.stringify(functional.contract)))fail('missing exact functional rejection assertions');
+ const executableChecks=plan.verification.headlessFlow?headlessChecks(plan.verification.headlessFlow):plan.verification.scenarios;
  const native=plan.verification.nativeDeniedChecks??[];
  for(const check of native)if(!q.cases.some(c=>c.testName===check.testName&&c.scenarioId===check.scenarioId&&c.nativeAssertion&&JSON.stringify(c.nativeAssertion)===JSON.stringify(check.contract)))fail('unrecorded native denied operation');
- for(const row of q.cases){if(row.nativeAssertion&&!native.some(c=>c.testName===row.testName&&c.scenarioId===row.scenarioId&&JSON.stringify(c.contract)===JSON.stringify(row.nativeAssertion)))fail('missing exact executable native denial assertions');const test=plan.verification.scenarios.find(test=>test.name===row.testName);if(!test||plan.acceptanceCriteria[test.criterion]!==row.criterion)fail('test or exact acceptance criterion differs');}
+ for(const row of q.cases){if(row.nativeAssertion&&!native.some(c=>c.testName===row.testName&&c.scenarioId===row.scenarioId&&JSON.stringify(c.contract)===JSON.stringify(row.nativeAssertion)))fail('missing exact executable native denial assertions');const test=executableChecks.find(test=>test.name===row.testName);if(!test||plan.acceptanceCriteria[test.criterion]!==row.criterion)fail('test or exact acceptance criterion differs');}
 }

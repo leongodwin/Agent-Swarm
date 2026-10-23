@@ -20,7 +20,7 @@ export function assertQualityPlan(content:DeliveryRecordContent,plan:ReleasePlan
   assertTaskIntegrationPlan(content,plan);
   const q=plan.qualityEvidence;if(!q)fail('Application-spec releases require a QA and documentation evidence contract');
   if(plan.verification.api)fail('API quality acceptance requires an independent denied-action adapter');
-  const spec=content.applicationSpec,requirements=plan.deliveryRecord?.purpose==='slice'?content.slice.requirementIds:content.requirements.map(r=>r.id);
+  const spec=content.applicationSpec,requirements=plan.deliveryRecord?.purpose==='preparation'?(content.taskPlan?.integrationQa?.find(q=>q.purpose==='preparation')?.requirementIds??[]):plan.deliveryRecord?.purpose==='slice'?content.slice.requirementIds:content.requirements.map(r=>r.id);
   const relevant=(r:{requirementIds:string[]})=>r.requirementIds.some(id=>requirements.includes(id));
   const integration=content.taskPlan?.schemaVersion===2?content.taskPlan.integrationQa?.find(q=>q.purpose===plan.deliveryRecord?.purpose):undefined;
   const componentIds=new Set(integration?content.taskPlan!.tasks.filter(t=>integration.dependsOn.includes(t.issue)).flatMap(t=>t.componentIds):spec.components.filter(relevant).map(c=>c.id));

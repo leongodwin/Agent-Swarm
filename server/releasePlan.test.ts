@@ -53,3 +53,13 @@ it.each(['valid','missing-record','foreign-id','foreign-hash'])('binds an existi
  const value={...base,deliveryRecord:mode==='missing-record'?undefined:{id:recordId,revision:1,sha256:recordSha256,purpose:'slice'},verification:{baseUrl:base.verification.baseUrl,identities:[],scenarios:[],headlessFlow:{flowId:recordId,identity:{tenantId:recordId,environmentId:recordId,username:'owner@example.test'},definitionSha256:recordSha256,operationScope:'standard-mail-v1',historyPolicy:{kind:'existing-tenant-run-history-v1',recordId:mode==='foreign-id'?'22222222-2222-4222-8222-222222222222':recordId,recordSha256:mode==='foreign-hash'?'b'.repeat(64):recordSha256,ownerId:recordId},contextAction:'Run_context',resultAction:'Verification_result',sendAction:'Send_report',checks}}};
  if(mode==='valid')expect(releasePlanSchema.safeParse(value).success).toBe(true);else expect(()=>releasePlanSchema.parse(value)).toThrow('History policy must bind');
 });
+
+it.each(['preparation','slice','expansion','capture','mailbox','browser'])('separates synthetic preparation from private and real acceptance: %s',mode=>{
+ const id='11111111-1111-4111-8111-111111111111',base=plan();
+ const flow:any={flowId:id,identity:{tenantId:id,environmentId:id,username:'owner@example.test'},definitionSha256:'a'.repeat(64),operationScope:'standard-mail-v1',dataMode:'synthetic',contextAction:'Run_context',resultAction:'Verification_result',sendAction:'Send_report',checks:['dry-run','recipient-denied','attachment-fallback','retry-recovery','retry-exhaustion'].map(m=>({name:m,identity:'owner',criterion:0,category:m==='recipient-denied'?'authorization':m.includes('retry')||m.includes('attachment')?'error-handling':'journey',mode:m,expectedStatus:m==='recipient-denied'||m==='retry-exhaustion'?'Failed':'Succeeded',assertions:[{pointer:['status'],equals:m}]}))};
+ const value:any={...base,deliveryRecord:{id,revision:1,sha256:'a'.repeat(64),purpose:['slice','expansion'].includes(mode)?mode:'preparation'},verification:{baseUrl:base.verification.baseUrl,identities:[],scenarios:[],headlessFlow:flow}};
+ if(mode==='capture')flow.privateReport={recordId:id,action:'Private_report',pointer:[]};
+ if(mode==='mailbox'){flow.dataMode='mailbox';flow.historyPolicy={kind:'existing-tenant-run-history-v1',recordId:id,recordSha256:'a'.repeat(64),ownerId:id};}
+ if(mode==='browser')delete value.verification.headlessFlow;
+ expect(releasePlanSchema.safeParse(value).success).toBe(mode==='preparation');
+});

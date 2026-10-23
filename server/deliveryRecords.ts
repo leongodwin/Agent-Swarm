@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import {SerialWriter} from './atomicFile.ts';
 import {DeliveryRecordStorage,recordSnapshotSchema} from './deliveryRecordStorage.ts';
 import {HttpError} from './httpError.ts';
-import {deliveryRecordSchema, deliveryRecordContentSchema, discoveryBlockers, recordReviewSchema,inputReviewSchema, sliceReceiptSchema,taskReviewSchema,taskAcceptanceSchema,recordReference,type DeliveryRecord, type RecordReference} from '../shared/deliveryRecord.ts';
+import {deliveryRecordSchema, deliveryRecordContentSchema, discoveryBlockers, recordReviewSchema,inputReviewSchema, preparationReceiptSchema, sliceReceiptSchema,taskReviewSchema,taskAcceptanceSchema,recordReference,type DeliveryRecord, type RecordReference} from '../shared/deliveryRecord.ts';
 import {taskScope} from '../shared/taskPlan.ts';
 import {taskScopeHash} from './taskScope.ts';
 import {assertEvidenceOnlyRevision,assertOriginalTaskQa,type OriginalTaskQa} from './taskReconciliation.ts';
@@ -35,8 +35,9 @@ export class DeliveryRecords {
       const previous = state.records.find(row => row.repoId === record.repoId && row.revision === record.revision - 1);
       if (record.revision === 1 ? record.previousSha256 !== null : !previous || previous.id !== record.id || previous.sha256 !== record.previousSha256) throw new Error('Delivery record history has a missing or changed revision');
       if(record.designReview && record.designReview.reviewer !== record.content.qaOwner) throw new Error('Delivery record reviewer differs from its assigned QA owner');
-      if(record.inputReview&&(record.inputReview.reviewer!==record.content.qaOwner||record.designReview||record.sliceReceipt||record.taskReviews?.length||record.taskAcceptances?.length))throw new Error('Missing-input rejection conflicts with independent approval provenance');
+      if(record.inputReview&&(record.inputReview.reviewer!==record.content.qaOwner||record.designReview||record.sliceReceipt||record.preparationReceipt||record.taskReviews?.length||record.taskAcceptances?.length))throw new Error('Missing-input rejection conflicts with independent approval provenance');
       if(record.sliceReceipt?.qualityAcceptance&&(record.sliceReceipt.qualityAcceptance.reviewer!==record.content.qaOwner||record.sliceReceipt.qualityAcceptance.evidenceHash!==record.sliceReceipt.evidenceHash))throw new Error('Slice quality acceptance differs from its independent review');
+      if(record.preparationReceipt&&(record.preparationReceipt.recordSha256!==record.sha256||record.preparationReceipt.reviewer!==record.content.qaOwner||record.designReview?.decision!=='approved'))throw new Error('Preparation receipt lacks exact independent design provenance');
       if(record.sliceReceipt?.firstSlice&&record.sliceReceipt.firstSlice.recordSha256!==record.sha256)throw new Error('First-slice receipt refers to a different record');
       if(record.sliceReceipt && record.designReview?.decision !== 'approved') throw new Error('Slice receipt lacks independent design approval');
       for(const rows of [record.taskReviews??[],record.taskAcceptances??[]])if(new Set(rows.map(r=>r.issue)).size!==rows.length)throw new Error('Duplicate task evidence identities');
@@ -118,7 +119,7 @@ export class DeliveryRecords {
     return this.writer.write(async()=>{
       const record=this.match(repoId,ref);this.assertContext(record,context);
       if(reviewer!==record.content.qaOwner||reviewer===record.content.owner)throw new HttpError(403,'Only the assigned independent QA session may review this design');
-      if(record.sliceReceipt)throw new HttpError(409,'Accepted slice review is immutable; save a new record revision');
+      if(record.sliceReceipt||record.preparationReceipt)throw new HttpError(409,'Accepted execution review is immutable; save a new record revision');
       const review=recordReviewSchema.parse({...recordReviewSchema.omit({reviewer:true,reviewedAt:true}).parse(input),reviewer,reviewedAt:new Date().toISOString()});
       if(review.decision==='approved')this.assertDiscovery(repoId,context);
       const {inputReview:_inputReview,...reviewable}=record;
@@ -130,7 +131,7 @@ export class DeliveryRecords {
     return this.writer.write(async()=>{
       const record=this.match(repoId,ref);this.assertContext(record,context);
       if(reviewer!==record.content.qaOwner||reviewer===record.content.owner)throw new HttpError(403,'Only assigned independent QA may reject missing planning inputs');
-      if(record.sliceReceipt)throw new HttpError(409,'Accepted slice review is immutable; save a new record revision');
+      if(record.sliceReceipt||record.preparationReceipt)throw new HttpError(409,'Accepted execution review is immutable; save a new record revision');
       const review=inputReviewSchema.parse({...inputReviewSchema.omit({reviewer:true,reviewedAt:true}).parse(input),reviewer,reviewedAt:new Date().toISOString()});
       if(review.missingInputs.includes('task-contracts')&&(!record.content.applicationSpec||record.content.taskPlan))throw new HttpError(409,'Task contracts are not missing from this application record');
       const {designReview:_design,...rejected}=record;
@@ -173,10 +174,15 @@ export class DeliveryRecords {
     if(record.content.owner!==plan.owner||record.content.qaOwner!==plan.qaOwner)throw new HttpError(409,'Release ownership differs from the shared record');
     if(record.designReview?.decision!=='approved'||record.designReview.artifactSha256!==plan.architecture?.sha256||record.designReview.docId!==plan.architecture.docId)throw new HttpError(409,'Release must use the independently reviewed design');
     if(plan.deliveryRecord.purpose==='expansion'&&(!record.sliceReceipt||record.content.applicationSpec&&(!record.sliceReceipt.firstSlice||!record.sliceReceipt.qualityAcceptance)))throw new HttpError(409,'First deployed slice acceptance is required before an expansion release');
-    const expected=plan.deliveryRecord.purpose==='slice'?record.content.slice.acceptanceCriteria:record.content.requirements.map(r=>r.acceptance);
+    const preparation=plan.deliveryRecord.purpose==='preparation';
+    const preparationRequirements=record.content.taskPlan?.integrationQa?.find(q=>q.purpose==='preparation')?.requirementIds??[];
+    if(preparation&&(!preparationRequirements.length||plan.verification.headlessFlow?.dataMode!=='synthetic'||plan.verification.headlessFlow.operationScope!=='standard-mail-v1'||plan.verification.headlessFlow.allowDispatch||plan.firstSlice))throw new HttpError(409,'Explicit independently reviewed synthetic preparation contract is required');
+    const headless=plan.verification?.headlessFlow;
+    if(headless?.operationScope==='standard-mail-v1'&&headless.dataMode==='mailbox'&&(!record.preparationReceipt||record.preparationReceipt.recordSha256!==record.sha256||record.preparationReceipt.definitionSha256!==headless.definitionSha256||record.preparationReceipt.flowId.toLowerCase()!==headless.flowId.toLowerCase()))throw new HttpError(409,'Exact independently accepted synthetic preparation is required before private execution');
+    const expected=preparation?record.content.requirements.filter(r=>preparationRequirements.includes(r.id)).map(r=>r.acceptance):plan.deliveryRecord.purpose==='slice'?record.content.slice.acceptanceCriteria:record.content.requirements.map(r=>r.acceptance);
     if(expected.some(text=>!plan.acceptanceCriteria.includes(text)))throw new HttpError(409,'Release omits declared acceptance criteria');
-    for(const issue of plan.requiredIssues){const task=record.content.tasks.find(task=>task.issue===issue);if(!task||!['slice','implementation'].includes(task.stage)||plan.deliveryRecord.purpose==='slice'&&task.stage!=='slice')throw new HttpError(409,'Release issues must belong to the declared delivery stage');}
-    const requirementIds=plan.deliveryRecord.purpose==='slice'?record.content.slice.requirementIds:record.content.requirements.map(r=>r.id);
+    for(const issue of plan.requiredIssues){const task=record.content.tasks.find(task=>task.issue===issue);if(!task||!['slice','implementation'].includes(task.stage)||plan.deliveryRecord.purpose!=='expansion'&&task.stage!=='slice')throw new HttpError(409,'Release issues must belong to the declared delivery stage');}
+    const requirementIds=preparation?preparationRequirements:plan.deliveryRecord.purpose==='slice'?record.content.slice.requirementIds:record.content.requirements.map(r=>r.id);
     if(requirementIds.some(id=>!record.content.tasks.some(task=>plan.requiredIssues.includes(task.issue)&&task.requirementIds.includes(id))))throw new HttpError(409,'Release issues do not cover every required journey requirement');
     assertFirstSlicePlan(record.content,plan);
     if(record.content.taskPlan)for(const issue of plan.requiredIssues)if(!record.taskAcceptances?.some(a=>a.issue===issue&&a.taskHash===taskScopeHash(record,issue)))throw new HttpError(409,`Release issue #${issue} requires independently accepted merged task evidence`);
@@ -215,6 +221,16 @@ export class DeliveryRecords {
       if(record.content.applicationSpec&&(!run.qualityEvidence||!run.qualityReview||run.qualityReview.reviewer!==record.content.qaOwner||run.qualityReview.evidenceHash!==run.evidenceHash))throw new HttpError(409,'Independent QA and documentation evidence is required before slice acceptance');
       const receipt=sliceReceiptSchema.parse({...(run.qualityEvidence&&run.qualityReview?{qualityAcceptance:{reviewer:run.qualityReview.reviewer,evidenceHash:run.evidenceHash,contractHash:run.qualityEvidence.contractHash,artifactSha256:run.qualityEvidence.artifactSha256}}:{}),...(run.firstSlice?{firstSlice:{...run.firstSlice,planHash:release.planHash,recordSha256:record.sha256}}:{}),releaseId:release.id,runId:run.id,evidenceHash:run.evidenceHash,head:run.head,acceptedAt:new Date().toISOString()});
       const next={...record,sliceReceipt:receipt};await this.publish(this.records.map(row=>row.repoId===repoId&&row.revision===record.revision?next:row),guard);return structuredClone(next);
+    });
+  }
+  acceptPreparation(repoId:string,ref:RecordReference,release:DeliveryRelease,run:DeliveryRun,context:RecordContext,guard:()=>void=()=>{}){
+    return this.writer.write(async()=>{
+      const record=this.match(repoId,ref);this.assertRelease(repoId,release.plan,context);
+      const flow=release.plan.verification.headlessFlow;
+      if(release.plan.deliveryRecord?.purpose!=='preparation'||flow?.dataMode!=='synthetic'||flow.operationScope!=='standard-mail-v1'||flow.allowDispatch||flow.privateReport||release.repoId!==repoId||release.environmentUrl!==record.content.environmentUrl||run.repoId!==repoId||run.releaseId!==release.id||run.phase!=='complete'||!run.evidenceHash||run.head!==release.head||run.environmentUrl!==record.content.environmentUrl||run.visualReview?.reviewer!==record.content.qaOwner||run.visualReview.evidenceHash!==run.evidenceHash||!run.recovery||!run.qualityEvidence||run.qualityReview?.reviewer!==record.content.qaOwner||run.qualityReview.evidenceHash!==run.evidenceHash)throw new HttpError(409,'Completed independently accepted synthetic preparation evidence is required');
+      const receipt=preparationReceiptSchema.parse({recordSha256:record.sha256,releaseId:release.id,runId:run.id,evidenceHash:run.evidenceHash,planHash:release.planHash,head:run.head,packageSha256:run.recovery.packageSha256,definitionSha256:flow.definitionSha256,flowId:flow.flowId,reviewer:record.content.qaOwner,acceptedAt:new Date().toISOString()});
+      if(record.preparationReceipt){if(JSON.stringify({...record.preparationReceipt,acceptedAt:receipt.acceptedAt})!==JSON.stringify(receipt))throw new HttpError(409,'Accepted preparation is immutable; save and independently review a new revision');return structuredClone(record);}
+      const next={...record,preparationReceipt:receipt};await this.publish(this.records.map(row=>row.repoId===repoId&&row.revision===record.revision?next:row),guard);return structuredClone(next);
     });
   }
   async close(){this.closed=true;await this.writer.drain().catch(()=>undefined);}

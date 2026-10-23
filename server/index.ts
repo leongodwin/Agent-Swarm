@@ -209,14 +209,19 @@ const executionAdmission=new ExecutionAdmission(HOME_DIR,{
 });
 const checkPhaseExecution=async(repoId:string,attempt:ExecutionAttempt,outerGuard:()=>void)=>{
  const record=deliveryRecords.current(repoId);if(!record||!record.content.findings.some(f=>f.executionEvidence))return;
- const approvalState=(r:typeof record|undefined)=>JSON.stringify([r?.designReview,r?.taskReviews,r?.taskAcceptances,r?.sliceReceipt]);
+ const approvalState=(r:typeof record|undefined)=>JSON.stringify([r?.designReview,r?.taskReviews,r?.taskAcceptances,r?.sliceReceipt,r?.preparationReceipt]);
  const recordSha256=record.sha256,approvals=approvalState(record),config=capabilities.configurationFingerprint([repoId]),context=JSON.stringify(recordContext(repoId)),profile=backend.tenancy.activity().profileMutation?.fingerprint;
  const guard=()=>{outerGuard();const current=deliveryRecords.current(repoId);if(officeShutdown.closed||swarm.isDraining||current?.sha256!==recordSha256||approvalState(current)!==approvals||JSON.stringify(recordContext(repoId))!==context||capabilities.configurationFingerprint([repoId])!==config||backend.tenancy.activity().profileMutation?.status!=='clear'||backend.tenancy.activity().profileMutation?.fingerprint!==profile)throw Error('Phase execution context changed');};
  guard();await executionAdmission.check(record,attempt,guard);guard();
 };
 swarm.executionEvidenceCheck=(repoId,issue,actor,attemptId,guard)=>checkPhaseExecution(repoId,{phase:'authoring',issue,actor,attemptId},guard);
 delivery.checkExecutionEvidence=async(repoId,plan,runId,phase,guard)=>{
- const record=deliveryRecords.current(repoId);if(!record?.content.findings.some(f=>f.executionEvidence))return;
+ const record=deliveryRecords.current(repoId);
+ if(plan.verification.headlessFlow?.operationScope==='standard-mail-v1'&&plan.verification.headlessFlow.dataMode==='mailbox'&&['private-data','dispatch'].includes(phase)){
+  const snapshot=JSON.stringify(record?.preparationReceipt);const pinned=()=>{guard();const fresh=deliveryRecords.assertRelease(repoId,plan,recordContext(repoId));if(JSON.stringify(fresh.preparationReceipt)!==snapshot)throw Error('Preparation receipt changed');};
+  await delivery.verifyHeadlessPreparation(runId,record?.preparationReceipt,pinned);pinned();
+ }
+ if(!record?.content.findings.some(f=>f.executionEvidence))return;
  if(!plan.verification.headlessFlow)throw Error('Execution evidence requires the supported headless adapter');
  const owned=()=>{guard();deliveryRecords.assertRelease(repoId,plan,recordContext(repoId));};
  await checkPhaseExecution(repoId,{phase,actor:'delivery-runner',attemptId:runId},owned);
@@ -295,6 +300,7 @@ swarm.deliveryQaTools = (agentId, repoId, authorize) => createDeliveryQaTools(()
 swarm.requestDeliveryReview = async (id) => {
   const release = delivery.view().releases.find((r) => r.id === id);
   if (!release) throw new HttpError(404, 'Release not found');
+  if(release.plan.deliveryRecord?.purpose==='preparation'&&delivery.view().runs.some(run=>run.releaseId===id&&run.phase==='complete')&&!deliveryRecords.current(release.repoId)?.preparationReceipt)return swarm.reviewDeliveryRelease(release.plan.qaOwner,release.repoId,id,false,true);
   if(release.plan.deliveryRecord?.purpose==='slice'&&delivery.view().runs.some(run=>run.releaseId===id&&run.phase==='complete')&&!deliveryRecords.current(release.repoId)?.sliceReceipt)return swarm.reviewDeliveryRelease(release.plan.qaOwner,release.repoId,id,false,true);
   if (release.approvedAt && !delivery.view().runs.some((r) => r.releaseId === id && r.phase === 'reviewing')&&!manualGovernance.view(release.repoId).some(row=>row.releaseId===id&&!row.review&&Date.parse(row.expiresAt)>Date.now())) return 'Release plan approved; visual review becomes available after verification';
   return swarm.reviewDeliveryRelease(release.plan.qaOwner, release.repoId, id);

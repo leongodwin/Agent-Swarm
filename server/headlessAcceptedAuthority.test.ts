@@ -28,3 +28,20 @@ it.each(['verified','missing-receipt','no-reports','unaccepted'])('publishes onl
  if(mode==='verified'){const result=await pending;expect(result).toMatchObject({privateContentReturned:false,dispatchAuthorized:false,reports:[{sliceRunId:runId,checkName:'Accepted live report',reportSha256:'a'.repeat(64)}]});expect(JSON.stringify(result)).not.toContain('PRIVATE CONTENT');}
  else await expect(pending).rejects.toThrow();
 });
+
+it.each(['accepted','missing','package','definition','identity','record','evidence','approval','mutation','revoked'])('revalidates the accepted synthetic predecessor before private execution: %s',async mode=>{
+ const service:any=new DeliveryService('synthetic-unused-root',false);service.ready=true;
+ const flow={dataMode:'mailbox',operationScope:'standard-mail-v1',flowId:'FLOW',definitionSha256:'definition',identity:{username:'owner'}};
+ const plan={deliveryRecord:{sha256:'record'},verification:{headlessFlow:flow}};
+ const prior:any={id:'prior',releaseId:'prep',repoId:'repo',head:'head',environmentUrl:'target',evidenceHash:'evidence',recovery:{packageSha256:'package'}};
+ const pinned:any={id:'prep',repoId:'repo',head:'head',environmentUrl:'target',planHash:'plan',plan:{...structuredClone(plan),deliveryRecord:{sha256:'record',purpose:'preparation'}}};pinned.plan.verification.headlessFlow.dataMode='synthetic';
+ const current:any={id:'current',releaseId:'live',repoId:'repo',environmentUrl:'target',recovery:{packageSha256:'package'}},release:any={id:'live',environmentUrl:'target',plan};
+ service.state.runs=[prior,current];service.state.releases=[pinned,release];
+ const receipt:any={runId:'prior',releaseId:'prep',recordSha256:'record',planHash:'plan',definitionSha256:'definition',head:'head',evidenceHash:'evidence',packageSha256:'package'};
+ const verified=vi.spyOn(service,'verifySliceAcceptance').mockImplementation(async()=>{if(mode==='approval')throw Error('Independent evidence refused');if(mode==='mutation')prior.evidenceHash='changed';});
+ const guard=vi.fn(()=>{if(mode==='revoked')throw Error('Revoked');});
+ if(mode==='package')current.recovery.packageSha256='different';if(mode==='definition')flow.definitionSha256='different';if(mode==='identity')flow.identity.username='another';if(mode==='record')plan.deliveryRecord.sha256='different';if(mode==='evidence')prior.evidenceHash='different';
+ const pending=service.verifyHeadlessPreparation('current',mode==='missing'?undefined:receipt,guard);
+ if(mode==='accepted'){await expect(pending).resolves.toBeUndefined();expect(verified).toHaveBeenCalledWith('prior');expect(guard).toHaveBeenCalledTimes(2);}else await expect(pending).rejects.toThrow();
+ if(['missing','package','definition','identity','record','evidence','revoked'].includes(mode))expect(verified).not.toHaveBeenCalled();
+});
