@@ -1,16 +1,16 @@
 import {it,expect} from 'vitest';
 import crypto from 'node:crypto';
-import {synthesisRecordContext,synthesisCatalogueContext,boundedSynthesisPrompt,synthesisEvidenceReference} from './synthesisContext.ts';
+import {synthesisRecordContext,synthesisCatalogueContext,boundedSynthesisPrompt,synthesisEvidenceReference,synthesisEvidenceReceipt} from './synthesisContext.ts';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
 import {phaseRecordFixture} from './testFixtures/phaseRecord.ts';
-const evidenceFor=(view:NonNullable<ReturnType<typeof synthesisRecordContext>>,index:number)=>view.content.findings[index].evidence.map(e=>(()=>{const item=view.evidencePool[e.evidenceIndex];if('reference' in item)return item;const {referenceFromSha256,...rest}=item;return{...rest,reference:synthesisEvidenceReference(item,view.evidenceReferencePrefixes,true)};})());
+const evidenceFor=(view:NonNullable<ReturnType<typeof synthesisRecordContext>>,index:number)=>view.content.findings[index].evidence.map(e=>synthesisEvidenceReceipt(view.evidencePool[e.evidenceIndex],view.evidenceReferencePrefixes,view.projection));
 it('retains current scope, critical findings and evidence while explicitly indexing omitted historical prose',()=>{
  const text='Historical proposal £ '.repeat(200),evidence=[{reference:'retained.json',sha256:'a'.repeat(64),observedAt:'2026-10-18T00:00:00Z',expiresAt:'2026-10-18T00:01:00Z'}];
  const record={id:'record',revision:93,sha256:'b'.repeat(64),content:{applicationSpec:{decisions:['unresolved']},taskPlan:{stopConditions:['fresh effective rights']},contracts:['full history required'],findings:[{id:'critical',critical:true,statement:text,remedy:text,evidence},{id:'historical',critical:false,statement:text,remedy:text,evidence}]}} as unknown as DeliveryRecord;
  const original=JSON.stringify(record),view=synthesisRecordContext(record)!;
  expect(view.reference).toEqual({id:record.id,revision:93,sha256:record.sha256});expect(view.content.applicationSpec).toEqual(record.content.applicationSpec);expect(view.content.taskPlan).toEqual(record.content.taskPlan);expect(view.content.contracts).toEqual(record.content.contracts);
  expect({...view.content.findings[0],evidence:evidenceFor(view,0)}).toEqual(record.content.findings[0]);expect(evidenceFor(view,1)).toEqual(evidence);
- expect(view.content.findings[1]).toMatchObject({omittedFields:['statement','remedy'],fullFindingBytes:Buffer.byteLength(JSON.stringify(record.content.findings[1])),fullFindingSha256:crypto.createHash('sha256').update(JSON.stringify(record.content.findings[1])).digest('hex')});expect(JSON.stringify(record)).toBe(original);
+ expect(view.content.findings[1]).toMatchObject({omittedProse:[Buffer.byteLength(JSON.stringify(record.content.findings[1])),crypto.createHash('sha256').update(JSON.stringify(record.content.findings[1])).digest('hex')]});expect(JSON.stringify(record)).toBe(original);
  expect(view.historyLimit).toContain('not resolved or approved');expect(view.content.findings[1]).not.toHaveProperty('statement');
 });
 it('retains whole verified evidence when it fits and explicitly marks omitted evidence without truncating',()=>{
@@ -64,8 +64,8 @@ it('keeps accumulated historical context within the existing bound and detects c
  expect(prompt.discoveryEvidence.content.findings).toHaveLength(160);
  const legacy=structuredClone(record);
  expect(()=>boundedSynthesisPrompt({discoveryEvidence:legacy},[])).toThrow('scope exceeds');
- expect(view.projection).toBe('planning-only-exact-evidence-pool-v6');
- const before=view.content.findings[0] as {fullFindingSha256:string};
+ expect(view.projection).toBe('planning-only-exact-evidence-pool-v7');
+ const before=view.content.findings[0] as {omittedProse:readonly[number,string]};
  expect(view.content.findings[0]).not.toHaveProperty('statement');expect(view.content.findings[0]).not.toHaveProperty('remedy');
  expect(evidenceFor(view,0)).toEqual(record.content.findings[0].evidence);
  expect(JSON.stringify(record)).toBe(original);
@@ -73,7 +73,7 @@ it('keeps accumulated historical context within the existing bound and detects c
  expect(synthesisRecordContext(short)!.content.findings[0]).not.toHaveProperty('statement');
  record.content.findings[0].statement+='Changed beyond visible excerpt';
  const after=synthesisRecordContext(record)!.content.findings[0] as typeof before;
- expect(after.fullFindingSha256).not.toBe(before.fullFindingSha256);
+ expect(after.omittedProse[1]).not.toBe(before.omittedProse[1]);
  const critical={...record,content:{...record.content,findings:[{...record.content.findings[0],critical:true,statement:'x'.repeat(256*1024)}]}};
  expect(()=>boundedSynthesisPrompt({discoveryEvidence:synthesisRecordContext(critical)},[])).toThrow('scope exceeds');
 });
@@ -81,7 +81,7 @@ it('indexes only explicitly typed execution prose while retaining contracts, cla
  const record=phaseRecordFixture(),finding=record.content.findings.find(f=>f.executionEvidence)!;
  finding.statement='Historical narrow metadata claim '.repeat(4000);finding.remedy='Original remedy '.repeat(4000);
  const original=JSON.stringify(record),view=synthesisRecordContext(record)!,indexed=view.content.findings.find(f=>f.id===finding.id)!;
- expect(indexed).toMatchObject({critical:true,conclusion:'blocked',executionEvidence:finding.executionEvidence,fullFindingSha256:crypto.createHash('sha256').update(JSON.stringify(finding)).digest('hex')});expect(evidenceFor(view,view.content.findings.findIndex(f=>f.id===finding.id))).toEqual(finding.evidence);
+ expect(indexed).toMatchObject({critical:true,conclusion:'blocked',executionEvidence:finding.executionEvidence,omittedProse:[Buffer.byteLength(JSON.stringify(finding)),crypto.createHash('sha256').update(JSON.stringify(finding)).digest('hex')]});expect(evidenceFor(view,view.content.findings.findIndex(f=>f.id===finding.id))).toEqual(finding.evidence);
  expect(indexed).not.toHaveProperty('statement');expect(indexed).not.toHaveProperty('remedy');expect(JSON.stringify(record)).toBe(original);
  expect(JSON.parse(boundedSynthesisPrompt({discoveryEvidence:view},[])).discoveryEvidence.content.findings).toHaveLength(record.content.findings.length);
  expect(view.historyLimit).toContain('require future fresh server-owned checks');
@@ -104,7 +104,7 @@ it('round-trips digest-named evidence paths without normalizing identities or om
 });
 it('does not derive a reference from a mismatched filename or a lone path',()=>{
  const sha256='a'.repeat(64),evidence=[{reference:'C:/original/'+ 'b'.repeat(64)+'.json',sha256,observedAt:'2026-10-21T00:00:00Z',expiresAt:'2026-10-22T00:00:00Z'}],record={content:{findings:[{id:'original',critical:true,evidence}]}} as unknown as DeliveryRecord,view=synthesisRecordContext(record)!;
- expect(view.evidencePool).toEqual(evidence);expect(view.evidenceReferencePrefixes).toEqual([]);
+ expect(evidenceFor(view,0)).toEqual(evidence);expect(view.evidenceReferencePrefixes).toEqual([]);
 });
 it.each([null,{referenceFromSha256:-1,sha256:'a'.repeat(64)},{referenceFromSha256:0.5,sha256:'a'.repeat(64)},{referenceFromSha256:8,sha256:'a'.repeat(64)},{referenceFromSha256:0,sha256:'not-a-digest'},{reference:'literal',referenceFromSha256:0,sha256:'a'.repeat(64)}])('rejects malformed prompt reference derivation: %j',value=>{expect(synthesisEvidenceReference(value,['C:/literal/'],true)).toBeUndefined();});
 it('requires own literal prefix and digest properties and explicit v6 encoding permission',()=>{
@@ -114,5 +114,47 @@ it('requires own literal prefix and digest properties and explicit v6 encoding p
 });
 it('keeps malformed digest-shaped input literal instead of producing an unresolvable path',()=>{
  const evidence=['2026-10-21T00:00:00Z','2026-10-21T00:01:00Z'].map(observedAt=>({reference:'C:/original/x.json',sha256:'x',observedAt,expiresAt:'2026-10-22T00:00:00Z'})),record={content:{findings:[{critical:true,evidence}]}} as unknown as DeliveryRecord;
- const view=synthesisRecordContext(record)!;expect(view.evidencePool).toEqual(evidence);expect(view.evidenceReferencePrefixes).toEqual([]);
+ const view=synthesisRecordContext(record)!;expect(evidenceFor(view,0)).toEqual(evidence);expect(view.evidenceReferencePrefixes).toEqual([]);
+});
+
+it('round-trips complete receipt values and omission fingerprints with a smaller metadata layout',()=>{
+ const record=phaseRecordFixture(),evidence=Array.from({length:100},(_,i)=>{const sha256=i.toString(16).padStart(64,'0');return{reference:'C:/Retained/£ exact/'+sha256+'.json',sha256,observedAt:'2026-10-21T00:00:00.123Z',expiresAt:'2026-10-22T00:00:00Z'};});
+ record.content.findings=Array.from({length:60},(_,i)=>({...record.content.findings[0],id:'historical-'+i,critical:false,evidence}));
+ const original=JSON.stringify(record),view=synthesisRecordContext(record)!;
+ expect(view.evidencePool.every(Array.isArray)).toBe(true);expect(evidenceFor(view,0)).toEqual(evidence);
+ for(let i=0;i<record.content.findings.length;i++){const f=record.content.findings[i],row=view.content.findings[i];expect(row).toMatchObject({id:f.id,conclusion:f.conclusion,evidence:view.content.findings[0].evidence,omittedProse:[Buffer.byteLength(JSON.stringify(f)),crypto.createHash('sha256').update(JSON.stringify(f)).digest('hex')]});}
+ const legacyPool=view.evidencePool.map(row=>{const r=synthesisEvidenceReceipt(row,view.evidenceReferencePrefixes,view.projection)!;return{...r,referenceFromSha256:0,reference:undefined};});
+ expect(Buffer.byteLength(JSON.stringify(view.evidencePool))).toBeLessThan(Buffer.byteLength(JSON.stringify(legacyPool))-2000);expect(JSON.stringify(record)).toBe(original);
+});
+it.each([
+ [0,'a'.repeat(64),'observed','expires'],
+ [-1,'a'.repeat(64),'observed','expires'],
+ [0.5,'a'.repeat(64),'observed','expires'],
+ [8,'a'.repeat(64),'observed','expires'],
+ [0,'invalid','observed','expires'],
+ [0,'a'.repeat(64),null,'expires'],
+ [0,'a'.repeat(64),'observed'],
+ [0,'a'.repeat(64),'observed','expires','extra'],
+].map(row=>({row})))('does not decode tuples under an undeclared version or accept malformed metadata: %j',({row})=>{
+ expect(synthesisEvidenceReceipt(row,['C:/literal/'],'planning-only-exact-evidence-pool-v6')).toBeUndefined();
+ if(row.length===4&&row[0]===0&&row[1]==='a'.repeat(64)&&row[2]==='observed')expect(synthesisEvidenceReceipt(row,['C:/literal/'],'planning-only-exact-evidence-pool-v7')).toEqual({reference:'C:/literal/'+row[1]+'.json',sha256:row[1],observedAt:'observed',expiresAt:'expires'});
+ else expect(synthesisEvidenceReceipt(row,['C:/literal/'],'planning-only-exact-evidence-pool-v7')).toBeUndefined();
+});
+it('rejects inherited or ambiguous tuple slots and never borrows observation dates for captured source identity',()=>{
+ const sha256='a'.repeat(64),row:any[]=[0,sha256,'old-observation','old-expiry'],prefixes=['C:/exact/'];
+ const capture={reference:prefixes[0]+sha256+'.json',sha256,status:'unavailable',reason:'Original failure'};
+ const result=JSON.parse(boundedSynthesisPrompt({discoveryEvidence:{projection:'planning-only-exact-evidence-pool-v7',evidencePool:[row],evidenceReferencePrefixes:prefixes}},[capture]));
+ expect(result.capturedEvidence).toEqual([{status:'unavailable',reason:'Original failure',sourceEvidenceIndex:0}]);expect(result.capturedEvidence[0]).not.toHaveProperty('observedAt');
+ const extra=Object.assign([...row],{hidden:'extra'});expect(synthesisEvidenceReceipt(extra,prefixes,'planning-only-exact-evidence-pool-v7')).toBeUndefined();
+ const hole=[...row];delete hole[0];Object.setPrototypeOf(hole,row);expect(synthesisEvidenceReceipt(hole,prefixes,'planning-only-exact-evidence-pool-v7')).toBeUndefined();
+ const inherited:string[]=[];Object.setPrototypeOf(inherited,prefixes);expect(synthesisEvidenceReceipt(row,inherited,'planning-only-exact-evidence-pool-v7')).toBeUndefined();
+ expect(synthesisEvidenceReceipt(row,prefixes,'other')).toBeUndefined();
+});
+
+it('shares only repeated long finding-owner identities without changing critical prose or assigning roles',()=>{
+ const record=phaseRecordFixture(),owners=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222'];
+ record.content.findings=Array.from({length:8},(_,i)=>({...record.content.findings[0],id:'owner-'+i,owner:i===7?'ceo':owners[i%2],critical:i%2===0}));
+ const before=JSON.stringify(record),view=synthesisRecordContext(record)!;expect(view.findingOwners).toEqual(owners);
+ for(let i=0;i<record.content.findings.length;i++){const raw=record.content.findings[i],encoded=view.content.findings[i];const restored='ownerIndex'in encoded?{...encoded,owner:view.findingOwners[encoded.ownerIndex]}:encoded;expect(restored.owner).toBe(raw.owner);expect(evidenceFor(view,i)).toEqual(raw.evidence);if(raw.critical){expect(restored).toHaveProperty('statement',raw.statement);expect(restored).toHaveProperty('remedy',raw.remedy);}}
+ expect(view.content.owner).toBe(record.content.owner);expect(view.content.qaOwner).toBe(record.content.qaOwner);expect(view.ownerEncoding).toContain('never a role assignment or approval');expect(JSON.stringify(record)).toBe(before);
 });
