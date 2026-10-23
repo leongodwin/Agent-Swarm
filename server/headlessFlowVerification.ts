@@ -1,5 +1,5 @@
 import {dataverseGuid} from './targetOperations.ts';
-import {claimHeadlessRun,beforeHeadlessDeadline} from './headlessRunBarrier.ts';
+import {claimHeadlessRun,beforeHeadlessDeadline,reconcileHeadlessRunBarrier} from './headlessRunBarrier.ts';
 import fs from 'node:fs/promises';import path from 'node:path';import crypto from 'node:crypto';import {z} from 'zod';
 import {connectFlowAdapter,flowDefinitionForPreflight,type FlowAdapter} from './flowAdapter.ts';
 import {platformIdentitySchema,verifyFlowIdentity} from './platformAuth.ts';
@@ -76,6 +76,28 @@ async function sendBodySha256(flow:FlowAdapter,env:string,id:string,run:string,a
 }
 /** Read-only reconciliation of the original durable claim. Never releases a
  * claim, invokes a trigger, resubmits a run or authorizes another dispatch. */
+/** Native GET-only reconciliation of one retained verification invocation.
+ * A caller proposes an ID; the original persisted nonce establishes identity. */
+export async function reconcileHeadlessVerificationRun(binding:z.infer<typeof platformIdentitySchema>&{environmentUrl:string},recordId:string,flowId:string,proposedRunId:string|undefined,flow:FlowAdapter,signal:AbortSignal,guard:()=>void,root=path.join(os.homedir(),'.cubefarm','headless-dispatch-claims','verification-runs')){
+ const owned=async()=>{signal.throwIfAborted();guard();verifyFlowIdentity(await flow.call('whoami',{}),binding);signal.throwIfAborted();guard();};
+ try{
+  z.uuid().parse(recordId);z.uuid().parse(flowId);let observedRunId:string|undefined;
+  const scope={tenantId:binding.tenantId.toLowerCase(),environmentId:binding.environmentId.toLowerCase(),owner:binding.username.toLowerCase(),flowId:flowId.toLowerCase()};
+  const proof=await reconcileHeadlessRunBarrier(root,scope,async(raw,started)=>{
+   const intent=z.object({recordId:z.literal(recordId),flowId:z.literal(flowId),contextAction:z.string().regex(/^[\w-]{1,80}$/),definitionSha256:hash,nonce:z.uuid(),dataMode:z.enum(['synthetic','mailbox']),startedAt:z.iso.datetime(),check:z.object({mode:z.enum(['dry-run','recipient-denied','attachment-fallback','retry-recovery','retry-exhaustion','empty','dispatch'])})}).parse(raw);
+   const recorded=started.map(row=>z.object({runId:z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/),flowId:z.literal(flowId),nonce:z.literal(intent.nonce)}).parse(row));
+   if(recorded.length>1||proposedRunId&&recorded.length===1&&recorded[0].runId!==proposedRunId)throw Error('Original run journal differs');
+   const runId=z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).parse(proposedRunId??recorded[0]?.runId);observedRunId=runId;
+   await owned();const definition=flowDefinitionForPreflight(z.record(z.string(),z.unknown()).parse(await flow.call('get_flow',{env:binding.environmentId,flow:flowId,path:'properties.definition'})));if(digest(definition)!==intent.definitionSha256)throw Error('Definition differs');
+   const run=z.object({id:z.string(),name:z.literal(runId),properties:z.object({status:z.enum(['Succeeded','Failed','Cancelled','TimedOut']),startTime:z.iso.datetime(),endTime:z.iso.datetime()})}).parse(await flow.call('get_run_details',{env:binding.environmentId,flow:flowId,run:runId}));
+   const expected=`/providers/Microsoft.ProcessSimple/environments/${binding.environmentId}/flows/${flowId}/runs/${runId}`;
+   if(run.id.toLowerCase()!==expected.toLowerCase()||Date.parse(run.properties.startTime)<Date.parse(intent.startedAt)-5000||Date.parse(run.properties.startTime)>Date.now()+60000||Date.parse(run.properties.endTime)<Date.parse(run.properties.startTime)||Date.parse(run.properties.endTime)>Date.now()+60000)throw Error('Original terminal run binding differs');
+   const context=z.object({correlationId:z.literal(intent.nonce),mode:z.literal(intent.check.mode),dataMode:z.literal(intent.dataMode),dispatch:z.literal(intent.check.mode==='dispatch')}).passthrough().parse(await output(flow,binding.environmentId,flowId,runId,intent.contextAction));await owned();
+   return{schemaVersion:1,kind:'original-headless-terminal-observation',recordId,flowId,runId,definitionSha256:intent.definitionSha256,providerStatus:run.properties.status,providerRunSha256:digest(run),contextSha256:digest(context),observedAt:new Date().toISOString(),successAccepted:false,dispatchClaimPreserved:true};
+  },owned);
+  return{status:'observed',scope:'original-headless-verification-reconciliation',recordId,flowId,runId:observedRunId,...proof,successAccepted:false,limits:['Only original correlated terminal metadata was observed; no trigger, retry, cancellation or mailbox query','Release of the verification hold grants no success, approval, replay or final-send authority; persistent dispatch claims remain intact']};
+ }catch{signal.throwIfAborted();guard();return{status:'unresolved',scope:'original-headless-verification-reconciliation',holdReleased:false,triggerInvoked:false,dispatchClaimPreserved:true,replayAuthorized:false,successAccepted:false,reason:'Original intent, record, definition, authenticated identity, terminal run or correlation evidence unavailable; preserve hold'};}
+}
 export async function reconcileHeadlessDispatch(binding:z.infer<typeof platformIdentitySchema>&{environmentUrl:string},recordId:string,flow:FlowAdapter,signal:AbortSignal,guard:()=>void,root=path.join(os.homedir(),'.cubefarm','headless-dispatch-claims')){
  const check=()=>{signal.throwIfAborted();guard();};check();
  try{
@@ -117,7 +139,7 @@ export async function rehearseHeadlessLifecycle(plan:HeadlessFlow,environmentUrl
  await durable(path.join(evidence,'headless-recovery.json'),receipt);
  return{receipt,files:['headless-recovery-intent.json','headless-recovery-started.json','headless-recovery.json']};
 }
-export async function verifyHeadlessFlow(plan:HeadlessFlow,environmentUrl:string,evidence:string,signal:AbortSignal,connect=connectFlowAdapter,guard:()=>Promise<void>=async()=>{},dispatchRoot?:string,privateMetadata=privateReportMetadata,acceptedReport?:()=>Promise<AcceptedHeadlessReport>,executionAdmission?:(phase:import("../shared/executionEvidence.ts").ExecutionPhase)=>Promise<void>,maxTaskDurationMs=120000){
+export async function verifyHeadlessFlow(plan:HeadlessFlow,environmentUrl:string,evidence:string,signal:AbortSignal,connect=connectFlowAdapter,guard:()=>Promise<void>=async()=>{},dispatchRoot?:string,privateMetadata=privateReportMetadata,acceptedReport?:()=>Promise<AcceptedHeadlessReport>,executionAdmission?:(phase:import("../shared/executionEvidence.ts").ExecutionPhase)=>Promise<void>,maxTaskDurationMs=120000,executionRecordId?:string){
  await executionAdmission?.("verification");const nativeFlow=await connect(evidence,signal),results:unknown[]=[];let taskDeadline:number|undefined;const flow:FlowAdapter={...nativeFlow,close:()=>nativeFlow.close(),call:(tool,args)=>taskDeadline===undefined?nativeFlow.call(tool,args):beforeHeadlessDeadline(taskDeadline,()=>nativeFlow.call(tool,args))};const owned=async()=>{signal.throwIfAborted();await guard();verifyFlowIdentity(await flow.call('whoami',{}),plan.identity);};
  const privateLeaf=async()=>{if(!plan.privateReport)return undefined;await owned();const metadata=await privateMetadata(plan.privateReport.recordId,evidence,signal,()=>signal.throwIfAborted());await owned();if(metadata.status!=='observed'||!('protectedOwnerOnly' in metadata)||!metadata.protectedOwnerOnly||!metadata.leaf)throw Error('Protected Windows report capture unavailable; no private run admitted');return metadata.leaf;};
  try{if(!Number.isInteger(maxTaskDurationMs)||maxTaskDurationMs<1000||maxTaskDurationMs>120000)throw Error('Invalid headless task duration');await owned();const accepted=plan.dispatchReport?await acceptedReport?.():undefined;
@@ -126,7 +148,7 @@ export async function verifyHeadlessFlow(plan:HeadlessFlow,environmentUrl:string
   const raw=flowDefinitionForPreflight(z.record(z.string(),z.unknown()).parse(await flow.call('get_flow',{env:plan.identity.environmentId,flow:plan.flowId,path:'properties.definition'})));assertHeadlessDefinition(raw,plan.identity.username,environmentUrl,plan.sendAction,plan.allowDispatch?plan.receiptAction:undefined,plan.privateReport?.action,plan.operationScope);if(digest(raw)!==plan.definitionSha256)throw Error('Headless definition differs from approved bytes');
   await privateLeaf();
   for(const [index,check] of plan.checks.entries()){
-   taskDeadline=Date.now()+maxTaskDurationMs;await owned();const pinned=flowDefinitionForPreflight(z.record(z.string(),z.unknown()).parse(await flow.call('get_flow',{env:plan.identity.environmentId,flow:plan.flowId,path:'properties.definition'})));if(digest(pinned)!==plan.definitionSha256)throw Error('Definition changed before dispatch');const nonce=crypto.randomUUID(),prefix='headless-'+index,intent={flowId:plan.flowId,definitionSha256:plan.definitionSha256,nonce,check,dataMode:plan.dataMode,startedAt:new Date().toISOString(),...(check.mode==='dispatch'&&accepted?{acceptedReport:{sliceRunId:accepted.sliceRunId,checkName:accepted.checkName,reportSha256:accepted.reportSha256,action:plan.privateReport!.action}}:{})};
+   taskDeadline=Date.now()+maxTaskDurationMs;await owned();const pinned=flowDefinitionForPreflight(z.record(z.string(),z.unknown()).parse(await flow.call('get_flow',{env:plan.identity.environmentId,flow:plan.flowId,path:'properties.definition'})));if(digest(pinned)!==plan.definitionSha256)throw Error('Definition changed before dispatch');const nonce=crypto.randomUUID(),prefix='headless-'+index,intent={...(executionRecordId?{recordId:z.uuid().parse(executionRecordId),contextAction:plan.contextAction}:{}),flowId:plan.flowId,definitionSha256:plan.definitionSha256,nonce,check,dataMode:plan.dataMode,startedAt:new Date().toISOString(),...(check.mode==='dispatch'&&accepted?{acceptedReport:{sliceRunId:accepted.sliceRunId,checkName:accepted.checkName,reportSha256:accepted.reportSha256,action:plan.privateReport!.action}}:{})};
    await durable(path.join(evidence,prefix+'-intent.json'),intent);await owned();
    const dispatch=check.mode==='dispatch';
    let claimFile:string|undefined;
@@ -139,17 +161,18 @@ export async function verifyHeadlessFlow(plan:HeadlessFlow,environmentUrl:string
     if(metadata.ownerId.toLowerCase()!==policy.ownerId.toLowerCase())throw Error('History baseline flow owner differs from the reviewed policy');await owned();
     await durable(path.join(evidence,prefix+'-history-baseline.json'),{schemaVersion:1,kind:policy.kind,policy,flowId:plan.flowId,definitionSha256:plan.definitionSha256,observedAt:new Date().toISOString(),nativeContextSha256:digest(metadata),limits:['Fresh owner and unmanaged-solution metadata only; not an enumeration of history readers or retention duration','Existing tenant history permissions and retention are accepted only through the exact independently reviewed policy record','This host performs no sharing or permission-grant operation']});
    }
-   const barrier=await claimHeadlessRun(path.join(dispatchRoot??evidence,'verification-runs'),{tenantId:plan.identity.tenantId.toLowerCase(),environmentId:plan.identity.environmentId.toLowerCase(),owner:plan.identity.username.toLowerCase(),flowId:plan.flowId.toLowerCase()},intent);
+   const barrier=await claimHeadlessRun(path.join(dispatchRoot??evidence,'verification-runs'),{tenantId:plan.identity.tenantId.toLowerCase(),environmentId:plan.identity.environmentId.toLowerCase(),owner:plan.identity.username.toLowerCase(),flowId:plan.flowId.toLowerCase()},intent,async()=>{signal.throwIfAborted();await guard();});
    const invoked=z.object({runId:z.string().min(1)}).parse(await flow.call('run_flow',{env:plan.identity.environmentId,flow:plan.flowId,body:{mode:check.mode,dataMode:plan.dataMode,dispatch,recipient:check.mode==='recipient-denied'?'blocked@invalid.example':plan.identity.username,correlationId:nonce,...(plan.dispatchKey?{requestKey:plan.dispatchKey}:{}),...(dispatch&&accepted?{approvedReport:accepted.report}:{})},wait:true,timeout:20}));
    await barrier.started({runId:invoked.runId,flowId:plan.flowId,nonce});
    if(claimFile)await durable(claimFile+'.run.json',{runId:invoked.runId,nonce,flowId:plan.flowId,identity:plan.identity,definitionSha256:plan.definitionSha256});
    let run:any;const deadline=taskDeadline;
    do{signal.throwIfAborted();await guard();run=await flow.call('get_run_details',{env:plan.identity.environmentId,flow:plan.flowId,run:invoked.runId});if(run?.properties?.status!=='Running'&&run?.properties?.status!=='Waiting')break;await new Promise(resolve=>setTimeout(resolve,1000));}while(Date.now()<deadline);
    const expectedId=`/providers/Microsoft.ProcessSimple/environments/${plan.identity.environmentId}/flows/${plan.flowId}/runs/${invoked.runId}`;
-   if(run?.id?.toLowerCase()!==expectedId.toLowerCase()||run.name!==invoked.runId||run.properties.status!==check.expectedStatus||Date.parse(run.properties.startTime)<Date.parse(intent.startedAt)-5000||!run.properties.endTime)throw Error('Exact headless run status or identity differs');
-   await barrier.terminal({runId:invoked.runId,providerRunSha256:digest(run),observedAt:new Date().toISOString()});
+   if(run?.id?.toLowerCase()!==expectedId.toLowerCase()||run.name!==invoked.runId||!['Succeeded','Failed','Cancelled','TimedOut'].includes(run.properties.status)||!Number.isFinite(Date.parse(run.properties.startTime))||Date.parse(run.properties.startTime)<Date.parse(intent.startedAt)-5000||!Number.isFinite(Date.parse(run.properties.endTime))||Date.parse(run.properties.endTime)<Date.parse(run.properties.startTime)||Date.parse(run.properties.endTime)>Date.now()+60000)throw Error('Exact headless run status or identity differs');
    const context=z.object({correlationId:z.literal(nonce),mode:z.literal(check.mode),dispatch:z.literal(dispatch),...(plan.operationScope==='standard-mail-v1'?{dataMode:z.literal(plan.dataMode)}:{})}).passthrough().parse(await output(flow,plan.identity.environmentId,plan.flowId,invoked.runId,plan.contextAction));
    if(plan.dispatchKey&&context.requestKey!==plan.dispatchKey)throw Error('Flow request identity differs');
+   await barrier.terminal({runId:invoked.runId,providerRunSha256:digest(run),contextSha256:digest(context),observedAt:new Date().toISOString()});
+   if(run.properties.status!==check.expectedStatus)throw Error('Exact headless run status differs');
    const result=await output(flow,plan.identity.environmentId,plan.flowId,invoked.runId,plan.resultAction);
    if(!check.assertions.every(a=>at(result,a.pointer)===a.equals))throw Error('Headless result assertion failed');
    const actions=z.array(z.object({name:z.string(),status:z.string()}).passthrough()).parse(await flow.call('get_run_actions',{env:plan.identity.environmentId,flow:plan.flowId,run:invoked.runId}));

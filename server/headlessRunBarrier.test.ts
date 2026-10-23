@@ -1,3 +1,4 @@
+vi.mock('./handoffMutex.ts',()=>({withHandoffMutex:async(_root:string,work:(owned:()=>void)=>Promise<unknown>)=>work(()=>{})}));
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
