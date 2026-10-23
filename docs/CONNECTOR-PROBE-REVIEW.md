@@ -65,6 +65,16 @@ seconds, one-hour release bound, no cancellation/replay of unknown operations.
 No 24/8/12 scenario, four-real-run, quality, recovery, source/report checker,
 native receipt or guarded final-send credit is earned by these synthetic tests.
 
+Each normal-host proposal/authority check also obtains the existing service's
+live standard-policy observation, validates its tenant/caller and unchanged
+15-minute freshness bound, and evaluates the one complete Outlook-only flow.
+Unknown or blocked classifications refuse admission. Approval binds the exact
+evaluated policy content. An authentic reread of identical policy content may
+refresh the live observation without changing the reviewed proposal; it never
+renews an old documentary receipt or approval expiry. Changed policy content
+changes the configuration/proposal hash and needs fresh review. Advanced policy
+and actual provider operation eligibility remain distinct controls.
+
 Primary endpoint contracts are Microsoft Graph Get mailFolder and mailFolder
 resource documentation and the Office 365 Outlook connector's Send an HTTP
 request operation. They establish supported inputs and folder properties, not

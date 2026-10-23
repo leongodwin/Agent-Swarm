@@ -106,7 +106,7 @@ const connectorProbeFor=(repoId:string,outerGuard:()=>void=()=>{})=>{
  deliveryRecords.assertContext(record,context);
  const fingerprint=capabilities.configurationFingerprint([repoId]),profile=backend.tenancy.activity().profileMutation?.fingerprint,configurationRoot=schemaBootstrapConfigurationRoot(HOME_DIR,repoId);
  const guard=()=>{outerGuard();if(officeShutdown.closed||swarm.isDraining||deliveryRecords.current(repoId)?.sha256!==record.sha256||JSON.stringify(context)!==JSON.stringify(recordContext(repoId))||capabilities.configurationFingerprint([repoId])!==fingerprint||backend.tenancy.activity().profileMutation?.status!=='clear'||backend.tenancy.activity().profileMutation?.fingerprint!==profile||schemaBootstrapConfigurationRoot(HOME_DIR,repoId)!==configurationRoot)throw new HttpError(409,'Connector probe record, target, authentication or configuration changed');};
- return connectorProbeRuntime({home:HOME_DIR,configurationRoot,cwd:context.checkoutPath,leaseRoot:RESOURCE_LEASE_ROOT,record:()=>deliveryRecords.current(repoId)!,configurationFingerprint:()=>capabilities.configurationFingerprint([repoId]),guard});
+ return connectorProbeRuntime({home:HOME_DIR,configurationRoot,cwd:context.checkoutPath,leaseRoot:RESOURCE_LEASE_ROOT,policyObservation:identity=>tenantDlp.observation({tenantId:identity.tenantId,caller:identity.username}),record:()=>deliveryRecords.current(repoId)!,configurationFingerprint:()=>capabilities.configurationFingerprint([repoId]),guard});
 };
 const packagingFor=(repoId:string,outerGuard:()=>void=()=>{})=>{
  const context=recordContext(repoId),record=deliveryRecords.current(repoId),config=capabilities.configuration(repoId);
