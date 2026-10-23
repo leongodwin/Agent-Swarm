@@ -298,10 +298,10 @@ describe('IssueCap', () => {
   });
 });
 
-it('transports exact per-check quality decisions through the session-bound QA MCP approval tool',async()=>{
+it.each(['approve_visual','approve_backend'])('transports exact per-check quality decisions through session-bound %s',async toolName=>{
   const visual=vi.fn(async()=> 'Reviewed');const tools=createDeliveryQaTools(()=> 'status',async()=> 'approved',visual);
   const client=new Client({name:'quality-qa-test',version:'1'});const [a,b]=InMemoryTransport.createLinkedPair();await tools.server.instance.connect(b);await client.connect(a);
   const decision={checkId:'doc-user',evidenceSha256:'a'.repeat(64),decision:'approved',notes:'Inspected the user procedures, their actual behavior and remaining limitations.'};
-  try{const result=await client.callTool({name:'approve_visual',arguments:{run_id:'run',evidence_hash:'b'.repeat(64),scores:[5,5,5,5,5],notes:'Independent synthetic review of actual screenshots and document evidence.',recovery_reviewed:true,quality_decisions:[decision]}});expect(result.isError).not.toBe(true);expect(visual).toHaveBeenCalledWith('run',expect.objectContaining({qualityDecisions:[decision]}));}
+  try{const result=await client.callTool({name:toolName,arguments:{run_id:'run',evidence_hash:'b'.repeat(64),...(toolName==='approve_visual'?{scores:[5,5,5,5,5]}:{}),notes:'Independent synthetic review of actual screenshots and document evidence.',recovery_reviewed:true,quality_decisions:[decision]}});expect(result.isError).not.toBe(true);expect(visual).toHaveBeenCalledWith('run',expect.objectContaining({qualityDecisions:[decision]}));}
   finally{await client.close();await tools.server.instance.close();}
 });
