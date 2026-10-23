@@ -1,3 +1,4 @@
+import {assertHeadlessDeliveryBinding,headlessReleaseBudget} from './headlessDelivery.ts';
 import {rehearseHeadlessLifecycle} from './headlessFlowVerification.ts';
 import {loadAcceptedHeadlessReport} from './headlessAcceptedReport.ts';
 import type {ExecutionPhase} from '../shared/executionEvidence.ts';
@@ -637,7 +638,7 @@ export class DeliveryService {
     const attempt=run.currentAttemptId?this.state.attemptHistory?.attempts.find(row=>row.id===run.currentAttemptId):undefined;
     if(run.currentAttemptId&&attempt?.status!=='reviewing')throw new HttpError(409,'Delivery attempt is not awaiting verified QA review; reconcile or rerun before approval');
     const approvalSnapshot=JSON.stringify({run,release});
-    const review = z.object({ evidenceHash: z.string(), scores: release.plan.verification.api ? z.array(z.number()).length(0) : z.array(z.number().int().min(4).max(5)).length(5), notes: z.string().min(40).max(4000), recoveryReviewed: z.literal(true),qualityDecisions:z.array(qualityDecisionSchema).max(200).optional() }).strict().parse(input);
+    const review = z.object({ evidenceHash: z.string(), scores: release.plan.verification.api||release.plan.verification.headlessFlow ? z.array(z.number()).length(0) : z.array(z.number().int().min(4).max(5)).length(5), notes: z.string().min(40).max(4000), recoveryReviewed: z.literal(true),qualityDecisions:z.array(qualityDecisionSchema).max(200).optional() }).strict().parse(input);
     if (review.evidenceHash !== run.evidenceHash || await this.evidenceHash(run) !== review.evidenceHash) throw new HttpError(409, 'Evidence changed; repeat verification and review');
     await this.assertFirstSliceEvidence(run,release);await this.assertQualityEvidence(run,release);
     if(this.active||run.phase!=='reviewing'||!this.state.runs.includes(run)||!this.state.releases.includes(release)||approvalSnapshot!==JSON.stringify({run,release}))throw new HttpError(409,'Delivery changed during QA evidence review; inspect the current attempt before approval');
@@ -715,7 +716,8 @@ export class DeliveryService {
     }
   }
   private async execute(repo: RepoView, run: DeliveryRun, controller: AbortController) {
-    const recordGate=()=>{const release=this.state.releases.find(r=>r.id===run.releaseId);if(!release)throw new Error('Release disappeared during delivery');this.checkDeliveryRecord?.(repo,release.plan);};
+    const releaseBudget=this.state.releases.find(r=>r.id===run.releaseId)?.plan.verification.headlessFlow?headlessReleaseBudget(run.startedAt,controller):undefined;
+    const recordGate=()=>{releaseBudget?.assert();const release=this.state.releases.find(r=>r.id===run.releaseId);if(!release)throw new Error('Release disappeared during delivery');this.checkDeliveryRecord?.(repo,release.plan);};
     const dir = path.join(this.root, 'delivery-runs', run.id);
     const checkout = path.join(dir, 'checkout'); const evidence = path.join(dir, 'evidence');
     const env: Record<string, string> = { SWARM_DELIVERY_ENVIRONMENT: run.environmentUrl, SWARM_DELIVERY_COMMIT: run.head,
@@ -763,7 +765,8 @@ export class DeliveryService {
       if (release.plan.verification.api) {
         if (manifest.hasUi || manifest.targetComponents.some((component) => ['canvas', 'copilot'].includes(component.kind))) throw new Error('API-only verification cannot certify a UI release');
         if (!manifest.targetBinding || JSON.stringify(manifest.targetBinding) !== JSON.stringify(release.plan.verification.api.binding)) throw new Error('API verification must match the approved target binding');
-      } else if (!manifest.hasUi) throw new Error('Backend-only releases require API verification');
+      } else if(release.plan.verification.headlessFlow){assertHeadlessDeliveryBinding(manifest,release.plan);}
+      else if (!manifest.hasUi) throw new Error('Backend-only releases require API verification');
       if(release.plan.qualityEvidence){await atomicWrite(path.join(evidence,'quality-manifest.json'),JSON.stringify(manifest));run.evidence.push('quality-manifest.json');}
       run.solution = manifest.solutionUniqueName; run.version = manifest.solutionVersion;
       targetLease = await acquireResourceLease(this.resourceLeaseRoot, `deployment:${canonical(run.environmentUrl)}`, run.id, { reclaimDeadOwner: false });
@@ -870,7 +873,7 @@ export class DeliveryService {
         const mapping=await mapTargetComponents(request,manifest.solutionUniqueName,manifest.targetComponents,run.environmentUrl);if(mapping.find(c=>c.kind==='cloud-flow')?.id.toLowerCase()!==plan.flowId.toLowerCase())throw Error('Headless recovery flow differs from the exact owned solution component');
         const bytes=await fs.readFile(await containedFile(checkout,manifest.recovery.runbook));
         const guard=async()=>{controller.signal.throwIfAborted();recordGate();await this.assertLeaseOwned();await targetLease!.assertOwned();await this.governance(run,manifest,'post-deploy');recordGate();};
-        await guard();const observed=await rehearseHeadlessLifecycle(plan,run.environmentUrl,evidence,flow,controller.signal,guard);
+        await guard();const observed=await rehearseHeadlessLifecycle(plan,run.environmentUrl,evidence,flow,controller.signal,guard,release.plan.quality.maxTaskDurationMs);
         await atomicWrite(path.join(evidence,'previous-inventory.json'),priorInventory);await fs.writeFile(path.join(evidence,'recovery-runbook.md'),bytes,{flag:'wx'});
         await atomicWrite(path.join(evidence,'headless-recovery-binding.json'),JSON.stringify({runId:run.id,sourceCommit:run.head,procedureSha256:crypto.createHash('sha256').update(bytes).digest('hex'),receipt:observed.receipt}));
         run.recovery={inventoryFile:'previous-inventory.json',runbook:'recovery-runbook.md',drillReport:'headless-recovery-binding.json',packageSha256:await stablePackageDigest(zip,controller.signal)};run.evidence.push('previous-inventory.json','recovery-runbook.md','headless-recovery-binding.json',...observed.files);await this.save();
@@ -1071,7 +1074,7 @@ export class DeliveryService {
           ...acceptanceScope(release.plan), releaseId: release.id, planHash: release.planHash, sourceCommit: run.head,
           environmentUrl: run.environmentUrl, solutionUniqueName: run.solution, solutionVersion: run.version,
           packageSha256: run.recovery!.packageSha256, verifiedAt: new Date().toISOString(),
-          independentMethod: release.plan.verification.api ? 'dataverse-api' : release.plan.verification.frame ? 'browser-frame' : 'browser-dom', identities: release.plan.verification.identities.map(({ id, expectedUser }) => ({ id, expectedUser })),
+          independentMethod: release.plan.verification.api ? 'dataverse-api' : release.plan.verification.headlessFlow ? 'power-automate-headless' : release.plan.verification.frame ? 'browser-frame' : 'browser-dom', identities: release.plan.verification.identities.map(({ id, expectedUser }) => ({ id, expectedUser })),
           privilegeVerification: 'not-established-by-browser-identity-check',
         }, null, 2));
         if(release.plan.firstSlice){
@@ -1089,9 +1092,9 @@ export class DeliveryService {
           const bytes=JSON.stringify(index);await atomicWrite(path.join(evidence,'quality-evidence.json'),bytes);
           run.qualityEvidence={schemaVersion:1,contractHash:qualityContractHash(release.plan),artifactSha256:qualityBytesHash(Buffer.from(bytes)),evidenceFile:'quality-evidence.json',observedAfter,checks:index.checks.map(({checkId,kind,evidenceSha256})=>({checkId,kind,evidenceSha256}))};run.evidence.push('quality-evidence.json');
         }
-        run.appUrls = release.plan.verification.api ? [] : [release.plan.verification.baseUrl]; run.evidence = [...new Set([...run.evidence, 'operation-journal.json', 'acceptance-scope.json', 'verification.json', 'solution-inventory.json', ...files, ...independent])];
+        run.appUrls = release.plan.verification.api||release.plan.verification.headlessFlow ? [] : [release.plan.verification.baseUrl]; run.evidence = [...new Set([...run.evidence, 'operation-journal.json', 'acceptance-scope.json', 'verification.json', 'solution-inventory.json', ...files, ...independent])];
       }));
-      run.phase = 'reviewing'; run.recoveryRequired = false;
+      recordGate();if(releaseBudget){await atomicWrite(path.join(evidence,'headless-release-clock.json'),JSON.stringify(releaseBudget.snapshot()));run.evidence.push('headless-release-clock.json');}recordGate();run.phase = 'reviewing'; run.recoveryRequired = false;
       run.evidenceHash = await this.evidenceHash(run);
       run.health = { status: 'pending', capabilityHash, nextCheckAt: new Date(Date.now() + release.plan.monitoring.intervalMinutes * 60000).toISOString() };
     } catch (err) {
@@ -1109,6 +1112,7 @@ export class DeliveryService {
       run.evidence = [...new Set(run.evidence)];
     }
     finally {
+      releaseBudget?.close();
       try { run.endedAt = new Date().toISOString(); if (run.phase === 'blocked') { await this.blocker(repo.id, new Error(run.error), this.state.releases.find((r) => r.id === run.releaseId)); await this.save(); } else await this.changed(); }
       finally { try { await flow?.close(); } finally { try { for (const lease of authoringLeases.reverse()) await lease.release(); } finally { await targetLease?.release(); } } }
     }

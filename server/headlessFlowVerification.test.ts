@@ -146,3 +146,18 @@ it.each(['expand','include','send'])('excludes %s attachment content in reviewed
  else d.actions.Mailbox={type:'If',expression:{equals:["@triggerBody()?['dataMode']",'mailbox']},actions:{Read:{type:'OpenApiConnection',inputs:{host:{apiId:'/providers/Microsoft.PowerApps/apis/shared_office365',operationId:mode==='expand'?'HttpRequest':'GetEmailsV3'},parameters:mode==='expand'?{Method:'GET',Uri:'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$expand=attachments'}:{includeAttachments:true}}}}};
  expect(()=>assertHeadlessDefinition(d,owner,url,'Send_report',undefined,undefined,'standard-mail-v1')).toThrow(/attachment|read-only mail/);
 });
+
+it('does not renew a setup deadline when a native setup response arrives late',async()=>{
+ let now=Date.now();const f=await fixture(false,(tool,_args,value)=>{if(tool==='whoami')now+=1001;return value;});vi.spyOn(Date,'now').mockImplementation(()=>now);
+ await expect(verifyHeadlessFlow(f.p,url,f.root,new AbortController().signal,f.connect,undefined,undefined,undefined,undefined,undefined,1000)).rejects.toThrow('deadline');expect(f.calls).toEqual(['whoami']);expect(f.adapter.close).toHaveBeenCalledOnce();
+});
+it('bounds original post-send reads without clearing the completed send claim or triggering again',async()=>{
+ let now=Date.now();const f=await fixture(true),native=f.adapter.call,claims=path.join(f.root,'claims');f.p.postDispatchChecks=[{name:'Bounded original reconciliation',identity:'owner',criterion:0,category:'persistence',mode:'claim-reconciliation'}];
+ f.adapter.call=vi.fn(async(tool,args)=>{if(tool==='get_run_history'){now+=1001;return[{name:'run-5',startTime:new Date().toISOString()}];}return native(tool,args);});vi.spyOn(Date,'now').mockImplementation(()=>now);
+ await expect(verifyHeadlessFlow(f.p,url,f.root,new AbortController().signal,f.connect,undefined,claims,undefined,undefined,undefined,1000)).rejects.toThrow();expect(f.calls.filter(t=>t==='run_flow')).toHaveLength(6);expect((await fs.readdir(claims)).some(n=>n.endsWith('.result.json'))).toBe(true);await expect(fs.stat(path.join(f.root,'independent-verification.json'))).rejects.toThrow();expect(f.adapter.close).toHaveBeenCalledOnce();
+});
+it('retains a lifecycle transition intent on deadline expiry without replaying the restoration',async()=>{
+ let now=Date.now(),state='Stopped';const f=await fixture(),native=f.adapter.call,mutations:string[]=[];
+ f.adapter.call=vi.fn(async(tool,args)=>{if(tool==='get_run_history')return[];if(tool==='get_flow'&&args.path==='properties.state')return state;if(['publish_flow','disable_flow'].includes(tool)){mutations.push(tool);state=tool==='publish_flow'?'Started':'Stopped';now+=1001;return{};}return native(tool,args);});vi.spyOn(Date,'now').mockImplementation(()=>now);
+ await expect(rehearseHeadlessLifecycle(f.p,url,f.root,f.adapter,new AbortController().signal,async()=>{},1000)).rejects.toThrow('deadline');expect(mutations).toEqual(['publish_flow']);expect(state).toBe('Started');expect(await fs.stat(path.join(f.root,'headless-recovery-intent.json'))).toBeTruthy();await expect(fs.stat(path.join(f.root,'headless-recovery.json'))).rejects.toThrow();expect(f.calls).not.toContain('run_flow');
+});
