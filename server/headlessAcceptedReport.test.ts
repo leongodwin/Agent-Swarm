@@ -73,3 +73,9 @@ it.each(['duplicate-check','failed-dry-run','already-dispatching','foreign-sourc
 });
 it('requires the accepted quality decision when the slice declares quality evidence',async()=>{const f=await fixture();f.release.plan.qualityEvidence={};f.source.qualityReview={reviewer:f.context.qaOwner,evidenceHash:f.accepted.evidenceHash};await expect(f.load()).resolves.toMatchObject({report:f.report});f.source.qualityReview.evidenceHash='f'.repeat(64);await expect(f.load()).rejects.toThrow('accepted private report');});
 it.each(['whitespace','unpaired-surrogate'])('rejects %s content even when the retained hashes match',async mode=>{const f=await fixture();f.stored.report=mode==='whitespace'?' \r\n\t ':'\ud800';const sha=hash(f.stored.report);f.plan.dispatchReport!.reportSha256=sha;const receipt=JSON.parse(await fs.readFile(f.receipt,'utf8'));receipt.privateReportSha256=sha;await fs.writeFile(f.receipt,JSON.stringify(receipt));await fs.writeFile(f.capture,JSON.stringify(f.stored));await expect(f.load()).rejects.toThrow('accepted private report');});
+it.each(['source-plan','receipt','capture'])('refuses synthetic %s evidence as the final accepted mailbox report',async mode=>{
+ const f=await fixture();
+ if(mode==='source-plan')f.release.plan.verification.headlessFlow.dataMode='synthetic';
+ else{const file=mode==='receipt'?f.receipt:f.capture,value=JSON.parse(await fs.readFile(file,'utf8'));if(mode==='receipt')value.intent.dataMode='synthetic';else value.dataMode='synthetic';await fs.writeFile(file,JSON.stringify(value));}
+ await expect(f.load()).rejects.toThrow('dispatch is held');
+});
