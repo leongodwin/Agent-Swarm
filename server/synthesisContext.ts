@@ -70,18 +70,46 @@ export function synthesisEvidenceReference(value:unknown,prefixes:unknown,allowE
 /** Decode only the declared prompt format. This restores identity metadata,
  * never filesystem access, freshness, or an execution grant. */
 export function synthesisEvidenceReceipt(value:unknown,prefixes:unknown,projection:unknown):Record<string,unknown>&{reference:string;sha256:string}|undefined{
- if(!['planning-only-exact-evidence-pool-v5','planning-only-exact-evidence-pool-v6','planning-only-exact-evidence-pool-v7'].includes(String(projection)))return undefined;
+ if(!['planning-only-exact-evidence-pool-v5','planning-only-exact-evidence-pool-v6','planning-only-exact-evidence-pool-v7','planning-only-exact-evidence-pool-v8'].includes(String(projection)))return undefined;
  if(Array.isArray(value)){
-  if(projection!=='planning-only-exact-evidence-pool-v7'||value.length!==4||Object.keys(value).length!==4||![0,1,2,3].every(i=>Object.hasOwn(value,i)))return undefined;
+  if(!['planning-only-exact-evidence-pool-v7','planning-only-exact-evidence-pool-v8'].includes(String(projection))||value.length!==4||Object.keys(value).length!==4||![0,1,2,3].every(i=>Object.hasOwn(value,i)))return undefined;
   const [ref,sha256,observedAt,expiresAt]=value;
   if(typeof sha256!=='string'||!/^[a-f0-9]{64}$/.test(sha256)||typeof observedAt!=='string'||typeof expiresAt!=='string')return undefined;
   const reference=typeof ref==='string'?ref:synthesisEvidenceReference({referenceFromSha256:ref,sha256},prefixes,true);
   return reference===undefined?undefined:{reference,sha256,observedAt,expiresAt};
  }
  if(!value||typeof value!=='object'||!Object.hasOwn(value,'sha256')||typeof (value as Record<string,unknown>).sha256!=='string')return undefined;
- const row=value as Record<string,unknown>,reference=synthesisEvidenceReference(row,prefixes,['planning-only-exact-evidence-pool-v6','planning-only-exact-evidence-pool-v7'].includes(String(projection)));
+ const row=value as Record<string,unknown>,reference=synthesisEvidenceReference(row,prefixes,['planning-only-exact-evidence-pool-v6','planning-only-exact-evidence-pool-v7','planning-only-exact-evidence-pool-v8'].includes(String(projection)));
  if(reference===undefined)return undefined;
  const {referenceFromSha256,...rest}=row;return{...rest,reference,sha256:row.sha256 as string};
+}
+
+/** Exact repeated-link labels only. Literal/extended rows keep their fields. */
+function compactFindingLinks(value:unknown,poolLength:number):unknown{
+ if(!value||typeof value!=='object'||Array.isArray(value))return value;
+ const context=value as Record<string,unknown>,content=context.content;
+ if(context.projection!=='planning-only-exact-evidence-pool-v7'||!content||typeof content!=='object'||Array.isArray(content))return value;
+ const record=content as Record<string,unknown>;if(!Array.isArray(record.findings))return value;
+ if(Object.hasOwn(context,'findingRemedies')||Object.hasOwn(context,'findingEvidenceEncoding')||record.findings.some(row=>row&&typeof row==='object'&&['findingIdentity','evidenceIndices','remedyIndex'].some(key=>Object.hasOwn(row,key))))return value;
+ const remedyCounts=new Map<string,number>();for(const row of record.findings)if(row&&typeof row==='object'&&!Array.isArray(row)&&Object.hasOwn(row,'remedy')&&typeof row.remedy==='string'&&!Object.hasOwn(row,'remedyIndex'))remedyCounts.set(row.remedy,(remedyCounts.get(row.remedy)??0)+1);
+ const remedies=[...remedyCounts].filter(([text,count])=>count>=3&&text.length>=40).map(([text])=>text);
+ const findings=record.findings.map(finding=>{
+  if(!finding||typeof finding!=='object'||Array.isArray(finding))return finding;
+  const row=finding as Record<string,unknown>,edges=row.evidence;
+  if(Object.hasOwn(row,'evidenceIndices')||!Array.isArray(edges)||!edges.every(edge=>edge&&typeof edge==='object'&&!Array.isArray(edge)&&Object.keys(edge).length===1&&Object.hasOwn(edge,'evidenceIndex')&&Number.isSafeInteger(edge.evidenceIndex)&&edge.evidenceIndex>=0&&edge.evidenceIndex<poolLength))return finding;
+  const {evidence,...rest}=row,links={evidenceIndices:edges.map(edge=>edge.evidenceIndex)};
+  const remedyIndex=typeof rest.remedy==='string'&&!Object.hasOwn(rest,'remedyIndex')?remedies.indexOf(rest.remedy):-1;
+  if(remedyIndex>=0){delete rest.remedy;rest.remedyIndex=remedyIndex;}
+  if(Object.hasOwn(row,'findingIdentity')||!['id','area','status','conclusion'].every(key=>Object.hasOwn(row,key)&&typeof row[key]==='string')||!Object.hasOwn(row,'critical')||typeof row.critical!=='boolean')return{...rest,...links};
+  const {id,area,status,critical,conclusion,...details}=rest;return{findingIdentity:[id,area,status,critical,conclusion],...details,...links};
+ });
+ return{...context,projection:'planning-only-exact-evidence-pool-v8',findingEvidenceEncoding:'Only finding.evidenceIndices replaces evidence:[{evidenceIndex:n}]. Expand each integer in order to that exact one-key object, then resolve the unchanged evidencePool. Only findingIdentity is [id,area,status,critical,conclusion]; restore those FIVE exact named fields, including the critical boolean and unresolved conclusion, without interpreting them as approval. A remedyIndex copies ONLY the complete exact string findingRemedies[index] into remedy. All other fields stay literal. Duplicates, order, receipt fields and original freshness remain. Other evidence arrays stay literal. No critical prose, control, status, owner or condition is omitted.',...(remedies.length?{findingRemedies:remedies}:{}),content:{...record,findings}};
+}
+
+function compactCaptureRow(value:Record<string,unknown>){
+ const keys=Object.keys(value);
+ if(!keys.every(key=>['sourceEvidenceIndex','status','reason','text','textOmitted'].includes(key))||!Number.isSafeInteger(value.sourceEvidenceIndex)||Number(value.sourceEvidenceIndex)<0||typeof value.status!=='string'||Object.hasOwn(value,'reason')&&typeof value.reason!=='string'||Object.hasOwn(value,'text')&&typeof value.text!=='string'||Object.hasOwn(value,'textOmitted')&&value.textOmitted!==true)return value;
+ return[value.sourceEvidenceIndex,value.status,value.reason??null,value.text??null,value.textOmitted??false];
 }
 
 /** Keep whole verified texts when they fit; never silently truncate evidence. */
@@ -90,8 +118,10 @@ export function boundedSynthesisPrompt(base:Record<string,unknown>,captured:read
  const context=base.discoveryEvidence as {projection?:unknown;evidencePool?:unknown;evidenceReferencePrefixes?:unknown}|null|undefined;
  const pool=['planning-only-exact-evidence-pool-v5','planning-only-exact-evidence-pool-v6','planning-only-exact-evidence-pool-v7'].includes(String(context?.projection))&&Array.isArray(context?.evidencePool)?context.evidencePool:[];
  const indices=items.map(item=>pool.findIndex(e=>{const decoded=synthesisEvidenceReceipt(e,context?.evidenceReferencePrefixes,context?.projection);return decoded?.reference===item.reference&&decoded.sha256===item.sha256;}));
- const encode=()=>JSON.stringify({...base,capturedEvidenceIdentityRule:indices.some(index=>index>=0)?'For each sourceEvidenceIndex, copy ONLY reference and sha256 from discoveryEvidence.evidencePool at that index, reconstructing reference exactly per discoveryEvidence.evidenceEncoding for encoded rows or referenceFromSha256. This is an exact source-identity link; no observation time, expiry, approval or readiness is inferred from that receipt.':undefined,capturedEvidenceOmissionRule:items.some(item=>item.textOmitted)?'For each textOmitted:true entry, verified text was omitted from model input to respect the planning budget; do not infer its contents. References and digests are retained.':undefined,capturedEvidence:items.map((item,i)=>{if(indices[i]<0)return item;const {reference,sha256,...rest}=item;return{...rest,sourceEvidenceIndex:indices[i]};})});
- if(Buffer.byteLength(encode())>maxBytes)throw new Error('Architecture planning scope exceeds its bound; split the current scope without deleting history');
+ let compact=false;
+ const encode=()=>JSON.stringify({...base,...(compact?{discoveryEvidence:compactFindingLinks(base.discoveryEvidence,pool.length),capturedEvidenceRowEncoding:'Only a five-element capturedEvidence array row is [sourceEvidenceIndex,status,reasonOrNull,textOrNull,textOmittedOrFalse]. Restore the exact object: first two fields always present; null reason/text means absent, otherwise copy the complete string (including empty). false means textOmitted absent; true means textOmitted:true. Resolve only reference/sha256 using the unchanged identity rule. Object rows stay literal, including additional fields. This exact model-input layout grants no freshness, authority or runtime success.'}:{}),capturedEvidenceIdentityRule:indices.some(index=>index>=0)?'For each sourceEvidenceIndex, copy ONLY reference and sha256 from discoveryEvidence.evidencePool at that index, reconstructing reference exactly per discoveryEvidence.evidenceEncoding for encoded rows or referenceFromSha256. This is an exact source-identity link; no observation time, expiry, approval or readiness is inferred from that receipt.':undefined,capturedEvidenceOmissionRule:items.some(item=>item.textOmitted)?'For each textOmitted:true entry, verified text was omitted from model input to respect the planning budget; do not infer its contents. References and digests are retained.':undefined,capturedEvidence:items.map((item,i)=>{if(indices[i]<0)return item;const {reference,sha256,...rest}=item;const linked={...rest,sourceEvidenceIndex:indices[i]};return compact?compactCaptureRow(linked):linked;})});
+ const literalBytes=Buffer.byteLength(encode());
+ if(literalBytes>maxBytes){if(Object.hasOwn(base,'capturedEvidenceRowEncoding'))throw new Error('Architecture planning scope exceeds its bound; split the current scope without deleting history');compact=true;const compactBytes=Buffer.byteLength(encode());if(compactBytes>=literalBytes||compactBytes>maxBytes)throw new Error('Architecture planning scope exceeds its bound; split the current scope without deleting history');}
  // Keep inference input bounded even when omitted history frees capacity.
  // Whole evidence texts only; larger sources remain available to independent
  // QA through their exact retained references, never silently truncated.
