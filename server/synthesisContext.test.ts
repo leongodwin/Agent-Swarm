@@ -158,3 +158,12 @@ it('shares only repeated long finding-owner identities without changing critical
  for(let i=0;i<record.content.findings.length;i++){const raw=record.content.findings[i],encoded=view.content.findings[i];const restored='ownerIndex'in encoded?{...encoded,owner:view.findingOwners[encoded.ownerIndex]}:encoded;expect(restored.owner).toBe(raw.owner);expect(evidenceFor(view,i)).toEqual(raw.evidence);if(raw.critical){expect(restored).toHaveProperty('statement',raw.statement);expect(restored).toHaveProperty('remedy',raw.remedy);}}
  expect(view.content.owner).toBe(record.content.owner);expect(view.content.qaOwner).toBe(record.content.qaOwner);expect(view.ownerEncoding).toContain('never a role assignment or approval');expect(JSON.stringify(record)).toBe(before);
 });
+
+it('restores every case and exact criterion from the same complete prompt without changing stored execution scope',()=>{
+ const record=phaseRecordFixture();record.content.requirements[0].acceptance='Exact £ requirement criterion\nwith source punctuation.';
+ const q:any={id:'prep',owner:record.content.qaOwner,purpose:'preparation',preparation:{acceptanceCriteria:['Synthetic criterion only']},cases:[{checkId:'one',scenarioId:'real',testName:'Actual case',criterion:record.content.requirements[0].acceptance},{checkId:'two',scenarioId:'sample',testName:'Sample case',criterion:'Synthetic criterion only'},{checkId:'three',scenarioId:'literal',testName:'Literal case',criterion:'Not a canonical string'},{checkId:'four',scenarioId:'native',testName:'Native case',criterion:record.content.requirements[0].acceptance,nativeAssertion:{kept:'complete'}}]};
+ record.content.taskPlan!.integrationQa=[q];const before=JSON.stringify(record),view=synthesisRecordContext(record)!;
+ const encoded=view.content.taskPlan!.integrationQa![0] as any;
+ const restored=encoded.cases.map((c:any)=>!Array.isArray(c)?c:{checkId:c[0],scenarioId:c[1],testName:c[2],criterion:typeof c[3]==='number'?view.content.requirements[c[3]].acceptance:typeof c[3]==='object'?encoded.preparation.acceptanceCriteria[c[3].preparation]:c[3]});
+ expect(restored).toEqual(q.cases);expect(encoded.cases[0][3]).toBe(0);expect(encoded.cases[1][3]).toEqual({preparation:0});expect(encoded.cases[2][3]).toBe(q.cases[2].criterion);expect(encoded.cases[3]).toEqual(q.cases[3]);expect(view.content.requirements).toEqual(record.content.requirements);expect(view.caseEncoding).toContain('never a stored execution contract or an approval');expect(JSON.stringify(record)).toBe(before);
+});
