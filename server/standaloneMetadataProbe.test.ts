@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest';
 import {standaloneProbeFixturePlan} from './testFixtures/standaloneProbe.ts';
-import {buildStandaloneMetadataProbe,assertStandaloneProbeReadback} from './standaloneMetadataProbe.ts';
+import {buildStandaloneMetadataProbe,assertStandaloneProbeReadback,assertOriginalQuarantinedDefinition} from './standaloneMetadataProbe.ts';
 it('builds only two literal metadata GETs with a direct connection and an independent quarantine',()=>{
  const plan=standaloneProbeFixturePlan(),built=buildStandaloneMetadataProbe(plan),text=JSON.stringify(built);
  expect(text).not.toMatch(/connectionReferenceLogicalName|SendEmail|\/messages|Recurrence/);
@@ -37,3 +37,7 @@ it.each([
  const p=standaloneProbeFixturePlan(),b=buildStandaloneMetadataProbe(p),d:any=structuredClone(b.definition),r:any=structuredClone(b.connectionRefs);mutate(d,r);expect(()=>assertStandaloneProbeReadback(p,d,r)).toThrow();
 });
 
+
+import {buildConnectorMetadataProbe} from './connectorMetadataProbe.ts';
+import {connectorProbeFixturePlan} from './testFixtures/connectorProbe.ts';
+it('checks the exact original fixed definition without mutation or settlement claims',()=>{const p=standaloneProbeFixturePlan(),old=connectorProbeFixturePlan(),d:any=buildConnectorMetadataProbe(old).definition,before=JSON.stringify(d);expect(assertOriginalQuarantinedDefinition(p,old.probeId,d)).toMatchObject({originalHoldPreserved:true,providerMembershipSettlementVerified:false,replayAuthorized:false});expect(JSON.stringify(d)).toBe(before);d.actions.Metadata_http.inputs.parameters.Uri='https://graph.microsoft.com/v1.0/me/messages';expect(()=>assertOriginalQuarantinedDefinition(p,old.probeId,d)).toThrow();});

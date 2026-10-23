@@ -47,8 +47,19 @@ it('keeps connector probe execution behind authenticated, strict exact-hash norm
  expect((await f.request('/api/repos/unconnected%2Frepo/connector-probe/execute','POST',{proposalSha256:hash})).status).toBe(404);
 });
 it('refuses probe routes without their required production services',async()=>{const f=await office(),endpoint='/api/repos/synthetic%2Frepo/connector-probe';expect((await f.request(endpoint)).status).toBe(503);expect((await f.request(endpoint+'/review','POST',{})).status).toBe(503);expect((await f.request(endpoint+'/execute','POST',{proposalSha256:'a'.repeat(64)})).status).toBe(503);});
+it('keeps standalone probe execution behind authenticated, strict exact-hash normal-host admission',async()=>{
+ const inspect=vi.fn(async()=>({scope:'fixed-folder-metadata-probe-only'})),execute=vi.fn(async()=>({sendAllowed:false})),review=vi.fn(async()=>({requested:true}));
+ const f=await office(false,undefined,undefined,undefined,false,undefined,{standaloneProbe:inspect,executeStandaloneProbe:execute,requestStandaloneProbeReview:review}),endpoint='/api/repos/synthetic%2Frepo/standalone-probe',hash='a'.repeat(64);
+ expect((await fetch(f.url+endpoint+'/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposalSha256:hash})})).status).toBe(401);
+ expect((await f.request(endpoint+'/execute','POST',{proposalSha256:hash,definition:{}})).status).toBe(400);expect(execute).not.toHaveBeenCalled();
+ expect((await f.request(endpoint+'/execute','POST',{proposalSha256:'wrong'})).status).toBe(400);expect(execute).not.toHaveBeenCalled();
+ expect((await f.request(endpoint)).status).toBe(200);expect((await f.request(endpoint+'/review','POST',{})).status).toBe(200);
+ expect((await f.request(endpoint+'/execute','POST',{proposalSha256:hash})).status).toBe(200);expect(execute).toHaveBeenCalledExactlyOnceWith('synthetic/repo',hash);
+ expect((await f.request('/api/repos/unconnected%2Frepo/standalone-probe/execute','POST',{proposalSha256:hash})).status).toBe(404);
+});
+it('refuses probe routes without their required production services',async()=>{const f=await office(),endpoint='/api/repos/synthetic%2Frepo/standalone-probe';expect((await f.request(endpoint)).status).toBe(503);expect((await f.request(endpoint+'/review','POST',{})).status).toBe(503);expect((await f.request(endpoint+'/execute','POST',{proposalSha256:'a'.repeat(64)})).status).toBe(503);});
 const environment='https://synthetic.crm4.dynamics.com';
-async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload'],interruptedDelivery:boolean|'ambiguous-history'=false,requestTaskReconciliationReview?:Parameters<typeof createOfficeHttpApp>[0]['requestTaskReconciliationReview'],probe:Pick<Parameters<typeof createOfficeHttpApp>[0],'connectorProbe'|'executeConnectorProbe'|'requestConnectorProbeReview'>={}) {
+async function office(withEvidence=false,requestHandoff?:()=>void,workflowReliability?:Parameters<typeof createOfficeHttpApp>[0]['workflowReliability'],officeReload?:Parameters<typeof createOfficeHttpApp>[0]['officeReload'],interruptedDelivery:boolean|'ambiguous-history'=false,requestTaskReconciliationReview?:Parameters<typeof createOfficeHttpApp>[0]['requestTaskReconciliationReview'],probe:Pick<Parameters<typeof createOfficeHttpApp>[0],'connectorProbe'|'executeConnectorProbe'|'requestConnectorProbeReview'|'standaloneProbe'|'executeStandaloneProbe'|'requestStandaloneProbeReview'>={}) {
   await fs.writeFile(STATE_FILE, JSON.stringify({ version: 2, settings: { runtime: 'sdk', ceoHeartbeatMin: 0, autoUpdate: false },
     repos: [{ id:'synthetic/repo',fullName:'synthetic/repo',defaultBranch:'main',floor:1,color:'#000',description:'',url:'',autoAssign:false,autoMerge:false,browserTesting:false,addedAt:1 }] }));
   const tenancy = {status:'connected', user:'synthetic@example.com', environments:[{name:'Synthetic',url:environment,active:true}], isReal:true};

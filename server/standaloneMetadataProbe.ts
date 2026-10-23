@@ -1,13 +1,16 @@
 import {z} from 'zod';
 import {isDeepStrictEqual} from 'node:util';
-import {connectorProbePlanSchema,connectorProbeDigest,CONNECTOR_PROBE_URI,CONNECTOR_PROBE_MISSING_URI} from './connectorMetadataProbe.ts';
+import {connectorProbePlanSchema,connectorProbeDigest,CONNECTOR_PROBE_KIND,CONNECTOR_PROBE_URI,CONNECTOR_PROBE_MISSING_URI} from './connectorMetadataProbe.ts';
 import {dataverseGuid} from './targetOperations.ts';
+import {STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
 import {flowDefinitionForPreflight} from './flowAdapter.ts';
 
 export const STANDALONE_PROBE_KIND='outlook-folder-metadata-standalone-v1' as const;
 const hash=z.string().regex(/^[a-f0-9]{64}$/),guid=dataverseGuid;
 const {publisher:_publisher,solution:_solution,connection,flow:_flow,...base}=connectorProbePlanSchema.shape;
 export const standaloneProbePlanSchema=z.strictObject({...base,kind:z.literal(STANDALONE_PROBE_KIND),
+ adapter:base.adapter.safeExtend({name:z.literal('flowagent-mcp'),version:z.literal(STANDALONE_ADAPTER_VERSION)}),
+ ownerObjectId:dataverseGuid,
  connection:z.strictObject({connector:connection.shape.connector,connectionId:connection.shape.connectionId}),
  flow:z.strictObject({componentKey:z.literal('digest-flow'),name:z.literal('AS-Recruitment-Standalone-Digest')}),
  quarantine:z.strictObject({flowId:guid,solutionId:guid,publisherId:guid,referenceId:guid,indexSha256:hash,leaseSha256:hash,holdPreserved:z.literal(true),membershipSettlementVerified:z.literal(false),replayAuthorized:z.literal(false)}),
@@ -43,5 +46,16 @@ export function assertStandaloneProbeReadback(plan:StandaloneProbePlan,rawDefini
  z.strictObject({shared_office365:ref}).parse(rawRefs);
  if(!isDeepStrictEqual(definition,expected.definition))throw Error('Standalone probe definition differs');
  return {definitionSha256:expected.definitionSha256,connectionRefsSha256:expected.connectionRefsSha256,rawConnectionRefsSha256:connectorProbeDigest(rawRefs),businessAuthorityGranted:false,messageRoutesPresent:false,sendActionPresent:false};
+}
+
+/** Check the original fixed counter definition without ever changing it. */
+export function assertOriginalQuarantinedDefinition(plan:StandaloneProbePlan,originalProbeId:string,rawDefinition:Record<string,unknown>){
+ const base=buildStandaloneMetadataProbe(plan).definition,definition=flowDefinitionForPreflight(rawDefinition),manual=base.triggers.manual;
+ const expected={...base,triggers:{...base.triggers,manual:{...manual,inputs:{...manual.inputs,schema:{...manual.inputs.schema,properties:{...manual.inputs.schema.properties,kind:{...manual.inputs.schema.properties.kind,enum:[CONNECTOR_PROBE_KIND]}}}}}},actions:{...base.actions,
+  Probe_input_guard:{...base.actions.Probe_input_guard,expression:{not:{equals:[base.actions.Probe_input_guard.expression.not.equals[0],CONNECTOR_PROBE_KIND]}}},
+  Probe_context:{...base.actions.Probe_context,inputs:{...base.actions.Probe_context.inputs,kind:CONNECTOR_PROBE_KIND,probeId:z.uuid().parse(originalProbeId)}}}};
+ if(Object.hasOwn(definition,'metadata')){z.strictObject({templateId:z.literal('fa2c7b91-3e04-4d8a-b6f1-a9e5c8d20147')}).parse(definition.metadata);delete definition.metadata;}
+ if(!isDeepStrictEqual(definition,expected))throw Error('Original quarantined metadata definition changed');
+ return {originalDefinitionSha256:connectorProbeDigest(rawDefinition),originalHoldPreserved:true,providerMembershipSettlementVerified:false,replayAuthorized:false};
 }
 

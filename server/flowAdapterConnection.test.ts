@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';
+import crypto from 'node:crypto';
 import {afterEach,expect,it,vi} from 'vitest';
 const state=vi.hoisted(()=>({connect:vi.fn(),list:vi.fn(),call:vi.fn(),clientClose:vi.fn(),transportClose:vi.fn(),transport:null as null|{onclose?:()=>void;close():Promise<void>}}));
 vi.mock('./skillRegistry.ts',()=>({discoverSkills:()=>({skills:[]})}));
@@ -52,4 +53,17 @@ it('refuses a second probe discovery page before mutation and preserves the norm
 it('does not dispatch a discovery request when its admission fails',async()=>{const f=await fixture(),admit=vi.fn(async()=>{}).mockResolvedValueOnce(undefined).mockRejectedValueOnce(Error('Budget exhausted'));await expect(connectFlowAdapter(f.root,f.controller.signal,{beforeRequest:admit})).rejects.toThrow('Budget exhausted');expect(state.connect).toHaveBeenCalledOnce();expect(state.list).not.toHaveBeenCalled();expect(state.clientClose).toHaveBeenCalledOnce();});
 it('refuses an unapproved native entry before any child connection or discovery',async()=>{
  const f=await fixture();await expect(connectFlowAdapter(f.root,f.controller.signal,{beforeRequest:async()=>{},maxPages:1,expectedEntrySha256:'0'.repeat(64)})).rejects.toThrow('before launch');expect(state.connect).not.toHaveBeenCalled();expect(state.list).not.toHaveBeenCalled();expect(state.transport).toBeNull();
+});
+it('uses an explicit hash-bound canonical entry without changing the default environment',async()=>{
+ const f=await fixture(),entry=path.join(f.root,'reviewed.mjs'),text='// reviewed standalone fixture';await fs.writeFile(entry,text);
+ const expectedEntrySha256=crypto.createHash('sha256').update(text).digest('hex');state.list.mockResolvedValue({tools:[...names,'create_standalone_flow'].map(name=>({name}))});
+ const adapter=await connectFlowAdapter(f.root,f.controller.signal,{beforeRequest:async()=>{},entryPath:entry,expectedEntrySha256,requiredTools:['create_standalone_flow']});
+ expect(adapter.metadata?.entrySha256).toBe(expectedEntrySha256);expect(process.env.SWARM_FLOWAGENT_ENTRY).toBe(path.join(f.root,'synthetic.mjs'));expect(state.call).not.toHaveBeenCalled();await adapter.close();
+});
+it.each(['unbound','hardlink','directory','missing-tool'] as const)('refuses %s explicit runtime admission before provider calls',async mode=>{
+ const f=await fixture(),entry=path.join(f.root,'synthetic.mjs'),expectedEntrySha256=crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex');
+ if(mode==='hardlink')await fs.link(entry,path.join(f.root,'other.mjs'));
+ const entryPath=mode==='directory'?f.root:entry;
+ await expect(connectFlowAdapter(f.root,f.controller.signal,{beforeRequest:async()=>{},entryPath,...mode==='unbound'?{}:{expectedEntrySha256},requiredTools:['create_standalone_flow']})).rejects.toThrow();
+ expect(state.call).not.toHaveBeenCalled();if(mode!=='missing-tool')expect(state.connect).not.toHaveBeenCalled();else expect(state.clientClose).toHaveBeenCalledOnce();
 });

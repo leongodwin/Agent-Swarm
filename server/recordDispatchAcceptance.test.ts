@@ -78,3 +78,10 @@ it('routes connector probe inspection only to assigned independent QA without ch
  expect(JSON.parse(await handler('qa',{reviewOnly:true})(request))).toMatchObject({businessAuthorityGranted:false});expect(records.save).not.toHaveBeenCalled();
  deps.connectorProbe=undefined;await expect(handler('qa')(request)).rejects.toThrow('assigned independent QA');
 });
+it('routes standalone probe inspection only to assigned independent QA without changing the record',async()=>{
+ deps.standaloneProbe=vi.fn(async()=>({scope:'fixed-folder-metadata-probe-only',businessAuthorityGranted:false}));const request=input('standalone_probe',{action:'inspect'});
+ for(const role of ['dev','ceo','manager'] as const)await expect(handler(role)(request)).rejects.toThrow('assigned independent QA');
+ await expect(handler('qa',{id:'other'})(request)).rejects.toThrow('assigned independent QA');
+ expect(JSON.parse(await handler('qa',{reviewOnly:true})(request))).toMatchObject({businessAuthorityGranted:false});expect(records.save).not.toHaveBeenCalled();
+ deps.standaloneProbe=undefined;await expect(handler('qa')(request)).rejects.toThrow('assigned independent QA');
+});
