@@ -67,3 +67,12 @@ it('binds headless checks to exact independent criteria without requiring browse
  checks[0].name='unrecorded';
  expect(()=>assertTaskIntegrationPlan(data,plan)).toThrow(/criterion/);
 });
+
+it('keeps preparation optional and separate while preserving full real integration scope',()=>{
+ const data=fixture();for(const c of data.applicationSpec!.components)c.platform='flow';
+ const prep={...structuredClone(data.taskPlan!.integrationQa![0]),id:'qa-preparation',purpose:'preparation' as const,requirementIds:['r']};
+ data.taskPlan!.integrationQa!.push(prep);expect(taskPlanErrors(data)).toEqual([]);expect(taskPlanSchema.safeParse(data.taskPlan).success).toBe(true);
+ const p=release(data);p.deliveryRecord!.purpose='preparation';expect(()=>assertTaskIntegrationPlan(data,p)).not.toThrow();
+ prep.requirementIds=[];expect(taskPlanErrors(data).join(' ')).toMatch(/explicit declared requirements/);prep.requirementIds=['r'];
+ data.taskPlan!.integrationQa![0].requirementIds=['r'];expect(taskPlanErrors(data).join(' ')).toMatch(/real acceptance scope/);
+});

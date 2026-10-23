@@ -76,6 +76,7 @@ export const recordReferenceSchema = z.strictObject({id: z.uuid(), revision: z.n
 export const recordReviewSchema = z.strictObject({artifactSha256: sha256, docId: z.string().regex(/^HLD-[a-f0-9-]{36}$/i), reviewer: id, decision: z.enum(['approved','rejected']), notes: z.string().trim().min(80).max(8000), reviewedAt: z.iso.datetime()});
 export const inputReviewSchema=z.strictObject({decision:z.literal('rejected'),reviewer:id,reviewedAt:z.iso.datetime(),notes:z.string().trim().min(80).max(8000),missingInputs:z.array(z.enum(['architecture','task-contracts'])).min(1).max(2).refine(v=>new Set(v).size===v.length,'Duplicate missing inputs')});
 export const sliceReceiptSchema = z.strictObject({qualityAcceptance:qualityAcceptanceSchema.optional(),firstSlice:firstSliceResultSchema.extend({planHash:sha256,recordSha256:sha256}).optional(),releaseId: z.uuid(), runId: z.uuid(), evidenceHash: sha256, head: z.string().regex(/^[a-f0-9]{40,64}$/), acceptedAt: z.iso.datetime()});
+export const preparationReceiptSchema=z.strictObject({recordSha256:sha256,releaseId:z.uuid(),runId:z.uuid(),evidenceHash:sha256,planHash:sha256,head:z.string().regex(/^[a-f0-9]{40,64}$/),packageSha256:sha256,definitionSha256:sha256,flowId:z.uuid(),reviewer:id,acceptedAt:z.iso.datetime()});
 export const taskReviewSchema=z.strictObject({issue:z.number().int().positive(),taskHash:sha256,reviewer:id,decision:z.enum(['approved','rejected']),notes:z.string().trim().min(80).max(8000),reviewedAt:z.iso.datetime(),designRecord:recordReferenceSchema,artifactSha256:sha256,sliceReceipt:sliceReceiptSchema.optional()});
 export const originalTaskQaSchema=z.strictObject({prNumber:z.number().int().positive(),status:z.literal('passed'),issueNumber:z.number().int().positive(),passedSha:z.string().regex(/^[a-f0-9]{40,64}$/),qaAgentId:id,commentUrl:z.url(),summary:z.string().min(1).max(16000),checks:z.array(z.strictObject({name:z.string().min(1).max(16000),result:z.literal('pass'),details:z.string().min(1).max(16000)})).min(1).max(200),taskAuthorityHash:sha256});
 export const taskAcceptanceSchema=z.strictObject({issue:z.number().int().positive(),taskHash:sha256,reviewer:id,prNumber:z.number().int().positive(),headSha:z.string().regex(/^[a-f0-9]{40,64}$/),mergeCommitSha:z.string().regex(/^[a-f0-9]{40,64}$/),evidenceHash:sha256,acceptedAt:z.iso.datetime(),
@@ -84,7 +85,7 @@ export const taskAcceptanceSchema=z.strictObject({issue:z.number().int().positiv
 export const deliveryRecordSchema = z.strictObject({
   schemaVersion: z.literal(1), id: z.uuid(), repoId: text, revision: z.number().int().positive(), sha256,
   updatedAt: z.iso.datetime(), updatedBy: id, previousSha256: sha256.nullable(), content: deliveryRecordContentSchema,
-  designReview: recordReviewSchema.optional(), inputReview:inputReviewSchema.optional(), sliceReceipt: sliceReceiptSchema.optional(),
+  designReview: recordReviewSchema.optional(), inputReview:inputReviewSchema.optional(), sliceReceipt: sliceReceiptSchema.optional(), preparationReceipt:preparationReceiptSchema.optional(),
   taskReviews:z.array(taskReviewSchema).max(200).optional(),taskAcceptances:z.array(taskAcceptanceSchema).max(200).optional(),
 });
 export type DeliveryRecord = z.infer<typeof deliveryRecordSchema>;

@@ -6,7 +6,7 @@ import type {DeliveryRecordContent} from './deliveryRecord.ts';
 const id=z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),text=z.string().trim().min(1).max(2000);
 const ids=z.array(id).max(100).refine(v=>new Set(v).size===v.length,'Duplicate task links');
 export const integrationQaSchema=z.strictObject({
- id,owner:id,purpose:z.enum(['slice','expansion']),runner:z.literal('delivery'),
+ id,owner:id,purpose:z.enum(['preparation','slice','expansion']),requirementIds:ids.optional(),runner:z.literal('delivery'),
  dependsOn:z.array(z.number().int().positive()).min(1).max(200),
  checkIds:ids.refine(v=>v.length>0,'Declare integration checks'),
  cases:z.array(z.strictObject({checkId:id,scenarioId:id,testName:z.string().trim().min(1).max(200),criterion:text,nativeAssertion:deniedAssertionSchema.optional(),functionalAssertion:functionalRejectedCheckSchema.shape.contract.optional()})).min(1).max(200),
@@ -14,7 +14,7 @@ export const integrationQaSchema=z.strictObject({
  maxVerificationDurationMs:z.number().int().min(1000).max(3600000).optional(),
  stopConditions:z.array(text).min(1).max(20),
 });
-export const taskPlanSchema=z.strictObject({schemaVersion:z.union([z.literal(1),z.literal(2)]),integrationQa:z.array(integrationQaSchema).min(1).max(2).optional(),tasks:z.array(z.strictObject({
+export const taskPlanSchema=z.strictObject({schemaVersion:z.union([z.literal(1),z.literal(2)]),integrationQa:z.array(integrationQaSchema).min(1).max(3).optional(),tasks:z.array(z.strictObject({
   issue:z.number().int().positive(),owner:id,componentIds:ids.refine(v=>v.length>0,'Declare owned components'),
   dependsOn:z.array(z.number().int().positive()).max(100).refine(v=>new Set(v).size===v.length,'Duplicate task dependencies'),
   resources:ids,inputs:z.array(text).min(1).max(20),outputs:z.array(text).min(1).max(20),checkIds:ids.refine(v=>v.length>0,'Declare checks'),stopConditions:z.array(text).min(1).max(20),
@@ -42,7 +42,8 @@ export function taskPlanErrors(content:DeliveryRecordContent):string[]{
   for(const task of plan.tasks)visit(task.issue);
   if(plan.schemaVersion===2){
     const qa=plan.integrationQa??[];
-    for(const purpose of ['slice','expansion'] as const){
+    for(const purpose of ['preparation','slice','expansion'] as const){
+      if(purpose==='preparation'&&!qa.some(q=>q.purpose==='preparation'))continue;
       if(purpose==='expansion'&&!content.tasks.some(t=>t.stage==='implementation'))continue;
       const scoped=plan.tasks.filter(t=>purpose==='expansion'||content.tasks.find(link=>link.issue===t.issue)?.stage==='slice');
       if(!scoped.length)continue;
@@ -51,11 +52,13 @@ export function taskPlanErrors(content:DeliveryRecordContent):string[]{
       const q=matches[0],required=scoped.map(t=>t.issue);
       if(q.owner!==content.qaOwner||q.owner===content.owner||plan.tasks.some(t=>t.owner===q.owner))errors.push(`${q.id}: integration QA must belong to the assigned independent reviewer`);
       if(q.dependsOn.length!==new Set(q.dependsOn).size||q.dependsOn.length!==required.length||required.some(n=>!q.dependsOn.includes(n)))errors.push(`${q.id}: integration prerequisites must be exactly the scoped author tasks`);
-      const requirements=purpose==='slice'?content.slice.requirementIds:content.requirements.map(r=>r.id);
+      const requirements=purpose==='preparation'?(q.requirementIds??[]):purpose==='slice'?content.slice.requirementIds:content.requirements.map(r=>r.id);
+      if(purpose==='preparation'&&(!requirements.length||requirements.some(id=>!content.requirements.some(r=>r.id===id))||spec.components.some(c=>c.platform!=='flow')))errors.push(`${q.id}: preparation requires explicit declared requirements and flow-only components`);
+      if(purpose!=='preparation'&&q.requirementIds!==undefined)errors.push(`${q.id}: real acceptance scope cannot be narrowed`);
       const scenarios=spec.journeys.filter(j=>j.requirementIds.some(r=>requirements.includes(r))).flatMap(j=>j.scenarios);
       const componentIds=new Set(scoped.flatMap(t=>t.componentIds));
       const authorChecks=new Set(plan.tasks.flatMap(t=>t.checkIds)),scopedChecks=new Set(scoped.flatMap(t=>t.checkIds));
-      const checks=spec.checks.filter(c=>scopedChecks.has(c.id)||!authorChecks.has(c.id)&&(c.requirementIds.some(r=>requirements.includes(r))||c.componentIds.some(id=>componentIds.has(id))));
+      const checks=spec.checks.filter(c=>purpose==='preparation'?c.requirementIds.some(r=>requirements.includes(r)):scopedChecks.has(c.id)||!authorChecks.has(c.id)&&(c.requirementIds.some(r=>requirements.includes(r))||c.componentIds.some(id=>componentIds.has(id))));
       if(q.checkIds.length!==checks.length||checks.some(c=>!q.checkIds.includes(c.id)))errors.push(`${q.id}: integration contract must cover every scoped check`);
       for(const key of q.checkIds)if(!checks.some(c=>c.id===key))errors.push(`${q.id}: unknown or unrelated integration check ${key}`);
       for(const check of checks.filter(c=>['runtime','access'].includes(c.kind)))for(const id of check.scenarioIds.filter(id=>scenarios.some(s=>s.id===id)))if(!q.cases.some(row=>row.checkId===check.id&&row.scenarioId===id))errors.push(`${q.id}: missing executable check/scenario ${check.id}/${id}`);

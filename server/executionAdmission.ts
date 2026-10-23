@@ -33,7 +33,7 @@ export class ExecutionAdmission {
   if(findings.some(f=>f.executionEvidence!.configurationSha256!==config.sha256))throw Error('Execution probe configuration differs from approved contract');
   const binding={schemaVersion:1,record:recordReference(record),sourceCommit:record.content.sourceCommit,environmentUrl:record.content.environmentUrl,
    design:{docId:record.designReview.docId,artifactSha256:record.designReview.artifactSha256,reviewer:record.designReview.reviewer,sha256:digest(record.designReview)},taskHashes:record.content.taskPlan?.tasks.map(t=>({issue:t.issue,hash:taskScopeHash(record,t.issue)})),
-   taskReviewsSha256:digest(record.taskReviews??[]),taskAcceptancesSha256:digest(record.taskAcceptances??[]),sliceReceiptSha256:digest(record.sliceReceipt??null),attempt,configuration:config,
+   taskReviewsSha256:digest(record.taskReviews??[]),taskAcceptancesSha256:digest(record.taskAcceptances??[]),sliceReceiptSha256:digest(record.sliceReceipt??null),preparationReceiptSha256:digest(record.preparationReceipt??null),attempt,configuration:config,
    contracts:findings.map(f=>({findingId:f.id,contract:f.executionEvidence}))};
   const key=digest(binding),cached=this.cache.get(key),now=Date.now();
   if(cached&&cached.observedAt<=now&&cached.expiresAt>now+5000&&performance.now()+5000<cached.monotonicDeadline){

@@ -362,3 +362,20 @@ it('keeps worker payload bounds and rejects oversized manager saves without chan
   await expect(manager({repo_id:'test/repo',action:'save',expected_revision:record.revision,payload_json:JSON.stringify({secret:'x'.repeat(1024*1024)})})).rejects.toMatchObject({status:413});
   expect(records.current('test/repo')).toEqual(record);expect(records.view('test/repo')).toHaveLength(1);
 });
+
+it('retains separate preparation acceptance without unlocking the real slice or expansion',async()=>{
+ const {root,records}=await fixture();await approve(records);const r=release(records),deployment=run(r),ref=recordReference(records.current('test/repo')!);
+ r.plan.deliveryRecord!.purpose='preparation';r.plan.verification={headlessFlow:{dataMode:'synthetic',operationScope:'standard-mail-v1',flowId:crypto.randomUUID(),definitionSha256:hash}} as any;
+ deployment.recovery={packageSha256:hash} as any;deployment.qualityEvidence={artifactSha256:hash} as any;deployment.qualityReview={reviewer:'qa',evidenceHash:hash} as any;
+ // Admission itself is exercised by task/quality contract tests; this isolates immutable publication and provenance.
+ const admission=vi.spyOn(records,'assertRelease').mockReturnValue(records.current('test/repo')!);
+ const refused={...deployment,visualReview:{...deployment.visualReview!,reviewer:'dev'}};
+ await expect(records.acceptPreparation('test/repo',ref,r,refused,context)).rejects.toThrow('independently accepted');
+ await records.acceptPreparation('test/repo',ref,r,deployment,context);
+ const accepted=records.current('test/repo')!;expect(accepted.preparationReceipt).toMatchObject({recordSha256:ref.sha256,runId:deployment.id,packageSha256:hash,reviewer:'qa'});expect(accepted.sliceReceipt).toBeUndefined();
+ expect(()=>records.assertWork('test/repo',4,context)).toThrow(/slice/);
+ await expect(records.acceptSlice('test/repo',ref,r,deployment,context)).rejects.toThrow('slice');
+ await expect(approve(records)).rejects.toThrow('immutable');
+ admission.mockRestore();const reopened=new DeliveryRecords(root);await reopened.init();expect(reopened.current('test/repo')!.preparationReceipt).toEqual(accepted.preparationReceipt);
+ const changed=await records.save('test/repo',1,content(),'ceo');expect(changed.preparationReceipt).toBeUndefined();
+});
