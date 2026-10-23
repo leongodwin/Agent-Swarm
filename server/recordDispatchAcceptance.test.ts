@@ -70,3 +70,11 @@ it('routes only the assigned independent QA packaging review and never grants ma
  expect(JSON.parse(await handler('qa',{reviewOnly:true})(request))).toEqual({scope:'same-app-solution-packaging-only'});
  expect(deps.canvasPackaging).toHaveBeenCalledOnce();
 });
+
+it('routes connector probe inspection only to assigned independent QA without changing the record',async()=>{
+ deps.connectorProbe=vi.fn(async()=>({scope:'fixed-folder-metadata-probe-only',businessAuthorityGranted:false}));const request=input('connector_probe',{action:'inspect'});
+ for(const role of ['dev','ceo','manager'] as const)await expect(handler(role)(request)).rejects.toThrow('assigned independent QA');
+ await expect(handler('qa',{id:'other'})(request)).rejects.toThrow('assigned independent QA');
+ expect(JSON.parse(await handler('qa',{reviewOnly:true})(request))).toMatchObject({businessAuthorityGranted:false});expect(records.save).not.toHaveBeenCalled();
+ deps.connectorProbe=undefined;await expect(handler('qa')(request)).rejects.toThrow('assigned independent QA');
+});

@@ -46,6 +46,8 @@ export interface OfficeHttpServices {
   canvasPackaging?:(repoId:string,action:'inspect'|'execute'|'reconcile'|'recover',body:unknown)=>Promise<unknown>;
   requestCanvasPackagingReview?:(repoId:string)=>Promise<string>;
   schemaBootstrap?:(repoId:string,action:'inspect'|'execute',body:unknown)=>Promise<unknown>;
+  connectorProbe?:(repoId:string)=>Promise<unknown>;
+  requestConnectorProbeReview?:(repoId:string)=>Promise<unknown>;
   requestSchemaBootstrapReview?:(repoId:string)=>Promise<string>;
   nativeRuntime?:()=>{keeperPid:number;keeperInstance:string|null;nativePids:number[]};
   executionLedger?:ExecutionLedger;
@@ -149,6 +151,8 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.post('/api/repos/:repo/delivery-record/review',route(req=>{connectedRepo(repoId(req));return swarm.requestRecordReview(repoId(req));}));
   app.post('/api/repos/:repo/delivery-record/reconcile-review',route(req=>{connectedRepo(repoId(req));const input=parseBody(taskReconciliationReviewRequest,req.body);if(!services.requestTaskReconciliationReview)throw new HttpError(503,'Task reconciliation review unavailable');return services.requestTaskReconciliationReview(repoId(req),input);}));
   app.get('/api/repos/:repo/schema-bootstrap',route(req=>{connectedRepo(repoId(req));if(!services.schemaBootstrap)throw new HttpError(503,'Schema bootstrap unavailable');return services.schemaBootstrap(repoId(req),'inspect',{});}));
+  app.get('/api/repos/:repo/connector-probe',route(req=>{connectedRepo(repoId(req));if(!services.connectorProbe)throw new HttpError(503,'Connector probe review unavailable');return services.connectorProbe(repoId(req));}));
+  app.post('/api/repos/:repo/connector-probe/review',route(req=>{connectedRepo(repoId(req));parseBody(z.strictObject({}),req.body);if(!services.requestConnectorProbeReview)throw new HttpError(503,'Connector probe review unavailable');return services.requestConnectorProbeReview(repoId(req));}));
   app.get('/api/repos/:repo/canvas-packaging',route(req=>{connectedRepo(repoId(req));if(!services.canvasPackaging)throw new HttpError(503,'Canvas packaging unavailable');return services.canvasPackaging(repoId(req),'inspect',{});}));
   app.post('/api/repos/:repo/canvas-packaging/reconcile',route(req=>{connectedRepo(repoId(req));parseBody(z.strictObject({}),req.body);if(!services.canvasPackaging)throw new HttpError(503,'Canvas packaging unavailable');return services.canvasPackaging(repoId(req),'reconcile',{});}));
   app.post('/api/repos/:repo/canvas-packaging/recover',route(req=>{connectedRepo(repoId(req));const body=parseBody(z.strictObject({proposalSha256:z.string().regex(/^[a-f0-9]{64}$/)}),req.body);if(!services.canvasPackaging)throw new HttpError(503,'Canvas packaging unavailable');return services.canvasPackaging(repoId(req),'recover',body);}));
