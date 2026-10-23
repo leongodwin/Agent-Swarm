@@ -1,3 +1,4 @@
+import {dataverseGuid} from './targetOperations.ts';
 import {claimHeadlessRun,beforeHeadlessDeadline} from './headlessRunBarrier.ts';
 import fs from 'node:fs/promises';import path from 'node:path';import crypto from 'node:crypto';import {z} from 'zod';
 import {connectFlowAdapter,flowDefinitionForPreflight,type FlowAdapter} from './flowAdapter.ts';
@@ -9,7 +10,7 @@ import type {AcceptedHeadlessReport} from './headlessAcceptedReport.ts';
 const hash=z.string().regex(/^[a-f0-9]{64}$/),scalar=z.union([z.string().max(2000),z.number(),z.boolean(),z.null()]);
 const baseHeadlessFlowSchema=z.strictObject({flowId:z.uuid(),identity:platformIdentitySchema,definitionSha256:hash,
  operationScope:z.enum(['legacy-ai','standard-mail-v1']).default('legacy-ai'),dataMode:z.enum(['mailbox','synthetic']).default('mailbox'),
- historyPolicy:z.strictObject({kind:z.literal('existing-tenant-run-history-v1'),recordId:z.uuid(),recordSha256:hash,ownerId:z.uuid()}).optional(),
+ historyPolicy:z.strictObject({kind:z.literal('existing-tenant-run-history-v1'),recordId:z.uuid(),recordSha256:hash,ownerId:dataverseGuid}).optional(),
  dispatchReport:z.strictObject({sliceRunId:z.uuid(),checkName:z.string().min(5).max(200),reportSha256:hash}).optional(),
  postDispatchChecks:z.array(z.strictObject({name:z.string().min(5).max(200),identity:z.literal('owner'),criterion:z.number().int().nonnegative(),category:z.enum(['authorization','persistence']),mode:z.enum(['claim-denied','claim-reconciliation'])})).max(2).default([]),
  privateReport:z.strictObject({recordId:z.uuid(),action:z.string().regex(/^[\w-]{1,80}$/)}).optional(),
@@ -132,7 +133,7 @@ export async function verifyHeadlessFlow(plan:HeadlessFlow,environmentUrl:string
    await privateLeaf();await executionAdmission?.(plan.dataMode==='synthetic'?"verification":dispatch?"dispatch":"private-data");await owned();
    if(plan.operationScope==='standard-mail-v1'&&plan.dataMode==='mailbox'){
     const policy=plan.historyPolicy;if(!policy)throw Error('Reviewed history policy binding is missing');
-    const metadata=z.object({flowId:z.literal(plan.flowId),ownerId:z.uuid(),category:z.literal(5),inSolution:z.literal(true),isManaged:z.literal(false),workflowIsManaged:z.literal(false),isCustomizable:z.literal(true),warning:z.null()}).passthrough().parse(await flow.call('get_flow_context',{env:plan.identity.environmentId,flow:plan.flowId}));
+    const metadata=z.object({flowId:z.literal(plan.flowId),ownerId:dataverseGuid,category:z.literal(5),inSolution:z.literal(true),isManaged:z.literal(false),workflowIsManaged:z.literal(false),isCustomizable:z.literal(true),warning:z.null()}).passthrough().parse(await flow.call('get_flow_context',{env:plan.identity.environmentId,flow:plan.flowId}));
     if(metadata.ownerId.toLowerCase()!==policy.ownerId.toLowerCase())throw Error('History baseline flow owner differs from the reviewed policy');await owned();
     await durable(path.join(evidence,prefix+'-history-baseline.json'),{schemaVersion:1,kind:policy.kind,policy,flowId:plan.flowId,definitionSha256:plan.definitionSha256,observedAt:new Date().toISOString(),nativeContextSha256:digest(metadata),limits:['Fresh owner and unmanaged-solution metadata only; not an enumeration of history readers or retention duration','Existing tenant history permissions and retention are accepted only through the exact independently reviewed policy record','This host performs no sharing or permission-grant operation']});
    }

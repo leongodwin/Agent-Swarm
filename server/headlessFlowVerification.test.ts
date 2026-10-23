@@ -132,3 +132,10 @@ it('requires a policy binding for standard mailbox execution and consistent loca
  expect(()=>headlessFlowSchema.parse({...plan(),operationScope:'standard-mail-v1'})).toThrow('history policy binding');
  expect(()=>headlessFlowSchema.parse({...plan(),operationScope:'standard-mail-v1',privateReport:{recordId:env,action:'Private_report'},historyPolicy:{kind:'existing-tenant-run-history-v1',recordId:tenant,recordSha256:'a'.repeat(64),ownerId:env}})).toThrow('record differ');
 });
+it('accepts the exact native Dataverse owner GUID without RFC UUID version bits and still refuses another owner',async()=>{
+ const nativeOwner='5cc4a99a-a9c9-f111-a05a-e4fb1ef5e0d3',f=await fixture(false,(tool,_args,value)=>tool==='get_flow_context'?{...value,ownerId:nativeOwner}:value);
+ f.p.operationScope='standard-mail-v1';f.p.historyPolicy={kind:'existing-tenant-run-history-v1',recordId:env,recordSha256:'a'.repeat(64),ownerId:nativeOwner};
+ expect(()=>headlessFlowSchema.parse(f.p)).not.toThrow();await verifyHeadlessFlow(f.p,url,f.root,new AbortController().signal,f.connect);
+ expect(JSON.parse(await fs.readFile(path.join(f.root,'headless-0-history-baseline.json'),'utf8')).policy.ownerId).toBe(nativeOwner);
+ expect(()=>headlessFlowSchema.parse({...f.p,historyPolicy:{...f.p.historyPolicy,ownerId:'invalid'}})).toThrow();
+});

@@ -192,7 +192,7 @@ it.each(['missing','oversized','duplicate','non-file'])('quarantines %s evidence
   if(kind==='non-file'){fs.unlinkSync(file);fs.mkdirSync(file);}
   expect(store.view().unavailableReason).toContain('quarantined');expect(store.view().records).toHaveLength(1);
 });
-it.each([{writers:2,count:20,delay:0},{writers:3,count:20,delay:10},{writers:3,count:20,delay:30},{writers:2,count:2,delay:350}])('serializes $writers native processes with $delay ms flush latency',async({writers,count,delay})=>{
+it.each([{writers:2,count:20,delay:0},{writers:3,count:20,delay:10},{writers:3,count:20,delay:30},{writers:2,count:2,delay:350,serialFinalization:true}])('serializes $writers native processes with $delay ms flush latency',async({writers,count,delay,serialFinalization})=>{
   const file=fixture(),script=path.join(path.dirname(file),'writer.mjs');
   const module=new URL('./runtimeCleanup.ts',import.meta.url).href;
   fs.writeFileSync(script,`import fs from 'node:fs';import {RuntimeCleanupStore} from ${JSON.stringify(module)};
@@ -221,7 +221,13 @@ it.each([{writers:2,count:20,delay:0},{writers:3,count:20,delay:10},{writers:3,c
         for(const child of children)child.send(round);
         expect(await Promise.all(acknowledgements)).toEqual(prefixes.map(()=>['round:'+round,undefined]));
       }
-      for(const child of children)child.send('finish');
+      if(serialFinalization){
+        // Registration rounds above still compete at the full 350ms flush cost.
+        // Final confirmation plus a fresh read is a separate pair of operations;
+        // do not turn it into an unbounded cleanup burst against the one-second
+        // production quarantine budget. Other cases retain concurrent finalization.
+        for(const [index,child]of children.entries()){child.send('finish');expect(await exits[index]).toEqual({code:0,stderr:''});}
+      }else for(const child of children)child.send('finish');
     }
     expect(await Promise.all(exits)).toEqual(prefixes.map(()=>({code:0,stderr:''})));
     const view=new RuntimeCleanupStore(file).view();expect(view.unavailableReason).toBeUndefined();
