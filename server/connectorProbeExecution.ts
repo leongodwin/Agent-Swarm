@@ -45,6 +45,10 @@ export async function executeConnectorProbe(expected:string,deps:ConnectorProbeE
   await privateLeaf();await admit();flow=await deps.connect(plan,signal);await owned();if(!flow.metadata||connectorProbeDigest(flow.metadata)!==connectorProbeDigest(plan.adapter))throw Error('Probe adapter differs');
   const call=async(tool:string,args:Record<string,unknown>)=>{await admit();const result=await flow!.call(tool,args);await owned();return result;};
   verifyFlowIdentity(await call('whoami',{}),plan.identity);
+  const connectionRows=z.array(z.record(z.string(),z.unknown())).max(999).parse(await call('list_connections',{env:plan.identity.environmentId,connector:'shared_office365'})),matches=connectionRows.filter(row=>row.name===plan.connection.connectionId);
+  if(matches.length!==1)throw Error('Exact current Outlook connection required');
+  const connection=z.object({name:z.literal(plan.connection.connectionId),connector:z.literal('/providers/Microsoft.PowerApps/apis/shared_office365'),accountName:z.string(),status:z.literal('Connected'),statuses:z.array(z.object({status:z.literal('Connected')})).min(1).max(10).optional()}).parse(matches[0]);
+  if(connection.accountName.toLowerCase()!==plan.identity.username.toLowerCase())throw Error('Current Outlook account differs');
   const resources=z.strictObject({flowId:id,workflowId:id,solutionId:id}).parse(await deps.prepareSameResources(plan,admit,journal));
   const args={env:plan.identity.environmentId,flow:resources.flowId};
   const pinned=async()=>{const definition=z.record(z.string(),z.unknown()).parse(await call('get_flow',{...args,path:'properties.definition'})),refs=await call('get_flow',{...args,path:'properties.connectionReferences'});return assertConnectorProbeReadback(plan,definition,refs);};
