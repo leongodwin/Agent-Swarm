@@ -6,6 +6,7 @@ import type {FlowAdapter} from './flowAdapter.ts';
 import {verifyFlowIdentity} from './platformAuth.ts';
 import {buildConnectorMetadataProbe,assertConnectorProbeReadback,connectorProbeDigest,type ConnectorProbePlan} from './connectorMetadataProbe.ts';
 import type {ConnectorProbeReview} from './connectorProbeReview.ts';
+import {PlatformCommandError} from './platformCommandError.ts';
 import {acquireResourceLease} from './resourceLease.ts';
 
 type Grant=Awaited<ReturnType<ConnectorProbeReview['authority']>>;
@@ -76,6 +77,12 @@ export async function executeConnectorProbe(expected:string,deps:ConnectorProbeE
   await flow.close();closed=true;await owned();
   const receipt={schemaVersion:1,proposalSha256:expected,...resources,runId:result.runId,actionSha256,positiveSha256,negativeSha256,calls,completedAt:new Date().toISOString(),nativeSemanticsAccepted:false,businessAuthorityGranted:false,messageAccessAllowed:false,sendAllowed:false};
   await journal('completed',receipt);await lease.release();return receipt;
- }catch{throw Error('Connector probe held; preserve original intent, evidence and ownership without replay');}
+ }catch(error){
+  // Retain bounded original failure metadata even after deadline/authority expiry.
+  // This is audit only: it never releases ownership or admits more native work.
+  await lease.assertOwned();
+  await exclusive(path.join(root,'held.json'),{schemaVersion:1,proposalSha256:expected,admissionAttempts:calls,admittedCalls:Math.min(calls,64),elapsedMs:Date.now()-started,journalSequenceAttempts:sequence,observedAt:new Date().toISOString(),providerErrorCode:error instanceof PlatformCommandError&&/^0x[0-9a-f]{8}$/i.test(error.platformErrorCode??'')?error.platformErrorCode!.toLowerCase():null,nativeOutcomeAccepted:false,holdPreserved:true,replayAuthorized:false});
+  throw Error('Connector probe held; preserve original intent, evidence and ownership without replay');
+ }
  finally{if(flow&&!closed)await flow.close();}
 }
