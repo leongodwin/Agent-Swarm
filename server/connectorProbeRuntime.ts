@@ -47,10 +47,10 @@ export function connectorProbeRuntime(context:{home:string;configurationRoot:str
  });
  return{service,inspect:()=>service.view(guard),execute:async(expected:string)=>{
   guard();if(!context.cwd||!context.leaseRoot||!context.policyObservation)throw Error('Normal host connector-probe execution context required');
-  const cwd=context.cwd,signal=AbortSignal.timeout(120000),run=async(executable:string,args:string[])=>{signal.throwIfAborted();guard();const result=await deliveryCommands.run({executable,args},cwd,{},signal);guard();return result;};let adapter:FlowAdapter|undefined;
+  const cwd=context.cwd,signal=AbortSignal.timeout(115000),run=async(executable:string,args:string[])=>{signal.throwIfAborted();guard();const result=await deliveryCommands.run({executable,args},cwd,{},signal);guard();return result;};let adapter:FlowAdapter|undefined;
   return executeConnectorProbe(expected,{home:context.home,leaseRoot:context.leaseRoot,releaseStartedAt:Date.now(),authority:hash=>service.authority(hash,guard),guard,
    privateLeaf:async(plan,admit)=>{await admit();const metadata=await privateReportMetadata(plan.record.id,cwd,signal,guard);if(metadata.status!=='observed'||!('protectedOwnerOnly' in metadata)||!metadata.protectedOwnerOnly||!metadata.leaf)throw Error('Protected Windows probe capture unavailable');return metadata.leaf;},
-   connect:async(_plan,nativeSignal,admit)=>{adapter=await connectFlowAdapter(cwd,nativeSignal,{beforeRequest:admit,maxPages:1});return adapter;},
+   connect:async(plan,nativeSignal,admit)=>{adapter=await connectFlowAdapter(cwd,nativeSignal,{beforeRequest:admit,maxPages:1,expectedEntrySha256:plan.adapter.entrySha256});return adapter;},
    prepareSameResources:async(plan,admit,journal)=>{if(!adapter)throw Error('Pinned adapter required');return prepareConnectorProbeResources(plan,{command:run,flow:adapter,admit,journal,guard});},
   });
  },handle:async(payload:unknown,actor:{id:string;role:string})=>{const input=connectorProbeReviewRequest.parse(payload);if(input.action==='inspect')return service.view(guard);if(input.action==='read')return service.read(input.kind,input.key,input.expectedSha256,input.startCharacter,input.maxCharacters,guard);const{action,...review}=input;return service.review(review,actor,guard);}};

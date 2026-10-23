@@ -29,12 +29,13 @@ export function flowDefinitionForPreflight(definition: Record<string, unknown>):
   };
   walk(copy); return copy;
 }
-export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admission?:{beforeRequest():Promise<void>;maxPages?:number}): Promise<FlowAdapter> {
+export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admission?:{beforeRequest():Promise<void>;maxPages?:number;expectedEntrySha256?:string}): Promise<FlowAdapter> {
   const maxPages=z.number().int().min(1).max(20).parse(admission?.maxPages??20);
   const skill = discoverSkills().skills.find((s) => s.id === 'power-automate:manage-flows');
   const entry = process.env.SWARM_FLOWAGENT_ENTRY ?? (skill ? path.resolve(path.dirname(skill.file), '..', '..', 'server', 'mcp.mjs') : '');
   if (!entry || !(await fs.stat(entry).catch(() => null))?.isFile()) throw new Error('FlowAgent runtime is unavailable; install/enable the Power Automate plugin or configure SWARM_FLOWAGENT_ENTRY');
   const entrySha256=crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex');
+  if(admission?.expectedEntrySha256!==undefined&&entrySha256!==z.string().regex(/^[a-f0-9]{64}$/).parse(admission.expectedEntrySha256))throw Error('FlowAgent approved entry differs before launch');
   const transport = new StdioClientTransport({ command: process.execPath, args: [entry], cwd, stderr: 'ignore', env: flowAdapterEnvironment() });
   const client = new Client({ name: 'swarm-flow-delivery', version: '1' });
   const cleanup=flowCleanup(client,transport);

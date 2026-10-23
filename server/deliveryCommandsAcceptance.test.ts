@@ -53,6 +53,6 @@ it('reports unverified Windows process-tree cleanup even if the root fallback ex
   const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!; Object.defineProperty(process, 'platform', { value: 'win32' });
   native.execFile.mockImplementation((_file, _args, _options, callback) => callback(new Error('synthetic tree cleanup failure')));
   const f = fixture(), failed = expect(f.run()).rejects.toThrow('process-tree cleanup is unverified');
-  try { f.controller.abort(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); f.child.emit('close', 0); await failed; expect(native.execFile).toHaveBeenCalledWith('taskkill', ['/PID', '12345', '/T', '/F'], { windowsHide: true }, expect.any(Function)); expect(f.child.kill).toHaveBeenCalledOnce(); }
+  try { f.controller.abort(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); f.child.emit('close', 0); await failed; expect(native.execFile).toHaveBeenCalledWith('taskkill', ['/PID', '12345', '/T', '/F'], { windowsHide: true, timeout:4000 }, expect.any(Function)); expect(f.child.kill).toHaveBeenCalledOnce(); }
   finally { Object.defineProperty(process, 'platform', descriptor); }
 });

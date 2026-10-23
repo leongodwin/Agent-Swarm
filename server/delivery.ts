@@ -142,21 +142,23 @@ export const deliveryCommands: DeliveryDependencies = {
         detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '', stderr = '', failure = '',bytes=0;
       const outDecoder=new TextDecoder('utf-8',{fatal:true}),errDecoder=new TextDecoder('utf-8',{fatal:true});
-      let stopping:Promise<void>|undefined;
+      let stopping:Promise<void>|undefined,settlement:ReturnType<typeof setTimeout>|undefined;
+      const unknown=()=>{clean();reject(new PlatformCommandError('Delivery process-tree cleanup is unverified; native outcome unknown; retain the original hold and inspect native processes before recovery'));};
       const kill = (reason: string) => {
         if(failure)return;
         failure = reason;
+        settlement=setTimeout(unknown,5000);
         if (!child.pid) return;
         const pid=child.pid;
         stopping=Promise.resolve().then(async()=>{
-          if(process.platform==='win32')await new Promise<void>((done,failed)=>execFile('taskkill',['/PID',String(pid),'/T','/F'],{windowsHide:true},error=>error?failed(new Error('Tree stop failed')):done()));
+          if(process.platform==='win32')await new Promise<void>((done,failed)=>execFile('taskkill',['/PID',String(pid),'/T','/F'],{windowsHide:true,timeout:4000},error=>error?failed(new Error('Tree stop failed')):done()));
           else process.kill(-pid,'SIGKILL');
         });
         void stopping.catch(()=>{try{child.kill();}catch{/* Root stop also remains unverified. */}});
       };
       const abort = () => kill('Delivery cancelled');
       const timer = setTimeout(() => kill('Delivery command timed out'), 20 * 60_000);
-      const clean = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); };
+      const clean = () => { clearTimeout(timer);if(settlement)clearTimeout(settlement); signal.removeEventListener('abort', abort); };
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) abort();
       const collect=(chunk:Buffer,isError:boolean)=>{
@@ -169,8 +171,9 @@ export const deliveryCommands: DeliveryDependencies = {
       child.stderr.on('data',chunk=>collect(chunk,true));
       child.once('error', (err) => { if(!child.pid){clean();reject(err);}else kill('Delivery process failed before exit acknowledgement'); });
       child.once('close', (code) => {void (async()=>{
-        clean();
+        clearTimeout(timer);signal.removeEventListener('abort',abort);
         try{await stopping;}catch{failure='Delivery process-tree cleanup is unverified; inspect native processes before recovery';}
+        clean();
         if(!failure)try{stdout+=outDecoder.decode();stderr+=errDecoder.decode();}catch{failure='Delivery output contained invalid UTF-8';}
         if (failure || code !== 0 || pacReportedError(command.executable, stdout)) reject(new PlatformCommandError(`${path.basename(command.executable)} failed: ${failure || stderr.slice(-4000) || (pacReportedError(command.executable, stdout) ? stdout.slice(-4000) : `exit ${code}`)}${providerErrorCode(stdout)?` (provider ${providerErrorCode(stdout)})`:''}`,providerErrorCode(stdout)));
         else resolve(stdout);
