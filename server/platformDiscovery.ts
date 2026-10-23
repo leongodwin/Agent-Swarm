@@ -1,6 +1,6 @@
 import {environmentRuleAssignments} from './environmentRuleAssignments.ts';
 import {repositoryAccessMetadata} from './repositoryAccessMetadata.ts';
-import {reconcileHeadlessDispatch} from './headlessFlowVerification.ts';
+import {reconcileHeadlessDispatch,reconcileHeadlessVerificationRun} from './headlessFlowVerification.ts';
 import {standardDlpEvidence} from './standardDlpEvidence.ts';
 import {privateReportMetadata} from './privateReportMetadata.ts';
 import {aiPromptMetadata} from './aiPromptMetadata.ts';
@@ -38,6 +38,7 @@ export const platformDiscoveryRequest=z.discriminatedUnion('kind',[
  z.strictObject({kind:z.literal('headless-authoring-rights')}),
  z.strictObject({kind:z.literal('private-report-metadata')}),
  z.strictObject({kind:z.literal('headless-dispatch-reconciliation')}),
+ z.strictObject({kind:z.literal('headless-run-reconciliation'),flowId:z.uuid(),runId:z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).optional()}),
  z.strictObject({kind:z.literal('repository-access')}),
  z.strictObject({kind:z.literal('headless-discovery-contracts')}),
  z.strictObject({kind:z.literal('environment-rule-assignments')}),
@@ -100,8 +101,9 @@ export class PlatformDiscovery{
  async inspect(config:CapabilityConfig,cwd:string,input:unknown,guard:()=>void,signal:AbortSignal,repoId?:string,configurationRoot=this.root,scope?:{record:DeliveryRecord;issue?:number;independentReview?:boolean}){
   const request=platformDiscoveryRequest.parse(input),binding=platformDiscoveryBinding(config);
   if(['delivery-permissions','delivery-authoring-prerequisites'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)))throw Error('Delivery permission discovery requires a server-bound current task');
-  if(['headless-authoring-rights','private-report-metadata','headless-dispatch-reconciliation','repository-access','headless-discovery-contracts','environment-rule-assignments'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!(scope.independentReview===true||scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)||scope.record.content.tasks.some(t=>t.issue===scope.issue&&t.stage==='discovery'))))throw Error('Headless metadata requires a server-bound current task or independent review');
+  if(['headless-authoring-rights','private-report-metadata','headless-dispatch-reconciliation','headless-run-reconciliation','repository-access','headless-discovery-contracts','environment-rule-assignments'].includes(request.kind)&&(!repoId||scope?.record.repoId!==repoId||!scope.record.content.sourceCommit||!(scope.independentReview===true||scope.record.content.taskPlan?.tasks.some(t=>t.issue===scope.issue)||scope.record.content.tasks.some(t=>t.issue===scope.issue&&t.stage==='discovery'))))throw Error('Headless metadata requires a server-bound current task or independent review');
   if(['write-readiness','sharepoint-list-schema'].includes(request.kind)&&!repoId)throw new Error('Write readiness and schema discovery require server-bound repository context');
+  if(request.kind==='headless-run-reconciliation'&&scope?.independentReview!==true)throw Error('Original-run reconciliation requires the assigned independent reviewer');
   const assert=()=>{signal.throwIfAborted();guard();};assert();
   let flow:FlowAdapter|undefined,pac!:ReturnType<typeof parsePacIdentity>,data:unknown;
   try{
@@ -154,6 +156,7 @@ export class PlatformDiscovery{
     const before=await inventory(),after=await inventory();if(JSON.stringify(before)!==JSON.stringify(after))throw Error('Flow inventory changed during observation');
     data={status:'observed',scope:'recruitment-template-runtime-inventory',runtime:flow!.metadata,templates,inventory:after,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit,limits:['Installed active MCP handshake and entry hash plus repeated native visible-flow inventory; no template instantiated','Inventory covers only caller-visible metadata; saturation blocks absence claims; no hidden-resource, connection execution, licence, DLP or runtime assurance','Duplicate-name checks still required at stopped-flow creation; never adopt or change unrelated flows']};
    }
+   else if(request.kind==='headless-run-reconciliation')data={...await reconcileHeadlessVerificationRun({...binding,environmentId:pac.environmentId},scope!.record.id,request.flowId,request.runId,flow!,signal,guard),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
    else if(request.kind==='headless-dispatch-reconciliation')data={...await reconcileHeadlessDispatch({...binding,environmentId:pac.environmentId},scope!.record.id,flow!,signal,guard),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
    else if(request.kind==='private-report-metadata')data={...await privateReportMetadata(scope!.record.id,cwd,signal,guard),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};
    else if(request.kind==='headless-authoring-rights')data={...await(this.deps.aiMetadata??aiPromptMetadata)(binding,cwd,signal,guard,{run:this.deps.run,fetch:globalThis.fetch},'headless-rights'),repoId,issue:scope!.issue,reference:recordReference(scope!.record),sourceCommit:scope!.record.content.sourceCommit};

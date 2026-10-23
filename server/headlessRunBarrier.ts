@@ -1,10 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {withHandoffMutex} from './handoffMutex.ts';
+import {readBoundedText} from './boundedJson.ts';
+import {parseUnambiguousJson} from './unambiguousJson.ts';
 
 /** A provider invocation is unresolved until its exact terminal run is observed.
  * Closing the client or timing out never releases this barrier. */
-export async function claimHeadlessRun(root:string, scope:unknown, intent:unknown) {
+export async function claimHeadlessRun(root:string, scope:unknown, intent:unknown,guard:()=>Promise<void>=async()=>{}) {
   await fs.mkdir(root,{recursive:true});
   const stat=await fs.lstat(root);
   if(!stat.isDirectory()||stat.isSymbolicLink())throw Error('Invalid headless run barrier root');
@@ -17,11 +20,45 @@ export async function claimHeadlessRun(root:string, scope:unknown, intent:unknow
     const out=await fs.open(file+'.'+crypto.randomUUID()+'.started.json','wx',0o600);
     try{await out.writeFile(JSON.stringify({scope,intent,receipt}));await out.sync();}finally{await out.close();}
   },async terminal(receipt:unknown) {
-    const archive=file+'.'+crypto.randomUUID()+'.terminal.json';
-    const out=await fs.open(archive,'wx',0o600);
-    try {await out.writeFile(JSON.stringify({scope,intent,receipt}));await out.sync();}finally{await out.close();}
-    await fs.unlink(file);
+    await finalizePending(root,file,JSON.stringify(intent),scope,intent,receipt,guard);
+
   }};
+}
+
+const pendingFile=(root:string,scope:unknown)=>path.join(root,crypto.createHash('sha256').update(JSON.stringify(scope)).digest('hex')+'.pending.json');
+async function pendingBytes(root:string,file:string){
+ const directory=await fs.lstat(root),stat=await fs.lstat(file);
+ if(!directory.isDirectory()||directory.isSymbolicLink()||!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||await fs.realpath(file)!==path.join(await fs.realpath(root),path.basename(file)))throw Error('Headless pending storage changed');
+ const raw=await readBoundedText(file,65536);if(!raw)throw Error('Headless pending intent unavailable');return raw;
+}
+async function finalizePending(root:string,file:string,raw:string,scope:unknown,intent:unknown,receipt:unknown,guard:()=>Promise<void>,alreadyOwned?:()=>void){
+ const finish=async(assertOwned:()=>void)=>{
+  await guard();assertOwned();if(await pendingBytes(root,file)!==raw)throw Error('Headless pending invocation changed');
+  const archive=file+'.'+crypto.randomUUID()+'.terminal.json',out=await fs.open(archive,'wx',0o600);
+  try{await out.writeFile(JSON.stringify({scope,intent,receipt}));await out.sync();}finally{await out.close();}
+  await guard();assertOwned();if(await pendingBytes(root,file)!==raw)throw Error('Headless pending invocation changed before release');
+  assertOwned();await fs.unlink(file);
+ };
+ if(alreadyOwned)return finish(alreadyOwned);
+ // Original-run recovery is Windows-only. Other platforms retain the original
+ // normal terminal path; they cannot invoke the new reconciliation path.
+ return process.platform==='win32'?withHandoffMutex(root,finish):finish(()=>{});
+}
+/** Fixed Windows recovery: a trusted observer must prove the original terminal
+ * run. This never triggers, retries, cancels or releases a dispatch claim. */
+export async function reconcileHeadlessRunBarrier(root:string,scope:unknown,observe:(intent:unknown,started:unknown[])=>Promise<unknown>,guard:()=>Promise<void>){
+ if(process.platform!=='win32')throw Error('Original-run reconciliation requires Windows kernel exclusion');
+ return withHandoffMutex(root,async assertOwned=>{
+  await guard();assertOwned();const file=pendingFile(root,scope),raw=await pendingBytes(root,file),intent=parseUnambiguousJson(raw,{maxBytes:65536});
+  const started:unknown[]=[];let scanned=0;const directory=await fs.opendir(root);
+  try{for await(const entry of directory){if(++scanned>4096)throw Error('Headless journal directory exceeds bounded recovery scan');if(!entry.name.startsWith(path.basename(file)+'.')||!entry.name.endsWith('.started.json'))continue;
+   const text=await pendingBytes(root,path.join(root,entry.name)),row=parseUnambiguousJson(text,{maxBytes:65536}) as {scope?:unknown;intent?:unknown;receipt?:unknown};
+   if(JSON.stringify(row.scope)===JSON.stringify(scope)&&JSON.stringify(row.intent)===raw){started.push(row.receipt);if(started.length>2)throw Error('Ambiguous native invocation journal');}
+  }}finally{await directory.close().catch(()=>{});}
+  const receipt=await observe(intent,started);await guard();assertOwned();
+  await finalizePending(root,file,raw,scope,intent,receipt,guard,assertOwned);
+  return{pendingIntentSha256:crypto.createHash('sha256').update(raw).digest('hex'),terminalReceiptSha256:crypto.createHash('sha256').update(JSON.stringify(receipt)).digest('hex'),holdReleased:true,triggerInvoked:false,dispatchClaimPreserved:true,replayAuthorized:false};
+ });
 }
 
 /** Bounds waiting only: rejection does not claim provider cancellation. */

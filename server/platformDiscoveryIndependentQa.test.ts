@@ -177,3 +177,11 @@ it.each(['current','foreign-scope','final-identity-drift'])('binds environment a
  if(mode==='foreign-scope')expect(collector).not.toHaveBeenCalled();
  expect(platformDiscoveryValidity({kind:'environment-rule-assignments'})).toBe(60000);expect(()=>platformDiscoveryRequest.parse({kind:'environment-rule-assignments',url:'https://foreign.example'})).toThrow();
 });
+
+it('keeps original-run recovery fixed to an assigned independent reviewer before connecting',async()=>{
+ const f=await fixture(),record={id,repoId:'synthetic/probe',content:{sourceCommit:'a'.repeat(40),tasks:[{issue:1,stage:'discovery'}]}} as unknown as DeliveryRecord;
+ const request={kind:'headless-run-reconciliation',flowId:id};
+ expect(platformDiscoveryRequest.parse(request)).toEqual(request);
+ for(const extra of [{root:'C:/other'},{env:other},{url:'https://foreign.test'},{runId:'../foreign'}])expect(()=>platformDiscoveryRequest.parse({...request,...extra})).toThrow();
+ await expect(f.broker.inspect(config(),f.root,request,()=>{},new AbortController().signal,'synthetic/probe',f.root,{record,issue:1})).rejects.toThrow('independent reviewer');expect(f.connect).not.toHaveBeenCalled();
+});
