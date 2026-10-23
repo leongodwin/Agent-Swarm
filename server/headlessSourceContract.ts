@@ -3,6 +3,8 @@ import {isDeepStrictEqual} from 'node:util';
 import {z} from 'zod';
 
 export const SOURCE_CAPSULE_BYTES=1024*1024;
+/** Retain the existing per-native-output capture limit inside the aggregate. */
+export const SOURCE_PAGE_BYTES=256000;
 export const SOURCE_PROTOCOL='whole-native-output-capsule-v1' as const;
 export const sourceNames={array:'Source_pages',loop:'Read_pages',read:'Read_inbox',validate:'Validate_source_page',append:'Append_source_page',fixture:'Fixture_source_pages',setFixture:'Set_fixture_source_pages',uriGuard:'Validate_source_uri',capsule:'Compose_source_capsule',mode:'Select_data_mode',next:'Next_page',nextAction:'Next_page_action',start:'Run_start_utc',lower:'Window_start_utc'} as const;
 export const sourceSelect='id,internetMessageId,receivedDateTime,sender,subject,isRead,body,hasAttachments,webLink';
@@ -104,6 +106,7 @@ export function validateSourceCapsule(raw:unknown,expected:{dataMode:'mailbox'|'
   if(capsule.dataMode!==expected.dataMode||capsule.correlationId!==expected.nonce||upper-lower!==14*86400000||upper<Date.parse(expected.startedAt)||upper>Date.parse(expected.endedAt)||capsule.pages.length>=100)throw Error('SOURCE_SCOPE_OR_WINDOW_DIFFERS');
   const links=new Set<string>(),seen=new Map<string,unknown>();let rawRows=0,duplicates=0,inWindow=0,read=0,unread=0;const index:{page:number;row:number;sourceId:string;receivedUtc:string;bodySha256:string}[]=[];
   for(const[ordinal,page]of capsule.pages.entries()){
+   if(Buffer.byteLength(JSON.stringify(page))>SOURCE_PAGE_BYTES)throw Error('SOURCE_PAGE_OVERSIZE');
    if(['error','truncated','preview','partial','skipped'].some(key=>Object.hasOwn(page,key)||Object.hasOwn(page.body,key)))throw Error('SOURCE_PAGE_INVALID');
    const next=page.body['@odata.nextLink'];if(ordinal<capsule.pages.length-1){if(typeof next!=='string'||links.has(next))throw Error('SOURCE_CHAIN_INCOMPLETE');validateSourceContinuation(next,capsule.window);links.add(next);}else if(next!==undefined&&next!==null)throw Error('SOURCE_CHAIN_INCOMPLETE');
    for(const[row,m]of page.body.value.entries()){if(['error','truncated','preview','partial','skipped','bodyPreview'].some(key=>Object.hasOwn(m,key)))throw Error('SOURCE_MESSAGE_INCOMPLETE');rawRows++;if(seen.has(m.id)){if(!same(seen.get(m.id),m))throw Error('SOURCE_CONFLICTING_DUPLICATE');duplicates++;continue;}seen.set(m.id,m);if(seen.size>=10000)throw Error('SOURCE_SATURATED');const at=Date.parse(m.receivedDateTime);if(at>=lower&&at<upper){inWindow++;if(m.isRead)read++;else unread++;}index.push({page:ordinal,row,sourceId:m.id,receivedUtc:m.receivedDateTime,bodySha256:sourceDigest(m.body.content)});}
