@@ -139,3 +139,9 @@ it('accepts the exact native Dataverse owner GUID without RFC UUID version bits 
  expect(JSON.parse(await fs.readFile(path.join(f.root,'headless-0-history-baseline.json'),'utf8')).policy.ownerId).toBe(nativeOwner);
  expect(()=>headlessFlowSchema.parse({...f.p,historyPolicy:{...f.p.historyPolicy,ownerId:'invalid'}})).toThrow();
 });
+it.each(['expand','include','send'])('excludes %s attachment content in reviewed standard-mail scope',mode=>{
+ const d:any=definition();
+ if(mode==='send')d.actions.Send_gate.actions.Send_report.inputs.parameters['emailMessage/Attachments']=[{Name:'file.txt',ContentBytes:'YQ=='}];
+ else d.actions.Mailbox={type:'If',expression:{equals:["@triggerBody()?['dataMode']",'mailbox']},actions:{Read:{type:'OpenApiConnection',inputs:{host:{apiId:'/providers/Microsoft.PowerApps/apis/shared_office365',operationId:mode==='expand'?'HttpRequest':'GetEmailsV3'},parameters:mode==='expand'?{Method:'GET',Uri:'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$expand=attachments'}:{includeAttachments:true}}}}};
+ expect(()=>assertHeadlessDefinition(d,owner,url,'Send_report',undefined,undefined,'standard-mail-v1')).toThrow(/attachment|read-only mail/);
+});
