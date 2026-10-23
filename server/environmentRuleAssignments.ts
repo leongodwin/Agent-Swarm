@@ -1,3 +1,4 @@
+import {dataverseGuid} from './targetOperations.ts';
 import {z} from 'zod';
 import {deliveryCommands} from './delivery.ts';
 import {parseUnambiguousJson} from './unambiguousJson.ts';
@@ -10,7 +11,7 @@ const collection=z.strictObject({value:z.array(assignment).max(1000)});
 export async function environmentRuleAssignments(binding:{tenantId:string;username:string;environmentId:string},cwd:string,signal:AbortSignal,guard:()=>void,deps={run:deliveryCommands.run,fetch:globalThis.fetch}){
  const check=()=>{signal.throwIfAborted();guard();};check();
  try{
-  z.uuid().parse(binding.tenantId);z.uuid().parse(binding.environmentId);z.email().parse(binding.username);
+  z.uuid().parse(binding.tenantId);dataverseGuid.parse(binding.environmentId);z.email().parse(binding.username);
   const raw=await deps.run({executable:'az',args:['account','get-access-token','--resource',origin,'--tenant',binding.tenantId,'--output','json']},cwd,{},signal);check();
   const credential=z.object({tenant:z.uuid(),accessToken:z.string().min(1).max(16384)}).parse(parseUnambiguousJson(raw,{maxBytes:65536}));
   const parts=credential.accessToken.split('.');if(parts.length!==3)throw Error();

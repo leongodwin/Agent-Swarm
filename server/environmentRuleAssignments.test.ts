@@ -30,3 +30,8 @@ it('propagates scope revocation and cancellation instead of publishing unavailab
  const f=fixture();f.guard.mockImplementation(()=>{throw Error('authority revoked');});await expect(f.read()).rejects.toThrow('authority revoked');expect(f.run).not.toHaveBeenCalled();
  const controller=new AbortController();controller.abort(Error('cancelled'));await expect(environmentRuleAssignments(binding,'.',controller.signal,()=>{},{run:f.run,fetch:f.fetch as typeof globalThis.fetch})).rejects.toThrow('cancelled');
 });
+it('accepts a provider environment GUID without RFC UUID version bits while retaining the exact target',async()=>{
+ const f=fixture(),nativeEnv='a996e75a-0766-ed6f-9c68-f3d7918c3e4a';
+ const result=await environmentRuleAssignments({...binding,environmentId:nativeEnv},'.',new AbortController().signal,()=>{},{run:f.run,fetch:f.fetch as typeof globalThis.fetch});
+ expect(result).toMatchObject({status:'observed',environmentId:nativeEnv});expect(f.fetch.mock.calls[0][0]).toContain('/environments/'+nativeEnv+'/assignments');
+});
