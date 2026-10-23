@@ -21,10 +21,10 @@ export async function inspectStandaloneProbeAdapter(home:string,expectedEntrySha
 }
 
 /** Called only by the exact independently approved fixed probe executor. */
-export async function connectStandaloneProbeAdapter(home:string,cwd:string,plan:StandaloneProbePlan,signal:AbortSignal,admit:()=>Promise<void>):Promise<FlowAdapter>{
+export async function connectStandaloneProbeAdapter(home:string,cwd:string,plan:StandaloneProbePlan,signal:AbortSignal,admit:()=>Promise<void>,captureNativeFailure?:(tool:string,result:unknown)=>Promise<void>):Promise<FlowAdapter>{
  const inspected=await inspectStandaloneProbeAdapter(home,plan.adapter.entrySha256);
  if(!isDeepStrictEqual(inspected.metadata,plan.adapter))throw Error('Exact standalone adapter identity required');
- const adapter=await connectFlowAdapter(cwd,signal,{beforeRequest:admit,maxPages:1,entryPath:inspected.entry,expectedEntrySha256:plan.adapter.entrySha256,requiredTools:['create_standalone_flow','read_standalone_flow_owners']});
+ const adapter=await connectFlowAdapter(cwd,signal,{beforeRequest:admit,captureNativeFailure,maxPages:1,entryPath:inspected.entry,expectedEntrySha256:plan.adapter.entrySha256,requiredTools:['create_standalone_flow','read_standalone_flow_owners']});
  try{
   if(!isDeepStrictEqual(adapter.metadata,inspected.metadata))throw Error('Native standalone adapter identity differs');
   return adapter;

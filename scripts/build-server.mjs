@@ -3,10 +3,14 @@
 // Dependencies stay external: npm installs them next to the package.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import { build } from 'esbuild';
 
 const root = path.resolve(import.meta.dirname, '..');
 const out = path.join(root, 'dist-server');
+const sourceIdentity=()=>{try{return{head:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim(),clean:!execFileSync('git',['status','--porcelain','--untracked-files=normal'],{cwd:root,encoding:'utf8',windowsHide:true}).trim()};}catch{return{head:null,clean:false};}};
+const beforeSource=sourceIdentity();
 
 fs.rmSync(out, { recursive: true, force: true });
 await build({
@@ -37,3 +41,5 @@ console.log(`built ${path.relative(root, out)}/index.js`);
 fs.copyFileSync(path.join(root,'server','headlessFlowVerification.ts'),path.join(out,'headlessFlowVerification.ts'));
 
 for(const file of ['executionAdmission.ts','aiPromptMetadata.ts','privateReportMetadata.ts','repositoryAccessMetadata.ts','platformDiscovery.ts','headlessAcceptedReport.ts','delivery.ts','index.ts'])fs.copyFileSync(path.join(root,'server',file),path.join(out,file));
+const afterSource=sourceIdentity();
+fs.writeFileSync(path.join(out,'standalone-build-identity.json'),JSON.stringify({schemaVersion:1,head:afterSource.head,clean:beforeSource.clean&&afterSource.clean&&beforeSource.head===afterSource.head,entrySha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(out,'index.js'))).digest('hex')}));

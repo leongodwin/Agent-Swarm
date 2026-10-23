@@ -4,7 +4,7 @@ import {readBoundedBytes} from './boundedJson.ts';
 
 const sha=(value:string|Uint8Array)=>crypto.createHash('sha256').update(value).digest('hex');
 export const nativeReviewTools=['whoami','list_connections','read_standalone_flow_owners','get_flow','get_run_history','list_flows','preflight_flow','create_standalone_flow','get_flow_context','publish_flow','run_flow','disable_flow','get_run_actions','get_run_action_content'] as const;
-export const nativeReviewMethods=['listFlows','getFlow','createFlow','assertNoDuplicateDisplayName','publishFlow','disableFlow','triggerFlowRun','getRunHistory','getRunActionDetails','getRunActionContent','preflightFlow','listConnections','getFlowContext','assertNotManaged','adminGetFlowPermissions','dataverseGet','ppapiOperationRequest','ppapiRequest','ppapiRequestWithFallback','requestWithToken','request','ppapiBase','ppapiFlowQs','classicFlowRpRequest','resolveTrigger','runFlowViaLogicFlowsConnector'] as const;
+export const nativeReviewMethods=['listFlows','getFlow','createFlow','assertNoDuplicateDisplayName','publishFlow','disableFlow','triggerFlowRun','getRunHistory','getRunDetails','getRunActionDetails','getRunActionContent','preflightFlow','listConnections','getFlowContext','assertNotManaged','adminGetFlowPermissions','dataverseGet','ppapiOperationRequest','ppapiRequest','ppapiRequestWithFallback','requestWithToken','request','ppapiBase','ppapiFlowQs','classicFlowRpRequest','resolveTrigger','runFlowViaLogicFlowsConnector'] as const;
 /** Select complete fixed handlers/methods from the exact compiled entry. This
  * does not claim to reproduce unrelated tools or the bundled MSAL/MCP libraries. */
 export function nativeReviewComponents(source:string,expected:string){
@@ -16,7 +16,7 @@ export function nativeReviewComponents(source:string,expected:string){
  const classStart=unique('var FlowClient = class _FlowClient {'),classEnd=source.indexOf('\n};',classStart);if(classEnd<0)throw Error('Native client boundary missing');
  const client=source.slice(classStart,classEnd);
  for(const method of nativeReviewMethods){const pattern=new RegExp('^  (?:async )?'+method+'\\(','gm'),matches=[...client.matchAll(pattern)];if(matches.length!==1)throw Error('Native client method absent or ambiguous');const start=classStart+matches[0].index!,match=/\r?\n  \}(?:\r?\n|;)/.exec(source.slice(start));if(!match)throw Error('Native method boundary missing');result.push(component('method:'+method,start,start+match.index+match[0].length));}
- for(const name of ['fetchContentLink','fetchWithNetworkError','assertTriggerInputsSatisfied','safeResult','safeError']){const prefix=['fetchContentLink','fetchWithNetworkError'].includes(name)?'async function ':'function ',start=unique(prefix+name+'('),match=/\r?\n\}(?:\r?\n|;)/.exec(source.slice(start));if(!match)throw Error('Native function boundary missing');result.push(component('function:'+name,start,start+match.index+match[0].length));}
+ for(const name of ['admitStandaloneProvider','fetchContentLink','fetchWithNetworkError','assertTriggerInputsSatisfied','safeResult','safeError']){const prefix=['fetchContentLink','fetchWithNetworkError'].includes(name)?'async function ':'function ',start=unique(prefix+name+'('),match=/\r?\n\}(?:\r?\n|;)/.exec(source.slice(start));if(!match)throw Error('Native function boundary missing');result.push(component('function:'+name,start,start+match.index+match[0].length));}
  return result;
 }
 export async function standaloneNativeReviewSources(home:string,expected:string){

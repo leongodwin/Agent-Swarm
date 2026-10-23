@@ -1,5 +1,8 @@
 /** Synthetic class only; never a provider, tenant or runtime proof. */
 export const standaloneTransportFixture=`class SyntheticTransport {
+  async publishFlow(envId, flowId, opts = {}) {
+    return this.forbiddenFallback();
+  }
   async ppapiRequest(method, url2, body) {
     return this.readLoop(method, url2, body);
   }

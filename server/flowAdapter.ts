@@ -29,7 +29,7 @@ export function flowDefinitionForPreflight(definition: Record<string, unknown>):
   };
   walk(copy); return copy;
 }
-export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admission?:{beforeRequest():Promise<void>;maxPages?:number;expectedEntrySha256?:string;entryPath?:string;requiredTools?:readonly ('create_standalone_flow'|'read_standalone_flow_owners')[]}): Promise<FlowAdapter> {
+export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admission?:{beforeRequest():Promise<void>;captureNativeFailure?:(tool:string,result:unknown)=>Promise<void>;maxPages?:number;expectedEntrySha256?:string;entryPath?:string;requiredTools?:readonly ('create_standalone_flow'|'read_standalone_flow_owners')[]}): Promise<FlowAdapter> {
   const maxPages=z.number().int().min(1).max(20).parse(admission?.maxPages??20);
   const skill = discoverSkills().skills.find((s) => s.id === 'power-automate:manage-flows');
   const entry = admission?.entryPath ?? process.env.SWARM_FLOWAGENT_ENTRY ?? (skill ? path.resolve(path.dirname(skill.file), '..', '..', 'server', 'mcp.mjs') : '');
@@ -56,13 +56,16 @@ export async function connectFlowAdapter(cwd: string, signal: AbortSignal,admiss
     return { metadata,close, async call(tool, args) {
       signal.throwIfAborted();cleanup.assertOpen();
       const result = await client.callTool({ name: tool, arguments: args }, undefined, { signal, timeout: 30000 });
+      // Protected capture precedes interpretation and preserves error wrappers.
+      // The callback owns ACL/bounds admission; errors never enter messages.
+      const failure=async()=>{await admission?.captureNativeFailure?.(tool,result);};
+      if(result.isError){await failure();throw new Error(`FlowAgent ${tool} failed; check authentication, target access and managed-solution restrictions`);}
       signal.throwIfAborted();cleanup.assertOpen();
-      if (result.isError) throw new Error(`FlowAgent ${tool} failed; check authentication, target access and managed-solution restrictions`);
       const content = z.array(z.object({ type: z.string(), text: z.string().optional() })).parse(result.content);
       const text = content.filter((item) => item.type === 'text').map((item) => item.text).join('');
       if (Buffer.byteLength(text,'utf8') > 2 * 1024 * 1024) throw new Error(`FlowAgent ${tool} response is too large`);
       let value:Record<string,unknown>|unknown[]|string|number|boolean|null;try{value=parseUnambiguousJson(text,{maxBytes:2*1024*1024}) as typeof value;}catch{throw new Error(`FlowAgent ${tool} returned invalid JSON; response content is withheld`);}
-      if (value && typeof value === 'object' && !Array.isArray(value) && (value.success === false || value.found === false || value.error)) throw new Error(`FlowAgent ${tool} returned a blocked outcome`);
+      if (value && typeof value === 'object' && !Array.isArray(value) && (value.success === false || value.found === false || value.error)) {await failure();throw new Error(`FlowAgent ${tool} returned a blocked outcome`);}
       return value;
     } };
   } catch (error) {try{await close();}catch(cleanupError){throw new AggregateError([error,cleanupError],'FlowAgent connection failed and runtime cleanup is unverified');}throw error;}

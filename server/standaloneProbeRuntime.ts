@@ -20,6 +20,7 @@ import {privateReportMetadata} from './privateReportMetadata.ts';
 import {deliveryCommands} from './delivery.ts';
 import {verifyTenantSnapshot} from './tenantDlp.ts';
 import {evaluateStandardPolicies} from './standardPolicy.ts';
+import {standaloneIntegrationGate} from './standaloneIntegrationGate.ts';
 import type {PlatformIdentity} from './platformAuth.ts';
 
 const sourceGroups=[
@@ -28,7 +29,7 @@ const sourceGroups=[
  ['server/standaloneProbeExecution.ts','server/standaloneProbeResources.ts','server/standaloneFlowOwnership.ts'],
  ['server/standaloneProbeAdapter.ts','server/standaloneFlowAgentBuild.ts','server/flowAdapter.ts'],
  ['server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/resourceLease.ts'],
- ['server/tenantDlp.ts','server/standardPolicy.ts'],
+ ['server/tenantDlp.ts','server/standardPolicy.ts','server/standaloneIntegrationGate.ts','server/standaloneBuildIdentity.ts','scripts/build-server.mjs'],
  ['server/flowCleanup.ts','server/flowEnvironment.ts','server/pinnedPreparationContracts.ts','server/tenancy.ts','server/clis.ts','server/platformCommandError.ts','server/unambiguousJson.ts','server/boundedJson.ts','server/config.ts','server/atomicFile.ts'],
 ];
 const configuration=z.strictObject({schemaVersion:z.literal(1),plan:standaloneProbePlanSchema,controls:standaloneProbeControlsSchema});
@@ -37,6 +38,7 @@ const sha=(bytes:string|Uint8Array)=>crypto.createHash('sha256').update(bytes).d
  * approval. Configuration supplies neither code nor an arbitrary definition. */
 export function standaloneProbeRuntime(context:{home:string;configurationRoot:string;cwd?:string;leaseRoot?:string;policyObservation?:(identity:PlatformIdentity)=>unknown;record():DeliveryRecord;configurationFingerprint():string;guard():void}){
  const guard=context.guard;
+ const integrated=standaloneIntegrationGate();
  const service=new StandaloneProbeReview(context.home,async()=>{
   guard();const file=path.join(context.configurationRoot,'standalone-probe-contract.json'),stat=await fs.lstat(file);
   if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||await fs.realpath(file)!==path.resolve(file))throw Error('Canonical connector probe configuration required');
@@ -66,9 +68,11 @@ export function standaloneProbeRuntime(context:{home:string;configurationRoot:st
  return{service,inspect:()=>service.view(guard),execute:async(expected:string)=>{
   guard();if(!context.cwd||!context.leaseRoot||!context.policyObservation)throw Error('Normal host connector-probe execution context required');
   const cwd=context.cwd,signal=AbortSignal.timeout(115000),run=async(executable:string,args:string[])=>{signal.throwIfAborted();guard();const result=await deliveryCommands.run({executable,args},cwd,{},signal);guard();return result;};let adapter:FlowAdapter|undefined;
-  return executeStandaloneProbe(expected,{home:context.home,leaseRoot:context.leaseRoot,releaseStartedAt:Date.now(),authority:hash=>service.authority(hash,guard),guard,
+  // Exact-main CI is an additional machine gate, never a substitute for QA.
+  await integrated();guard();
+  return executeStandaloneProbe(expected,{home:context.home,leaseRoot:context.leaseRoot,releaseStartedAt:Date.now(),authority:async hash=>{await integrated();guard();return service.authority(hash,guard);},guard,
    privateLeaf:async(plan,admit)=>{await admit();const metadata=await privateReportMetadata(plan.record.id,cwd,signal,guard);if(metadata.status!=='observed'||!('protectedOwnerOnly' in metadata)||!metadata.protectedOwnerOnly||!metadata.leaf)throw Error('Protected Windows probe capture unavailable');return metadata.leaf;},
-   connect:async(plan,nativeSignal,admit)=>{adapter=await connectStandaloneProbeAdapter(context.home,cwd,plan,nativeSignal,admit);return adapter;},
+   connect:async(plan,nativeSignal,admit,captureNativeFailure)=>{adapter=await connectStandaloneProbeAdapter(context.home,cwd,plan,nativeSignal,admit,captureNativeFailure);return adapter;},
    prepareStandaloneResources:async(plan,admit,journal,quarantine)=>{if(!adapter)throw Error('Pinned adapter required');return prepareStandaloneProbeResources(plan,{command:run,flow:adapter,admit,journal,guard},quarantine);},
    verifyStandaloneResources:async(plan,flowId,admit)=>{if(!adapter)throw Error('Pinned adapter required');return inspectStandaloneProbeResource(plan,flowId,{command:run,flow:adapter,admit,journal:async()=>{throw Error('Inspection cannot journal or mutate resources');},guard});},
   });

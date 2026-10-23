@@ -5,6 +5,11 @@ import {buildStandaloneFlowAgent,transformStandaloneFlowAgent,STANDALONE_ADAPTER
 import {standaloneTransportFixture} from './testFixtures/standaloneTransport.ts';
 const duplicateFailure='logger.warn(`[no-recreate-guard] listFlows failed during duplicate check (${err instanceof Error ? err.message : String(err)}); allowing create_flow to proceed`);\n      return;';
 const fixture=standaloneTransportFixture+`var FLOWAGENT_VERSION = "3.2.1";
+async function fetchWithNetworkError(url2, init) {
+  return await fetch(url2, init);
+}
+  server2.tool("run_flow", "synthetic", {}, {}, async ({ env, flow, body, triggerName, useCallbackUrl, wait, timeout }, extra) => {});
+  server2.tool("get_run_history", "synthetic");
   server2.tool("create_flow", "create", {}, {}, async ({connectionRefs,allowDuplicate}) => {
     try {
       let enrichedRefs = connectionRefs;
