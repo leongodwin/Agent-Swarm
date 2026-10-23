@@ -6,7 +6,7 @@ import type {DeliveryRecordContent} from './deliveryRecord.ts';
 const id=z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),text=z.string().trim().min(1).max(2000);
 const ids=z.array(id).max(100).refine(v=>new Set(v).size===v.length,'Duplicate task links');
 export const integrationQaSchema=z.strictObject({
- id,owner:id,purpose:z.enum(['preparation','slice','expansion']),requirementIds:ids.optional(),runner:z.literal('delivery'),
+ id,owner:id,purpose:z.enum(['preparation','slice','expansion']),requirementIds:ids.optional(),preparation:z.strictObject({acceptanceCriteria:z.array(z.string().trim().min(1).max(500)).min(1).max(100),scenarios:z.array(z.strictObject({id,kind:z.enum(['happy','denied','failure']),given:text,when:text,then:text})).min(3).max(20)}).optional(),runner:z.literal('delivery'),
  dependsOn:z.array(z.number().int().positive()).min(1).max(200),
  checkIds:ids.refine(v=>v.length>0,'Declare integration checks'),
  cases:z.array(z.strictObject({checkId:id,scenarioId:id,testName:z.string().trim().min(1).max(200),criterion:text,nativeAssertion:deniedAssertionSchema.optional(),functionalAssertion:functionalRejectedCheckSchema.shape.contract.optional()})).min(1).max(200),
@@ -54,21 +54,24 @@ export function taskPlanErrors(content:DeliveryRecordContent):string[]{
       if(q.dependsOn.length!==new Set(q.dependsOn).size||q.dependsOn.length!==required.length||required.some(n=>!q.dependsOn.includes(n)))errors.push(`${q.id}: integration prerequisites must be exactly the scoped author tasks`);
       const requirements=purpose==='preparation'?(q.requirementIds??[]):purpose==='slice'?content.slice.requirementIds:content.requirements.map(r=>r.id);
       if(purpose==='preparation'&&(!requirements.length||requirements.some(id=>!content.requirements.some(r=>r.id===id))||spec.components.some(c=>c.platform!=='flow')))errors.push(`${q.id}: preparation requires explicit declared requirements and flow-only components`);
-      if(purpose!=='preparation'&&q.requirementIds!==undefined)errors.push(`${q.id}: real acceptance scope cannot be narrowed`);
-      const scenarios=spec.journeys.filter(j=>j.requirementIds.some(r=>requirements.includes(r))).flatMap(j=>j.scenarios);
+      if(purpose!=='preparation'&&(q.requirementIds!==undefined||q.preparation!==undefined))errors.push(`${q.id}: real acceptance scope cannot be narrowed`);
+      const scenarios=purpose==='preparation'?(q.preparation?.scenarios??[]):spec.journeys.filter(j=>j.requirementIds.some(r=>requirements.includes(r))).flatMap(j=>j.scenarios);
+      if(purpose==='preparation'&&(!q.preparation||new Set(scenarios.map(s=>s.id)).size!==scenarios.length||scenarios.some(s=>spec.journeys.some(j=>j.scenarios.some(real=>real.id===s.id)))||['happy','denied','failure'].some(kind=>!scenarios.some(s=>s.kind===kind))||new Set(q.preparation.acceptanceCriteria).size!==q.preparation.acceptanceCriteria.length))errors.push(`${q.id}: declare distinct preparation-only happy, denied and failure scenarios and criteria`);
       const componentIds=new Set(scoped.flatMap(t=>t.componentIds));
       const authorChecks=new Set(plan.tasks.flatMap(t=>t.checkIds)),scopedChecks=new Set(scoped.flatMap(t=>t.checkIds));
       const checks=spec.checks.filter(c=>purpose==='preparation'?c.requirementIds.some(r=>requirements.includes(r)):scopedChecks.has(c.id)||!authorChecks.has(c.id)&&(c.requirementIds.some(r=>requirements.includes(r))||c.componentIds.some(id=>componentIds.has(id))));
       if(q.checkIds.length!==checks.length||checks.some(c=>!q.checkIds.includes(c.id)))errors.push(`${q.id}: integration contract must cover every scoped check`);
       for(const key of q.checkIds)if(!checks.some(c=>c.id===key))errors.push(`${q.id}: unknown or unrelated integration check ${key}`);
-      for(const check of checks.filter(c=>['runtime','access'].includes(c.kind)))for(const id of check.scenarioIds.filter(id=>scenarios.some(s=>s.id===id)))if(!q.cases.some(row=>row.checkId===check.id&&row.scenarioId===id))errors.push(`${q.id}: missing executable check/scenario ${check.id}/${id}`);
+      for(const check of checks.filter(c=>purpose!=='preparation'&&['runtime','access'].includes(c.kind)))for(const id of check.scenarioIds.filter(id=>scenarios.some(s=>s.id===id)))if(!q.cases.some(row=>row.checkId===check.id&&row.scenarioId===id))errors.push(`${q.id}: missing executable check/scenario ${check.id}/${id}`);
+      if(purpose==='preparation')for(const check of checks.filter(c=>['runtime','access'].includes(c.kind)))if(!q.cases.some(row=>row.checkId===check.id))errors.push(`${q.id}: missing executable preparation check ${check.id}`);
       for(const scenario of scenarios)if(!q.cases.some(c=>c.scenarioId===scenario.id))errors.push(`${q.id}: missing executable scenario ${scenario.id}`);
       for(const row of q.cases){const check=spec.checks.find(c=>c.id===row.checkId),scenario=scenarios.find(s=>s.id===row.scenarioId);
         if((row.nativeAssertion||row.functionalAssertion)&&scenario?.kind!=='denied')errors.push(`${q.id}: native denial requires a denied scenario`);
         if(row.nativeAssertion&&row.functionalAssertion)errors.push(`${q.id}: choose one explicit denial assurance contract`);
-        if(!q.checkIds.includes(row.checkId)||!check||!['runtime','access'].includes(check.kind)||!check.scenarioIds.includes(row.scenarioId)||!scenario)errors.push(`${q.id}: unrelated integration scenario/check binding`);
-        if(!content.requirements.some(r=>requirements.includes(r.id)&&check?.requirementIds.includes(r.id)&&spec.journeys.some(j=>j.scenarios.some(s=>s.id===row.scenarioId)&&j.requirementIds.includes(r.id))&&r.acceptance===row.criterion))errors.push(`${q.id}: unrelated acceptance criterion`);
+        if(!q.checkIds.includes(row.checkId)||!check||!['runtime','access'].includes(check.kind)||(purpose!=='preparation'&&!check.scenarioIds.includes(row.scenarioId))||!scenario)errors.push(`${q.id}: unrelated integration scenario/check binding`);
+        if(purpose==='preparation'?!q.preparation?.acceptanceCriteria.includes(row.criterion)||!check?.requirementIds.some(id=>requirements.includes(id)):!content.requirements.some(r=>requirements.includes(r.id)&&check?.requirementIds.includes(r.id)&&spec.journeys.some(j=>j.scenarios.some(s=>s.id===row.scenarioId)&&j.requirementIds.includes(r.id))&&r.acceptance===row.criterion))errors.push(`${q.id}: unrelated acceptance criterion`);
       }
+      if(purpose==='preparation'&&q.preparation?.acceptanceCriteria.some(criterion=>!q.cases.some(c=>c.criterion===criterion)))errors.push(`${q.id}: preparation criterion lacks an executable case`);
       if(new Set(q.cases.map(c=>`${c.checkId}:${c.scenarioId}`)).size!==q.cases.length||q.cases.some(c=>q.cases.some(other=>other.testName===c.testName&&other.scenarioId!==c.scenarioId)))errors.push(`${q.id}: duplicate executable scenario bindings`);
     }
     if(!content.tasks.some(t=>t.stage==='implementation')&&qa.some(q=>q.purpose==='expansion'))errors.push('Expansion integration requires scoped implementation tasks');
