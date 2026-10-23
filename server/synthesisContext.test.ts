@@ -16,7 +16,7 @@ it('retains current scope, critical findings and evidence while explicitly index
 it('retains whole verified evidence when it fits and explicitly marks omitted evidence without truncating',()=>{
  const refs=[{reference:'large',sha256:'a'.repeat(64),status:'captured',text:'£'.repeat(1000)},{reference:'small',sha256:'b'.repeat(64),status:'captured',text:'current source'}],original=JSON.stringify(refs);
  const text=boundedSynthesisPrompt({requirements:'exact original requirements'},refs,800),result=JSON.parse(text);
- expect(Buffer.byteLength(text)).toBeLessThanOrEqual(800);expect(result.capturedEvidence[0]).toMatchObject({reference:'large',sha256:'a'.repeat(64),status:'unavailable'});expect(result.capturedEvidence[0].text).toBeUndefined();expect(result.capturedEvidence[0].reason).toContain('do not infer');expect(result.capturedEvidence[1]).toEqual(refs[1]);expect(JSON.stringify(refs)).toBe(original);
+ expect(Buffer.byteLength(text)).toBeLessThanOrEqual(800);expect(result.capturedEvidence[0]).toMatchObject({reference:'large',sha256:'a'.repeat(64),status:'unavailable',textOmitted:true});expect(result.capturedEvidence[0].text).toBeUndefined();expect(result.capturedEvidenceOmissionRule).toContain('do not infer');expect(result.capturedEvidence[1]).toEqual(refs[1]);expect(JSON.stringify(refs)).toBe(original);
 });
 it('blocks oversized current scope instead of omitting requirements or increasing the bound',()=>{
  expect(()=>boundedSynthesisPrompt({contracts:'x'.repeat(2000)},[],1000)).toThrow('scope exceeds');expect(synthesisRecordContext(undefined)).toBeNull();
@@ -25,7 +25,37 @@ it('retains complete catalogue text when no discovery record can supply a same-p
 it('does not refill saved history capacity with large evidence texts and retains their exact references',()=>{
  const refs=[{reference:'large-current-source',sha256:'a'.repeat(64),status:'captured',text:'x'.repeat(16*1024+1)},{reference:'small-contract',sha256:'b'.repeat(64),status:'captured',text:'Current exact contract'}];
  const value=JSON.parse(boundedSynthesisPrompt({contracts:'Current contracts stay whole'},refs));
- expect(value.capturedEvidence[0]).toMatchObject({reference:refs[0].reference,sha256:refs[0].sha256,status:'unavailable'});expect(value.capturedEvidence[0]).not.toHaveProperty('text');expect(value.capturedEvidence[0].reason).toContain('do not infer');expect(value.capturedEvidence[1]).toEqual(refs[1]);expect(value.contracts).toBe('Current contracts stay whole');
+ expect(value.capturedEvidence[0]).toMatchObject({reference:refs[0].reference,sha256:refs[0].sha256,status:'unavailable',textOmitted:true});expect(value.capturedEvidence[0]).not.toHaveProperty('text');expect(value.capturedEvidenceOmissionRule).toContain('do not infer');expect(value.capturedEvidence[1]).toEqual(refs[1]);expect(value.contracts).toBe('Current contracts stay whole');
+});
+it('shares omission instructions without losing any source identity or original failure reason at the bound',()=>{
+ const refs:{reference:string;sha256:string;status:string;text?:string;reason?:string}[]=[...Array.from({length:24},(_,i)=>({reference:'source-'+i,sha256:i.toString(16).padStart(64,'0'),status:'captured',text:'x'.repeat(32768)})),{reference:'missing-source',sha256:'f'.repeat(64),status:'unavailable',reason:'Original digest mismatch'}],base={criticalContract:'x'.repeat(257000)},before=JSON.stringify(refs);
+ const text=boundedSynthesisPrompt(base,refs),value=JSON.parse(text);
+ expect(Buffer.byteLength(text)).toBeLessThanOrEqual(262144);expect(value.criticalContract).toBe(base.criticalContract);
+ expect(value.capturedEvidenceOmissionRule).toContain('textOmitted:true');expect(value.capturedEvidenceOmissionRule).toContain('do not infer');
+ expect(value.capturedEvidence.slice(0,24)).toEqual(refs.slice(0,24).map(({text,...ref})=>({...ref,status:'unavailable',textOmitted:true})));
+ expect(value.capturedEvidence[24]).toEqual(refs[24]);expect(JSON.stringify(refs)).toBe(before);
+ expect(()=>boundedSynthesisPrompt({...base,additionalContract:'y'.repeat(3000)},refs)).toThrow('scope exceeds');
+});
+it('links captured identities losslessly to existing receipts without borrowing their freshness or changing source verification',()=>{
+ const pool=Array.from({length:24},(_,i)=>({reference:'C:/owned/'+('path/'.repeat(40))+i+'.json',sha256:i.toString(16).padStart(64,'0'),observedAt:'2026-10-01T00:00:00Z',expiresAt:'2026-10-01T00:01:00Z'}));
+ const refs:{reference:string;sha256:string;status:string;text?:string;reason?:string}[]=[...pool.map(({reference,sha256})=>({reference,sha256,status:'captured',text:'x'.repeat(32768)})),{reference:'C:/different/source.json',sha256:pool[0].sha256,status:'unavailable',reason:'Original source unavailable'}];
+ const base={criticalContract:'x'.repeat(245000),discoveryEvidence:{projection:'planning-only-exact-evidence-pool-v5',evidencePool:pool}},before=JSON.stringify({base,refs});
+ const text=boundedSynthesisPrompt(base,refs),value=JSON.parse(text);
+ expect(Buffer.byteLength(text)).toBeLessThanOrEqual(262144);expect(value.criticalContract).toBe(base.criticalContract);expect(value.discoveryEvidence).toEqual(base.discoveryEvidence);
+ expect(value.capturedEvidenceIdentityRule).toContain('ONLY reference and sha256');expect(value.capturedEvidenceIdentityRule).toContain('no observation time, expiry, approval or readiness');
+ const expanded=value.capturedEvidence.map(({sourceEvidenceIndex,...item}:any)=>sourceEvidenceIndex===undefined?item:{reference:pool[sourceEvidenceIndex].reference,sha256:pool[sourceEvidenceIndex].sha256,...item});
+ expect(expanded.slice(0,24)).toEqual(refs.slice(0,24).map(({text,...item})=>({...item,status:'unavailable',textOmitted:true})));
+ expect(expanded[24]).toEqual(refs[24]);expect(JSON.stringify({base,refs})).toBe(before);
+ expect(()=>boundedSynthesisPrompt({...base,additional:'y'.repeat(10000)},refs)).toThrow('scope exceeds');
+});
+it.each([null,{projection:'other',evidencePool:[]},{projection:'planning-only-exact-evidence-pool-v5',evidencePool:null}])('retains literal source identity without a compatible same-prompt pool: %j',discoveryEvidence=>{
+ const ref={reference:'exact.json',sha256:'a'.repeat(64),status:'captured',text:'Complete text'};
+ const value=JSON.parse(boundedSynthesisPrompt({discoveryEvidence},[ref]));expect(value.capturedEvidence).toEqual([ref]);expect(value).not.toHaveProperty('capturedEvidenceIdentityRule');
+});
+it('does not merge identities with different digests and preserves indices around malformed or historical entries',()=>{
+ const ref={reference:'exact.json',sha256:'a'.repeat(64),status:'captured',text:'Complete text'},pool=[null,'invalid',Object.create({reference:ref.reference,sha256:ref.sha256}),{reference:ref.reference,sha256:'b'.repeat(64)},{reference:ref.reference,sha256:ref.sha256,observedAt:'2020-01-01T00:00:00Z'}];
+ const value=JSON.parse(boundedSynthesisPrompt({discoveryEvidence:{projection:'planning-only-exact-evidence-pool-v5',evidencePool:pool}},[ref]));
+ expect(value.capturedEvidence).toEqual([{status:'captured',text:ref.text,sourceEvidenceIndex:4}]);expect(value.discoveryEvidence.evidencePool).toEqual(pool);expect(value.capturedEvidence[0]).not.toHaveProperty('observedAt');
 });
 it('keeps accumulated historical context within the existing bound and detects changes beyond an excerpt',()=>{
  const record={id:'record',revision:105,sha256:'b'.repeat(64),content:{contracts:['current executable contract'],findings:Array.from({length:160},(_,i)=>({id:'history-'+i,critical:false,status:'observed',conclusion:'blocked',statement:'Historical detail '.repeat(300),remedy:'Original remedy '.repeat(300),evidence:[{reference:'retained-'+i+'.json',sha256:'a'.repeat(64)}]}))}} as unknown as DeliveryRecord;

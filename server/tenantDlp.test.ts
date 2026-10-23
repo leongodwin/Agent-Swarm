@@ -157,16 +157,21 @@ function InvokeApiNoParseContent { param($Route,$Method,[switch]$ThrowOnFailure)
 `);
   const stdout=await new Promise<string>((resolve,reject)=>{
     const child=spawn('powershell.exe',['-NoProfile','-File',script,'-Reader',fileURLToPath(new URL('./tenantDlpReader.ps1',import.meta.url)),'-Initial',initial],{windowsHide:true,stdio:'pipe'});
-    const timer=setTimeout(()=>{child.kill();reject(new Error('Synthetic protocol timed out'));},15000);
-    let out='',err='';child.stdout.on('data',value=>{out+=value;});child.stderr.on('data',value=>{err+=value;});
-    child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('close',code=>{clearTimeout(timer);if(code!==0)reject(new Error(err));else resolve(out);});
+    // Cold Windows PowerShell startup is separate from the protocol deadline.
+    // Once the first reader response arrives, the original 15-second protocol
+    // budget applies. Await close after a timeout so fixture cleanup cannot race it.
+    let failure:Error|undefined,ready=false;
+    const terminate=(message:string)=>{failure??=new Error(message);child.kill();};
+    let timer=setTimeout(()=>terminate('Synthetic PowerShell startup timed out'),60000);
+    let out='',err='';child.stdout.on('data',value=>{out+=value;if(!ready&&out.split(/\r?\n/).some(line=>line.startsWith('SWARM_DLP '))){ready=true;clearTimeout(timer);timer=setTimeout(()=>terminate('Synthetic protocol timed out'),15000);}});child.stderr.on('data',value=>{err+=value;});
+    child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('close',code=>{clearTimeout(timer);if(failure)reject(failure);else if(code!==0)reject(new Error(err));else resolve(out);});
     child.stdin.end([JSON.stringify({command:'refresh',requestId:next}),JSON.stringify({command:'refresh',requestId:initial,extra:'unsupported'}),JSON.stringify({command:'refresh',requestId:initial})].join('\n')+'\n');
   });
   const lines=stdout.trim().split(/\r?\n/).map(line=>{expect(line.startsWith('SWARM_DLP ')).toBe(true);return JSON.parse(line.slice(10));});
   expect(lines).toHaveLength(2);
   expect(lines.map(line=>line.requestId)).toEqual([initial,next]);
   expect(lines.map(line=>line.result.snapshot.policies[0].name)).toEqual(['read-1','read-2']);
-},20000);
+},90000);
 it.runIf(process.platform==='win32')('executes the actual PowerShell pager against empty, paginated, failed and hostile responses',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-policy-pager-'));roots.push(root);
   const script=path.join(root,'pager-test.ps1');

@@ -20,7 +20,7 @@ async function launchBrowser() {
   return playwright.chromium.launch({ channel: 'chrome', headless: true });
 }
 export async function verifyIndependently(plan: ReleasePlan, root: string, evidence: string, signal: AbortSignal, launch: () => Promise<Browser> = launchBrowser, execution?:BrowserVerificationContext) {
-  if(plan.verification.headlessFlow){if(!execution?.assertOwned)throw Error('Headless verification requires a runner-owned lease/scope guard');return verifyHeadlessFlow(plan.verification.headlessFlow,plan.verification.baseUrl,evidence,signal,undefined,execution.assertOwned,path.join(os.homedir(),'.cubefarm','headless-dispatch-claims'),undefined,execution.acceptedHeadlessReport,execution.executionAdmission);}
+  if(plan.verification.headlessFlow){if(!execution?.assertOwned)throw Error('Headless verification requires a runner-owned lease/scope guard');return verifyHeadlessFlow(plan.verification.headlessFlow,plan.verification.baseUrl,evidence,signal,undefined,execution.assertOwned,path.join(os.homedir(),'.cubefarm','headless-dispatch-claims'),undefined,execution.acceptedHeadlessReport,execution.executionAdmission,plan.quality.maxTaskDurationMs);}
   if(plan.verification.browserSession)return coordinatorBrowserEnabled()?verifyCoordinatorBrowser(plan,root,evidence,signal,execution):verifyConnectedBrowser(plan,evidence,signal,undefined,execution);
   if (signal.aborted) throw new Error('Verification cancelled');
   const browser = await launch();
