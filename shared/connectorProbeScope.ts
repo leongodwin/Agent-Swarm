@@ -6,6 +6,7 @@ import {z} from 'zod';
 export const connectorProbeScopeSchema=z.strictObject({
  kind:z.literal('outlook-folder-metadata-probe-v1'),taskIssue:z.number().int().positive(),
  flowComponentId:z.literal('digest-flow'),solutionResource:z.string().regex(/^[A-Za-z0-9_-]{1,160}$/),
+ authoringOrderContractId:z.literal('connector-metadata-probe-authority'),
  resourcePolicy:z.literal('same-eventual-owned-flow'),
  historyPolicy:z.literal('existing-tenant-history-and-protected-windows-leaf'),
  businessAuthorityGranted:z.literal(false),messageAccessAllowed:z.literal(false),sendAllowed:z.literal(false),
