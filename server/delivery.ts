@@ -175,7 +175,8 @@ export const deliveryCommands: DeliveryDependencies = {
         try{await stopping;}catch{failure='Delivery process-tree cleanup is unverified; inspect native processes before recovery';}
         clean();
         if(!failure)try{stdout+=outDecoder.decode();stderr+=errDecoder.decode();}catch{failure='Delivery output contained invalid UTF-8';}
-        if (failure || code !== 0 || pacReportedError(command.executable, stdout)) reject(new PlatformCommandError(`${path.basename(command.executable)} failed: ${failure || stderr.slice(-4000) || (pacReportedError(command.executable, stdout) ? stdout.slice(-4000) : `exit ${code}`)}${providerErrorCode(stdout)?` (provider ${providerErrorCode(stdout)})`:''}`,providerErrorCode(stdout)));
+        const nativeCode=providerErrorCode(stdout)??providerErrorCode(stderr);
+        if (failure || code !== 0 || pacReportedError(command.executable, stdout)) reject(new PlatformCommandError(`${path.basename(command.executable)} failed: ${failure || stderr.slice(-4000) || (pacReportedError(command.executable, stdout) ? stdout.slice(-4000) : `exit ${code}`)}${nativeCode?` (provider ${nativeCode})`:''}`,nativeCode));
         else resolve(stdout);
       })().catch(reject);});
     });

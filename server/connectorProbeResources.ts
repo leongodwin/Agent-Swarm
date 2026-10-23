@@ -40,7 +40,7 @@ export async function prepareConnectorProbeResources(plan:ConnectorProbePlan,dep
  await deps.journal('created-flow',{flowId:created.name,publisherId,solutionId,referenceId});
  const context=z.object({workflowId:dataverseGuid,isManaged:z.literal(false),ownerId:z.literal(plan.target.userId),category:z.literal(5),warning:z.null().optional()}).parse(await flow('get_flow_context',{env:plan.identity.environmentId,flow:created.name}));
  z.object({workflowid:z.literal(context.workflowId),category:z.literal(5),type:z.literal(1),_ownerid_value:z.literal(plan.target.userId)}).parse(await request('GET',`workflows(${context.workflowId})?$select=workflowid,category,type,_ownerid_value`));
- const membership={ComponentId:context.workflowId,ComponentType:29,SolutionUniqueName:plan.solution.uniqueName,AddRequiredComponents:false,DoNotIncludeSubcomponents:true,IncludedComponentSettingsValues:[]};
+ const membership={ComponentId:context.workflowId,ComponentType:29,SolutionUniqueName:plan.solution.uniqueName,AddRequiredComponents:false};
  await deps.journal('add-membership-intent',{...membership,solutionId});await request('POST','AddSolutionComponent',membership);
  const members=await rows('solutioncomponents?$select=objectid,componenttype&$filter='+encodeURIComponent(`_solutionid_value eq ${solutionId} and (objectid eq ${context.workflowId} or objectid eq ${referenceId})`)+'&$top=3');
  if(members.filter(r=>r.objectid===context.workflowId&&r.componenttype===29).length!==1||members.filter(r=>r.objectid===referenceId).length!==1||members.length!==2)throw Error('Exact same-resource solution membership absent or ambiguous');

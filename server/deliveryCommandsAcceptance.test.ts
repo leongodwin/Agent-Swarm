@@ -56,3 +56,4 @@ it('reports unverified Windows process-tree cleanup even if the root fallback ex
   try { f.controller.abort(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); f.child.emit('close', 0); await failed; expect(native.execFile).toHaveBeenCalledWith('taskkill', ['/PID', '12345', '/T', '/F'], { windowsHide: true, timeout:4000 }, expect.any(Function)); expect(f.child.kill).toHaveBeenCalledOnce(); }
   finally { Object.defineProperty(process, 'platform', descriptor); }
 });
+it.each(['stdout','stderr'] as const)('retains whitelisted provider codes from native %s failures',async stream=>{const f=fixture();const outcome=f.run().catch(error=>error);f.child[stream].emit('data',Buffer.from('ERROR: HTTP 400: [0x80040216] synthetic provider diagnostic'));f.child.emit('close',1);expect((await outcome).platformErrorCode).toBe('0x80040216');});
