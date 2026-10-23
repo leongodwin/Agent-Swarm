@@ -31,13 +31,15 @@ export function connectorProbeRuntime(context:{home:string;configurationRoot:str
   const input=configuration.parse(parseUnambiguousJson(new TextDecoder('utf8',{fatal:true}).decode(bytes),{maxBytes:32768}));
   const implementationSources=await Promise.all(sources.map(async name=>{const file=fileURLToPath(new URL('../'+name,import.meta.url)),bytes=await readBoundedBytes(file,128*1024);if(!bytes)throw Error('Pinned connector probe implementation absent');return{file:name,sha256:sha(bytes),text:new TextDecoder('utf8',{fatal:true}).decode(bytes)};}));
   const identity={tenantId:input.plan.identity.tenantId,caller:input.plan.identity.username},rawPolicy=context.policyObservation?.(input.plan.identity),policy=rawPolicy===undefined?null:verifyTenantSnapshot(rawPolicy,identity),evaluation=policy?evaluateStandardPolicies(policy,identity,input.plan.identity.environmentId,[{id:'digest-flow',complete:true,connectors:['shared_office365']}]):null;
+  if(context.policyObservation&&!policy)throw Error('Current live standard policy required');
   if(evaluation&&evaluation.status!=='clear')throw Error('Current standard policy does not admit the fixed probe');
   // Approval binds the exact evaluated policy content. Authentic rereads of
   // unchanged content may refresh the live 15-minute observation, never its
   // original documentary receipt or review expiry. Every authority check
   // re-runs the existing freshness, identity and classification checks.
   const configurationSha256=connectorProbeDigest({contractSha256:sha(bytes),capabilities:context.configurationFingerprint(),standardPolicy:policy?{tenantId:policy.tenantId,caller:policy.caller,moduleVersion:policy.moduleVersion,policySha256:evaluation!.policySha256}:null});
-  guard();return{record:context.record(),plan:{...input.plan,configurationSha256,implementationSha256:connectorProbeDigest(implementationSources)},configurationSha256,controls:input.controls,implementationSources};
+  const configurationEvidence=policy?{standardPolicy:{tenantId:policy.tenantId,caller:policy.caller,moduleVersion:policy.moduleVersion,policySha256:evaluation!.policySha256!,policies:policy.policies,maxAgeMs:900000 as const,classification:'clear' as const,complianceVerified:false as const}}:undefined;
+  guard();return{record:context.record(),plan:{...input.plan,configurationSha256,implementationSha256:connectorProbeDigest(implementationSources)},configurationSha256,configurationEvidence,controls:input.controls,implementationSources};
  });
  return{service,inspect:()=>service.view(guard),execute:async(expected:string)=>{
   guard();if(!context.cwd||!context.leaseRoot||!context.policyObservation)throw Error('Normal host connector-probe execution context required');
