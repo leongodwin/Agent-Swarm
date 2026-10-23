@@ -21,6 +21,20 @@ function fixture():DeliveryRecord{
 it('indexes a full scope above87KiB without truncating source or weakening its authority hash',()=>{
  const record=fixture(),before=JSON.stringify(record),full=taskScope(record.content,6),manifest=taskInputManifest(record,6);expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(87000);expect(Buffer.byteLength(JSON.stringify(manifest))).toBeLessThan(TASK_CONTEXT_BYTES);expect(JSON.stringify(record)).toBe(before);expect(manifest.taskHash).toBe(hash(full));expect(manifest.taskHash).toBe(taskScopeHash(record,6));expect(manifest.criticalFindings).toHaveLength(30);expect(manifest.inputIndex.filter(x=>x.section==='finding')).toHaveLength(30);
 });
+it('packs an oversized repeated-label index losslessly while retaining literal API/source checks',()=>{
+ const record=fixture();record.content.findings=Array.from({length:110},(_,i)=>({...record.content.findings[0],id:'e'+i,statement:'Exact original source '+i}));
+ const before=JSON.stringify(record),manifest=taskInputManifest(record,6),prompt=JSON.parse(taskInputPrompt(record,6));
+ expect(prompt.taskInputs.projection).toBe('exact-task-input-index-v2');
+ const {projection,inputIndexEncoding,inputIndexRows,...rest}=prompt.taskInputs;
+ const expanded={...rest,inputIndex:inputIndexRows.map(([section,id,bytes,sha256]:[string,string,number,string])=>({section,id,bytes,sha256}))};
+ expect(expanded).toEqual(manifest);expect(prompt.taskInputs.criticalFindings).toEqual(manifest.criticalFindings);
+ expect(prompt.taskAuthorityHash).toBe(taskAuthorityHash(record,6));expect(JSON.stringify(record)).toBe(before);
+ expect(Buffer.byteLength(taskInputPrompt(record,6))).toBeLessThanOrEqual(TASK_CONTEXT_BYTES);
+ for(const row of expanded.inputIndex){const result=readTaskInput(record,6,row.section,row.id);expect(result.bytes).toBe(row.bytes);expect(result.sha256).toBe(row.sha256);}
+ record.content.taskPlan!.tasks[1].inputs=['x'.repeat(TASK_CONTEXT_BYTES)];
+ expect(()=>taskInputPrompt(record,6)).toThrow('24 KiB');
+});
+
 it('returns every indexed input as complete exact hashed bytes with unchanged record/task binding',()=>{
  const record=fixture(),manifest=taskInputManifest(record,6);for(const row of manifest.inputIndex){const result=readTaskInput(record,6,row.section,row.id);expect(result.sha256).toBe(hash(result.value));expect(result.sha256).toBe(row.sha256);expect(result.bytes).toBe(Buffer.byteLength(JSON.stringify(result.value)));expect(result.taskHash).toBe(manifest.taskHash);expect(result.reference).toEqual(manifest.reference);}
  expect(readTaskInput(record,6,'finding','e29').value).toEqual(record.content.findings[29]);expect(readTaskInput(record,6,'global','global').value).toEqual(taskScope(record.content,6)!.global);
@@ -58,8 +72,8 @@ it.each(['other-owner','wrong-qa','manager','foreign-project','stale-reference',
 });
 it('rejects stale references even when a new revision preserves the task scope hash',async()=>{const f=await stored();await f.records.save('synthetic/repo',1,f.record.content,'ceo');expect(taskScopeHash(f.records.current('synthetic/repo')!,6)).toBe(taskScopeHash(f.record,6));await expect(f.handler('devB','dev')(f.input)).rejects.toThrow('changed');});
 it('applies the24KiB limit to the complete injected prompt rather than only its manifest',()=>{
- const record=fixture(),task=record.content.taskPlan!.tasks[1];let size=0;
- for(let n=1;n<=20000;n+=25){task.inputs=Array.from({length:Math.ceil(n/1900)},(_,i)=>'x'.repeat(Math.min(1900,n-i*1900)));const bytes=Buffer.byteLength(JSON.stringify(taskInputManifest(record,6)));if(bytes>TASK_CONTEXT_BYTES-150&&bytes<TASK_CONTEXT_BYTES){size=bytes;break;}}
+ const record=fixture();record.content.findings=[];const task=record.content.taskPlan!.tasks[1];let size=0;
+ for(let n=1;n<=24000;n+=25){task.inputs=Array.from({length:Math.ceil(n/1900)},(_,i)=>'x'.repeat(Math.min(1900,n-i*1900)));const bytes=Buffer.byteLength(JSON.stringify(taskInputManifest(record,6)));if(bytes>TASK_CONTEXT_BYTES-150&&bytes<TASK_CONTEXT_BYTES){size=bytes;break;}}
  expect(size).toBeGreaterThan(0);expect(size).toBeLessThan(TASK_CONTEXT_BYTES);expect(Buffer.byteLength(taskInputPrompt(record,6))).toBeGreaterThan(TASK_CONTEXT_BYTES);expect(taskPlanningBlockers(record).join(' ')).toContain('24 KiB');
 });
 it.each(['slice-outside','oversized-task'])('rejects %s planning before architecture capacity, admission or model usage',async mode=>{

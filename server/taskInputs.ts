@@ -39,7 +39,14 @@ export function taskInputPrompt(record:RecordInput,issue:number){
   const envelope={reference:recordReference(record as DeliveryRecord),issue,taskHash:taskScopeHash(record,issue),...row};
   if(Buffer.byteLength(JSON.stringify(envelope))>TASK_CONTEXT_BYTES)throw new HttpError(409,`Task input ${row.section}/${row.id} exceeds 24 KiB; owner must split its source contract`);
  }
- return JSON.stringify({taskInputs:taskInputManifest(record,issue),taskAuthorityHash:taskAuthorityHash(record as DeliveryRecord,issue),instruction:'Work only within this task contract. For delivery_record action task_input, copy reference, issue and taskHash from taskInputs exactly. taskAuthorityHash is the server approval fingerprint, NOT the input retrieval hash; never submit it as taskHash. Retrieve relevant complete inputs; no input has been truncated. Stop on missing, changed or oversized inputs and declared stop conditions. Read applicable skills and verify MCP capabilities before authoring. Dependencies require accepted merged artifacts, not merely closed issues. Report checks with actual evidence.'});
+ const manifest=taskInputManifest(record,issue);
+ const prompt={taskInputs:manifest,taskAuthorityHash:taskAuthorityHash(record as DeliveryRecord,issue),instruction:'Work only within this task contract. For delivery_record action task_input, copy reference, issue and taskHash from taskInputs exactly. taskAuthorityHash is the server approval fingerprint, NOT the input retrieval hash; never submit it as taskHash. Retrieve relevant complete inputs; no input has been truncated. Stop on missing, changed or oversized inputs and declared stop conditions. Read applicable skills and verify MCP capabilities before authoring. Dependencies require accepted merged artifacts, not merely closed issues. Report checks with actual evidence.'};
+ const literal=JSON.stringify(prompt);if(Buffer.byteLength(literal)<=TASK_CONTEXT_BYTES)return literal;
+ // Share field labels only when needed. API manifests and retrieved source rows
+ // stay literal; every source byte and task/authority hash remains unchanged.
+ const {inputIndex,...rest}=manifest;
+ const compact=JSON.stringify({...prompt,taskInputs:{...rest,projection:'exact-task-input-index-v2',inputIndexEncoding:'Each inputIndexRows entry is [section,id,bytes,sha256], in original order. Expand those exact four values before task_input retrieval. This shares field labels only; no input, size, digest, scope or authority is omitted or inferred.',inputIndexRows:inputIndex.map(({section,id,bytes,sha256})=>[section,id,bytes,sha256])}});
+ return Buffer.byteLength(compact)<Buffer.byteLength(literal)?compact:literal;
 }
 /** Admission-only checks preserve historical records for audit and correction. */
 export function taskPlanningBlockers(record:RecordInput):string[]{
