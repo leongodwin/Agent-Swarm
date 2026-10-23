@@ -12,7 +12,7 @@ async function fixture(){
  const call=vi.fn(async(tool:string,args:any):Promise<any>=>{
   if(tool==='whoami')return{azIdentity:{tenantId:plan.identity.tenantId,user:plan.identity.username},tokenIdentity:{tenantId:plan.identity.tenantId,username:plan.identity.username},effectiveConnectivityIdentity:{tenantId:plan.identity.tenantId,username:plan.identity.username},identityMismatch:false,connectivityIdentityMismatch:false};
   if(tool==='get_flow'){if(args.path==='properties.definition')return built.definition;if(args.path==='properties.connectionReferences')return built.connectionRefs;if(args.path==='properties.state')return state;}
-  if(tool==='preflight_flow')return{overall:'ready'};
+  if(tool==='preflight_flow'){expect(Object.keys(args).sort()).toEqual(['connectionReferences','definition','env']);return{overall:'ready'};}
   if(tool==='publish_flow'){state='Started';return{};}
   if(tool==='disable_flow'){state='Stopped';return{};}
   if(tool==='run_flow'){nonce=args.body.correlationId;return{triggered:true,runId:'original-run',status:'Failed',startTime:new Date().toISOString(),endTime:new Date().toISOString()};}

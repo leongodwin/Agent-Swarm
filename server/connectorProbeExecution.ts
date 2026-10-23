@@ -49,7 +49,7 @@ export async function executeConnectorProbe(expected:string,deps:ConnectorProbeE
   const args={env:plan.identity.environmentId,flow:resources.flowId};
   const pinned=async()=>{const definition=z.record(z.string(),z.unknown()).parse(await call('get_flow',{...args,path:'properties.definition'})),refs=await call('get_flow',{...args,path:'properties.connectionReferences'});return assertConnectorProbeReadback(plan,definition,refs);};
   await pinned();if(await call('get_flow',{...args,path:'properties.state'})!=='Stopped')throw Error('Probe must initially be stopped');
-  const built=buildConnectorMetadataProbe(plan),preflight=z.object({overall:z.literal('ready')}).parse(await call('preflight_flow',{...args,definition:built.definition,connectionReferences:built.connectionRefs}));
+  const built=buildConnectorMetadataProbe(plan),preflight=z.object({overall:z.literal('ready')}).parse(await call('preflight_flow',{env:plan.identity.environmentId,definition:built.definition,connectionReferences:built.connectionRefs}));
   await journal('activation-intent',{...resources,definitionSha256:built.definitionSha256,preflightSha256:connectorProbeDigest(preflight)});
   await call('publish_flow',args);if(await call('get_flow',{...args,path:'properties.state'})!=='Started')throw Error('Probe activation unknown');await pinned();
   const nonce=crypto.randomUUID();await journal('trigger-intent',{...resources,correlationId:nonce});
