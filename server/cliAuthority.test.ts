@@ -161,10 +161,29 @@ it.each([false,true])('reports capacity failure for a %s retained Codex task and
   }
   const handle=await (reattach?startCliSession({...options,reattach:true},callbacks):startCliSession(options,callbacks));
   screen='■ Selected model is at capacity. Please try a different model.\n› Ask Codex to do anything';
+  native.data?.('■ Selected model is at capa');native.data?.('city. Please try a different model.\r\n');
   await vi.advanceTimersByTimeAsync(1000);expect(callbacks.finished).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1000);expect(callbacks.finished).toHaveBeenCalledOnce();
   expect(callbacks.finished.mock.calls[0][0]).toMatchObject({ok:false,text:'',errors:[expect.stringContaining('model is at capacity')]});
   const calls=callbacks.finished.mock.calls.length;await vi.advanceTimersByTimeAsync(5000);expect(callbacks.finished).toHaveBeenCalledTimes(calls);
+  handle.stop();
+});
+
+it.each([false,true])('does not assign a retained capacity screen to a new task (reattach=%s)',async reattach=>{
+  vi.useFakeTimers();
+  let screen='';
+  const term={cols:80,rows:24,note:vi.fn(),bind:vi.fn(),write:vi.fn(),screen:()=>screen} as unknown as AgentTerminal;
+  const finished=vi.fn();
+  const options:SessionOptions={cwd:HOME_DIR,prompt:'New synthetic review',systemAppend:'',model:'',effort:'low',browserTesting:false,additionalDirectories:[],role:'qa',agentId:'fresh-capacity-review',cli:'codex',terminal:term,keepAlive:true,authorizeTool:()=>null};
+  const callbacks={log:vi.fn(),tool:vi.fn(),sessionId:vi.fn(),browserUrl:vi.fn(),screenshot:vi.fn(),finished};
+  if(reattach){await startCliSession(options,callbacks);await handleHook(native.token,{hook_event_name:'Stop',last_assistant_message:'Prior synthetic result'});await vi.advanceTimersByTimeAsync(3000);finished.mockClear();native.data?.('■ Selected model is at capacity.');}
+  screen='■ Selected model is at capacity. Please try a different model.\n› Ask Codex to do anything';
+  const handle=await startCliSession({...options,...(reattach?{reattach:true}:{})},callbacks);
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(finished).not.toHaveBeenCalled();
+  native.data?.('Starting a fresh review');
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(finished).not.toHaveBeenCalled();
   handle.stop();
 });
 

@@ -199,6 +199,8 @@ interface LiveCli {
   resumeId: string | null; // the session a follow-up resumes
   statusLine: string;
   output: string;
+  /** Bounded native output observed since this task began; never inherited screen history. */
+  capacityOutput?: string;
   /** Browser screenshots already passed on (Codex and OpenCode: collected from the browser's output folder). */
   shots: Set<string>;
   /** The office session driving it; null while it waits at its prompt. */
@@ -284,6 +286,7 @@ function wire(l: LiveCli, office?: OfficeTools,preflightStatus?:Route['preflight
   p.onData((data) => {
     if (lives.get(l.term) === l) {
       l.term.write(data);
+      if(l.cli==='codex'&&l.capacityOutput!==undefined)l.capacityOutput=(l.capacityOutput+data).slice(-16384);
       if (l.cli === 'copilot') {
         l.output += data;
         if (l.output.length > COPILOT_OUTPUT_LIMIT) l.output = l.output.slice(-COPILOT_OUTPUT_LIMIT);
@@ -585,6 +588,7 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
   };
   const monitorCapacity=()=>{
     if(cli!=='codex')return;
+    if(live)live.capacityOutput='';
     let previous='';
     let idleSince=0;
     capacityTimer=setInterval(()=>{
@@ -601,6 +605,10 @@ export function startCliSession(opts: SessionOptions, callbacks: SessionCallback
         }else{previous='';idleSince=0;}
         return;
       }
+      // A stable mirror can still show the previous process/turn's failure.
+      // Require the native failure marker from this task's owned PTY output too.
+      const freshFailure=/^\s*■\s*Selected model is at capacity\./im.test((live?.capacityOutput??'').replace(ANSI,'').replace(/\r/g,''));
+      if(!freshFailure){previous='';return;}
       if(screen!==previous){previous=screen;return;}
       const error='Codex selected model is at capacity; the task did not complete. Retry when capacity is available or choose a model in the agent settings.';
       log([{kind:'error',text:error}]);
