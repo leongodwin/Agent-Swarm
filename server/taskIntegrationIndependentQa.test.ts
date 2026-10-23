@@ -56,3 +56,14 @@ it('requires a reviewed suite deadline and the exact opt-in functional rejection
   expect(()=>assertTaskIntegrationPlan(d,r),mode).toThrow();
  }
 });
+
+it('binds headless checks to exact independent criteria without requiring browser scenarios',()=>{
+ const data=fixture(),plan=release(data),checks=plan.verification.scenarios.map(c=>({...c}));
+ plan.verification.scenarios=[];
+ (plan.verification as any).headlessFlow={checks:checks.slice(0,1),postDispatchChecks:checks.slice(1)};
+ expect(()=>assertTaskIntegrationPlan(data,plan)).not.toThrow();
+ const drift=structuredClone(plan);drift.acceptanceCriteria[0]='Different outcome';
+ expect(()=>assertTaskIntegrationPlan(data,drift)).toThrow(/criterion/);
+ checks[0].name='unrecorded';
+ expect(()=>assertTaskIntegrationPlan(data,plan)).toThrow(/criterion/);
+});
