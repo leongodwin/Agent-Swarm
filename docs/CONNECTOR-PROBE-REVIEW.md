@@ -31,13 +31,33 @@ hash-bound source/control reads and an explicit five-control review. Review
 expires after at most one hour and at the earliest evidence expiry; changes
 invalidate its proposal hash. No business record decision is rewritten.
 
-This change deliberately exposes **no execution endpoint**. The fixed runner,
-same-resource management setup/readback, protected native output capture,
-durable unknown-outcome holds and stopped-state cleanup must be implemented and
-independently reviewed before any probe may run. A review of this code cannot
-establish those missing capabilities. A future implementation must be included
-in the proposal's complete pinned sources and needs fresh independent approval.
-No root script, direct tenant API or generic worker authority may substitute.
+POST to `/execute` accepts only the exact reviewed proposal hash through the
+authenticated normal host. The fixed runner and managed-CLI same-resource
+setup/readback, Windows protected capture, provider identity, resource lease
+and durable unknown-outcome handling are included in the proposal's complete
+sources. Only the assigned QA actor may approve the current five controls.
+An explicit reviewed technical exception to business-authoring order is still
+required in same-resource evidence; selecting this profile never silently
+waives the existing project contract. No root script, direct tenant API or
+generic worker authority may substitute.
+
+Setup refuses existing publisher/solution/reference/workflow names, records a
+durable fsynced intent before each creation, creates one stopped flow without
+duplicate override, checks its actual owner and workflow ID and exact unmanaged
+solution membership. It cannot adopt, delete, retry or restore partial setup.
+Every error retains the exclusive original probe intent and lease. A future
+reconciliation requires a separately reviewed implementation, not deleting the
+intent or forcing the lease. A known terminal run is disabled and read back as
+Stopped before output capture. Unknown trigger outcomes are held without flow
+cancellation or a second invocation.
+
+Raw native outputs stay under the existing protected Windows leaf with fresh
+ACL/path admission before and after each exclusive write. Shared evidence
+contains only IDs and hashes. Bounded capture retains unknown native shapes;
+it explicitly does not accept their semantics. A later independent source
+review must determine what those actual outputs establish. Positive folder
+counts or an attempted invalid folder do not prove message retrieval, pagination,
+throttling, attachment handling, report correctness or mail delivery.
 
 Limits retained: one host trigger, at most 64 management/capture calls,
 256000 bytes per native output, 120 seconds per check, stop new work at 90

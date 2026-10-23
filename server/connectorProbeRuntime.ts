@@ -8,13 +8,18 @@ import {parseUnambiguousJson} from './unambiguousJson.ts';
 import {ConnectorProbeReview,connectorProbeControlsSchema,connectorProbeReviewRequest} from './connectorProbeReview.ts';
 import {connectorProbeDigest,connectorProbePlanSchema} from './connectorMetadataProbe.ts';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
+import {executeConnectorProbe} from './connectorProbeExecution.ts';
+import {prepareConnectorProbeResources} from './connectorProbeResources.ts';
+import {connectFlowAdapter,type FlowAdapter} from './flowAdapter.ts';
+import {privateReportMetadata} from './privateReportMetadata.ts';
+import {deliveryCommands} from './delivery.ts';
 
-const sources=['server/connectorMetadataProbe.ts','server/connectorProbeReview.ts','server/connectorProbeRuntime.ts','shared/connectorProbeScope.ts'];
+const sources=['server/connectorMetadataProbe.ts','server/connectorProbeReview.ts','server/connectorProbeRuntime.ts','server/connectorProbeExecution.ts','server/connectorProbeResources.ts','server/flowAdapter.ts','server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/resourceLease.ts','shared/connectorProbeScope.ts'];
 const configuration=z.strictObject({schemaVersion:z.literal(1),plan:connectorProbePlanSchema,controls:connectorProbeControlsSchema});
 const sha=(bytes:string|Uint8Array)=>crypto.createHash('sha256').update(bytes).digest('hex');
-/** Review-only composition. No tenant executor or generic command hook exists.
- * Configuration cannot supply executable code or an arbitrary flow definition. */
-export function connectorProbeRuntime(context:{home:string;configurationRoot:string;record():DeliveryRecord;configurationFingerprint():string;guard():void}){
+/** Normal-host composition. Execution requires fresh exact independent probe
+ * approval. Configuration supplies neither code nor an arbitrary definition. */
+export function connectorProbeRuntime(context:{home:string;configurationRoot:string;cwd?:string;leaseRoot?:string;record():DeliveryRecord;configurationFingerprint():string;guard():void}){
  const guard=context.guard;
  const service=new ConnectorProbeReview(context.home,async()=>{
   guard();const file=path.join(context.configurationRoot,'connector-probe-contract.json'),stat=await fs.lstat(file);
@@ -25,5 +30,13 @@ export function connectorProbeRuntime(context:{home:string;configurationRoot:str
   const configurationSha256=connectorProbeDigest({contractSha256:sha(bytes),capabilities:context.configurationFingerprint()});
   guard();return{record:context.record(),plan:{...input.plan,configurationSha256,implementationSha256:connectorProbeDigest(implementationSources)},configurationSha256,controls:input.controls,implementationSources};
  });
- return{service,inspect:()=>service.view(guard),handle:async(payload:unknown,actor:{id:string;role:string})=>{const input=connectorProbeReviewRequest.parse(payload);if(input.action==='inspect')return service.view(guard);if(input.action==='read')return service.read(input.kind,input.key,input.expectedSha256,input.startCharacter,input.maxCharacters,guard);const{action,...review}=input;return service.review(review,actor,guard);}};
+ return{service,inspect:()=>service.view(guard),execute:async(expected:string)=>{
+  guard();if(!context.cwd||!context.leaseRoot)throw Error('Normal host connector-probe execution context required');
+  const cwd=context.cwd,signal=AbortSignal.timeout(120000),run=async(executable:string,args:string[])=>{signal.throwIfAborted();guard();const result=await deliveryCommands.run({executable,args},cwd,{},signal);guard();return result;};let adapter:FlowAdapter|undefined;
+  return executeConnectorProbe(expected,{home:context.home,leaseRoot:context.leaseRoot,releaseStartedAt:Date.now(),authority:hash=>service.authority(hash,guard),guard,
+   privateLeaf:async(plan,admit)=>{await admit();const metadata=await privateReportMetadata(plan.record.id,cwd,signal,guard);if(metadata.status!=='observed'||!('protectedOwnerOnly' in metadata)||!metadata.protectedOwnerOnly||!metadata.leaf)throw Error('Protected Windows probe capture unavailable');return metadata.leaf;},
+   connect:async(_plan,nativeSignal)=>{adapter=await connectFlowAdapter(cwd,nativeSignal);return adapter;},
+   prepareSameResources:async(plan,admit,journal)=>{if(!adapter)throw Error('Pinned adapter required');return prepareConnectorProbeResources(plan,{command:run,flow:adapter,admit,journal,guard});},
+  });
+ },handle:async(payload:unknown,actor:{id:string;role:string})=>{const input=connectorProbeReviewRequest.parse(payload);if(input.action==='inspect')return service.view(guard);if(input.action==='read')return service.read(input.kind,input.key,input.expectedSha256,input.startCharacter,input.maxCharacters,guard);const{action,...review}=input;return service.review(review,actor,guard);}};
 }
