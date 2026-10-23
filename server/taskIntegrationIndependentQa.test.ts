@@ -70,9 +70,23 @@ it('binds headless checks to exact independent criteria without requiring browse
 
 it('keeps preparation optional and separate while preserving full real integration scope',()=>{
  const data=fixture();for(const c of data.applicationSpec!.components)c.platform='flow';
- const prep={...structuredClone(data.taskPlan!.integrationQa![0]),id:'qa-preparation',purpose:'preparation' as const,requirementIds:['r']};
+ const prep={...structuredClone(data.taskPlan!.integrationQa![0]),id:'qa-preparation',purpose:'preparation' as const,requirementIds:['r'],preparation:{acceptanceCriteria:['Synthetic rule cases match'],scenarios:['happy','denied','failure'].map(kind=>({id:'prep-'+kind,kind:kind as 'happy'|'denied'|'failure',given:'Synthetic data only',when:'The sample path runs',then:'The expected sample result occurs'}))}};
+ prep.cases=prep.preparation.scenarios.map(s=>({checkId:'runtime',scenarioId:s.id,testName:s.id,criterion:'Synthetic rule cases match'}));
  data.taskPlan!.integrationQa!.push(prep);expect(taskPlanErrors(data)).toEqual([]);expect(taskPlanSchema.safeParse(data.taskPlan).success).toBe(true);
- const p=release(data);p.deliveryRecord!.purpose='preparation';expect(()=>assertTaskIntegrationPlan(data,p)).not.toThrow();
+ const p=release(data);p.deliveryRecord!.purpose='preparation';p.acceptanceCriteria=['Synthetic rule cases match'];p.verification.scenarios=prep.cases.map(c=>({name:c.testName,criterion:0})) as any;p.qualityEvidence!.checks=prep.checkIds.map(checkId=>({checkId,cases:prep.cases.filter(c=>c.checkId===checkId).map(({scenarioId,testName})=>({scenarioId,testName}))})) as any;expect(()=>assertTaskIntegrationPlan(data,p)).not.toThrow();
  prep.requirementIds=[];expect(taskPlanErrors(data).join(' ')).toMatch(/explicit declared requirements/);prep.requirementIds=['r'];
  data.taskPlan!.integrationQa![0].requirementIds=['r'];expect(taskPlanErrors(data).join(' ')).toMatch(/real acceptance scope/);
+});
+
+it.each(['missing','collision','missing-denied','duplicate-criteria','unmapped-criterion','unmapped-check'])('refuses incomplete or conflated preparation scope: %s',mode=>{
+ const data=fixture();for(const c of data.applicationSpec!.components)c.platform='flow';
+ const q={...structuredClone(data.taskPlan!.integrationQa![0]),id:'prep',purpose:'preparation' as const,requirementIds:['r'],preparation:{acceptanceCriteria:['Synthetic samples match'],scenarios:['happy','denied','failure'].map(kind=>({id:'prep-'+kind,kind:kind as 'happy'|'denied'|'failure',given:'Synthetic only',when:'Sample execution',then:'Sample result'}))}};
+ q.cases=q.preparation.scenarios.map(s=>({checkId:'runtime',scenarioId:s.id,testName:s.id,criterion:'Synthetic samples match'}));data.taskPlan!.integrationQa!.push(q);
+ if(mode==='missing')delete(q as any).preparation;
+ if(mode==='collision')q.preparation.scenarios[0].id='reload';
+ if(mode==='missing-denied')q.preparation.scenarios=q.preparation.scenarios.filter(s=>s.kind!=='denied');
+ if(mode==='duplicate-criteria')q.preparation.acceptanceCriteria.push(q.preparation.acceptanceCriteria[0]);
+ if(mode==='unmapped-criterion')q.preparation.acceptanceCriteria.push('Another synthetic outcome');
+ if(mode==='unmapped-check'){data.applicationSpec!.checks.push({id:'prep-access',kind:'access',requirementIds:['r'],componentIds:['data'],scenarioIds:['reload'],expectedEvidence:'Native sample refusal'});q.checkIds.push('prep-access');}
+ expect(taskPlanErrors(data).length).toBeGreaterThan(0);
 });

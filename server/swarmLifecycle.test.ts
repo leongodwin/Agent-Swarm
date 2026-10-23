@@ -934,7 +934,7 @@ it('does not transfer a retired provider rejection into the Codex default',async
   vi.useRealTimers();await swarm.shutdown(true);vi.useFakeTimers();
   const restoredBackend=backend();restoredBackend.terminals=true;const restored=new Swarm(restoredBackend as unknown as Backend);offices.push(restored);restored.ceoPreflight=async()=>null;
   await restored.init();await restored.messageCeo('Synthetic retry context');await vi.advanceTimersByTimeAsync(180000);
-  expect(restoredBackend.startSession).toHaveBeenCalledOnce();expect((restoredBackend.startSession.mock.calls[0][0] as SessionOptions).cli).toBe('codex');
+  await vi.waitFor(()=>expect(restoredBackend.startSession).toHaveBeenCalledOnce());expect((restoredBackend.startSession.mock.calls[0][0] as SessionOptions).cli).toBe('codex');
 });
 
 it('binds CEO tool authority to its active job and revokes it when stopped', async () => {

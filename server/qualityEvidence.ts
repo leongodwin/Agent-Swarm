@@ -23,6 +23,7 @@ export function assertQualityPlan(content:DeliveryRecordContent,plan:ReleasePlan
   const spec=content.applicationSpec,requirements=plan.deliveryRecord?.purpose==='preparation'?(content.taskPlan?.integrationQa?.find(q=>q.purpose==='preparation')?.requirementIds??[]):plan.deliveryRecord?.purpose==='slice'?content.slice.requirementIds:content.requirements.map(r=>r.id);
   const relevant=(r:{requirementIds:string[]})=>r.requirementIds.some(id=>requirements.includes(id));
   const integration=content.taskPlan?.schemaVersion===2?content.taskPlan.integrationQa?.find(q=>q.purpose===plan.deliveryRecord?.purpose):undefined;
+  if(plan.deliveryRecord?.purpose==='preparation'&&!integration?.preparation)fail('Explicit preparation-only quality scenarios and criteria are required');
   const componentIds=new Set(integration?content.taskPlan!.tasks.filter(t=>integration.dependsOn.includes(t.issue)).flatMap(t=>t.componentIds):spec.components.filter(relevant).map(c=>c.id));
   const visit=(id:string)=>{for(const dep of spec.components.find(c=>c.id===id)?.dependsOn??[])if(!componentIds.has(dep)){componentIds.add(dep);visit(dep);}};for(const id of componentIds)visit(id);
   if(q.components.length!==componentIds.size||q.components.some(c=>!componentIds.has(c.componentId)||spec.components.find(s=>s.id===c.componentId)?.platform!==c.platform))fail('Quality evidence must cover the release components and transitive dependencies');
@@ -33,19 +34,19 @@ export function assertQualityPlan(content:DeliveryRecordContent,plan:ReleasePlan
     for(const requirement of requirements)if(!checks.some(c=>c.kind===kind&&c.requirementIds.includes(requirement)))fail(`${requirement}: missing ${kind} check`);
     for(const component of componentIds)if(!checks.some(c=>c.kind===kind&&c.componentIds.includes(component)))fail(`${component}: missing ${kind} check`);
   }
-  const journeys=spec.journeys.filter(relevant),scenarios=journeys.flatMap(j=>j.scenarios);
+  const preparation=plan.deliveryRecord?.purpose==='preparation',journeys=preparation?[{id:integration!.id,scenarios:integration!.preparation!.scenarios}]:spec.journeys.filter(relevant),scenarios=journeys.flatMap(j=>j.scenarios);
   for(const journey of journeys)for(const kind of ['happy','denied','failure'])if(!journey.scenarios.some(s=>s.kind===kind))fail(`${journey.id}: quality acceptance requires happy, denied and failure scenarios`);
   const mappings=q.checks.flatMap(c=>'cases' in c?c.cases:[]);
   for(const scenario of scenarios)if(!mappings.some(c=>c.scenarioId===scenario.id))fail(`${scenario.id}: no executable quality test`);
   for(const row of q.checks){if(!('cases' in row))continue;
     const declared=checks.find(c=>c.id===row.checkId)!;
-    if(declared.scenarioIds.filter(id=>content.taskPlan?.schemaVersion!==2||scenarios.some(s=>s.id===id)).some(id=>!row.cases.some(c=>c.scenarioId===id)))fail(`${row.checkId}: missing declared scenario binding`);
+    if(!preparation&&declared.scenarioIds.filter(id=>content.taskPlan?.schemaVersion!==2||scenarios.some(s=>s.id===id)).some(id=>!row.cases.some(c=>c.scenarioId===id)))fail(`${row.checkId}: missing declared scenario binding`);
     for(const c of row.cases){const scenario=scenarios.find(s=>s.id===c.scenarioId),test=((plan.verification.headlessFlow?headlessChecks(plan.verification.headlessFlow):undefined)??plan.verification.scenarios).find(t=>t.name===c.testName);
-      if(!scenario||!declared.scenarioIds.includes(c.scenarioId)||!test)fail(`${row.checkId}: unrelated scenario or executable test`);
+      if(!scenario||(!preparation&&!declared.scenarioIds.includes(c.scenarioId))||!test)fail(`${row.checkId}: unrelated scenario or executable test`);
       const category=scenario.kind==='denied'?'authorization':scenario.kind==='failure'?'error-handling':null;
       if(category?test.category!==category:!['journey','persistence'].includes(test.category))fail(`${row.checkId}: test category differs from declared scenario`);
       if(row.kind==='access'&&test.category!=='authorization')fail('Access evidence requires an authorization test');
-      if(!content.requirements.some(r=>declared.requirementIds.includes(r.id)&&r.acceptance===plan.acceptanceCriteria[test.criterion])&&!(plan.deliveryRecord?.purpose==='slice'&&content.slice.acceptanceCriteria.includes(plan.acceptanceCriteria[test.criterion])))fail('Quality test acceptance criterion is unrelated to its requirement');
+      if(!(preparation?integration?.preparation?.acceptanceCriteria.includes(plan.acceptanceCriteria[test.criterion]):content.requirements.some(r=>declared.requirementIds.includes(r.id)&&r.acceptance===plan.acceptanceCriteria[test.criterion]))&&!(plan.deliveryRecord?.purpose==='slice'&&content.slice.acceptanceCriteria.includes(plan.acceptanceCriteria[test.criterion])))fail('Quality test acceptance criterion is unrelated to its requirement');
     }
   }
   for(const row of plan.firstSlice?.cases??[])if(!q.checks.some(c=>'cases' in c&&c.checkId===row.checkId&&c.cases.some(s=>s.scenarioId===row.scenarioId&&s.testName===row.testName)))fail('First-slice and quality scenario bindings must agree');
