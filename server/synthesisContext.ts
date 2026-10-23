@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
 import type {SynthesisRequirement} from './synthesisTraceability.ts';
 import {isExecutionEvidence} from '../shared/executionEvidence.ts';
+import {poolPlanningStrings} from './planningStringPool.ts';
 
 /** Replace exact duplicate JSON with pointers into the same complete prompt.
  * The retained source, hashes and independent review remain authoritative. */
@@ -118,10 +119,20 @@ export function boundedSynthesisPrompt(base:Record<string,unknown>,captured:read
  const context=base.discoveryEvidence as {projection?:unknown;evidencePool?:unknown;evidenceReferencePrefixes?:unknown}|null|undefined;
  const pool=['planning-only-exact-evidence-pool-v5','planning-only-exact-evidence-pool-v6','planning-only-exact-evidence-pool-v7'].includes(String(context?.projection))&&Array.isArray(context?.evidencePool)?context.evidencePool:[];
  const indices=items.map(item=>pool.findIndex(e=>{const decoded=synthesisEvidenceReceipt(e,context?.evidenceReferencePrefixes,context?.projection);return decoded?.reference===item.reference&&decoded.sha256===item.sha256;}));
- let compact=false;
- const encode=()=>JSON.stringify({...base,...(compact?{discoveryEvidence:compactFindingLinks(base.discoveryEvidence,pool.length),capturedEvidenceRowEncoding:'Only a five-element capturedEvidence array row is [sourceEvidenceIndex,status,reasonOrNull,textOrNull,textOmittedOrFalse]. Restore the exact object: first two fields always present; null reason/text means absent, otherwise copy the complete string (including empty). false means textOmitted absent; true means textOmitted:true. Resolve only reference/sha256 using the unchanged identity rule. Object rows stay literal, including additional fields. This exact model-input layout grants no freshness, authority or runtime success.'}:{}),capturedEvidenceIdentityRule:indices.some(index=>index>=0)?'For each sourceEvidenceIndex, copy ONLY reference and sha256 from discoveryEvidence.evidencePool at that index, reconstructing reference exactly per discoveryEvidence.evidenceEncoding for encoded rows or referenceFromSha256. This is an exact source-identity link; no observation time, expiry, approval or readiness is inferred from that receipt.':undefined,capturedEvidenceOmissionRule:items.some(item=>item.textOmitted)?'For each textOmitted:true entry, verified text was omitted from model input to respect the planning budget; do not infer its contents. References and digests are retained.':undefined,capturedEvidence:items.map((item,i)=>{if(indices[i]<0)return item;const {reference,sha256,...rest}=item;const linked={...rest,sourceEvidenceIndex:indices[i]};return compact?compactCaptureRow(linked):linked;})});
+ let compact=false,stringPool=false;
+ const encodeLiteral=()=>JSON.stringify({...base,...(compact?{discoveryEvidence:compactFindingLinks(base.discoveryEvidence,pool.length),capturedEvidenceRowEncoding:'Only a five-element capturedEvidence array row is [sourceEvidenceIndex,status,reasonOrNull,textOrNull,textOmittedOrFalse]. Restore the exact object: first two fields always present; null reason/text means absent, otherwise copy the complete string (including empty). false means textOmitted absent; true means textOmitted:true. Resolve only reference/sha256 using the unchanged identity rule. Object rows stay literal, including additional fields. This exact model-input layout grants no freshness, authority or runtime success.'}:{}),capturedEvidenceIdentityRule:indices.some(index=>index>=0)?'For each sourceEvidenceIndex, copy ONLY reference and sha256 from discoveryEvidence.evidencePool at that index, reconstructing reference exactly per discoveryEvidence.evidenceEncoding for encoded rows or referenceFromSha256. This is an exact source-identity link; no observation time, expiry, approval or readiness is inferred from that receipt.':undefined,capturedEvidenceOmissionRule:items.some(item=>item.textOmitted)?'For each textOmitted:true entry, verified text was omitted from model input to respect the planning budget; do not infer its contents. References and digests are retained.':undefined,capturedEvidence:items.map((item,i)=>{if(indices[i]<0)return item;const {reference,sha256,...rest}=item;const linked={...rest,sourceEvidenceIndex:indices[i]};return compact?compactCaptureRow(linked):linked;})});
+ const encode=()=>stringPool?poolPlanningStrings(encodeLiteral()):encodeLiteral();
  const literalBytes=Buffer.byteLength(encode());
- if(literalBytes>maxBytes){if(Object.hasOwn(base,'capturedEvidenceRowEncoding'))throw new Error('Architecture planning scope exceeds its bound; split the current scope without deleting history');compact=true;const compactBytes=Buffer.byteLength(encode());if(compactBytes>=literalBytes||compactBytes>maxBytes)throw new Error('Architecture planning scope exceeds its bound; split the current scope without deleting history');}
+ if(literalBytes>maxBytes){
+  if(Object.hasOwn(base,'capturedEvidenceRowEncoding'))throw new Error('Architecture planning scope exceeds its bound; split the current scope without deleting history');
+  compact=true;
+  if(Buffer.byteLength(encode())>=literalBytes)compact=false;
+  if(Buffer.byteLength(encode())>maxBytes){
+   // Only declared delivery-record projections admit this additional exact codec.
+   stringPool=['planning-only-exact-evidence-pool-v5','planning-only-exact-evidence-pool-v6','planning-only-exact-evidence-pool-v7'].includes(String(context?.projection));
+   if(Buffer.byteLength(encode())>maxBytes)throw new Error('Architecture planning scope exceeds its bound; split the current scope without deleting history');
+  }
+ }
  // Keep inference input bounded even when omitted history frees capacity.
  // Whole evidence texts only; larger sources remain available to independent
  // QA through their exact retained references, never silently truncated.
