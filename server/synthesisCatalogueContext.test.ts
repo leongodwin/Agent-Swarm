@@ -25,9 +25,12 @@ it('references exact duplicate sources in the same prompt without losing text, i
 it('fits duplicate-heavy scope under the unchanged bound while still blocking genuinely oversized scope',()=>{
  const record={id:'record',revision:103,sha256:'b'.repeat(64),content:{requirements:[],applicationSpec:{scenarios:Array.from({length:35},(_,i)=>({id:'scenario-'+i,text:'Complete executable contract £ '.repeat(80)}))},contracts:['x'.repeat(95_000)],findings:[{id:'critical',critical:true,statement:'y'.repeat(40_000),remedy:'Preserve all critical prose',evidence:[]}]}} as unknown as DeliveryRecord;
  const catalogue=synthesisRequirements(input as any,record),base={requirements:input,discoveryEvidence:synthesisRecordContext(record)};
- expect(()=>boundedSynthesisPrompt({...base,requirementCatalogue:catalogue},[])).toThrow('scope exceeds');
+ const pooled=JSON.parse(boundedSynthesisPrompt({...base,requirementCatalogue:catalogue},[]));
+ expect(pooled.format).toBe('lossless-planning-string-pool-v1');
+ expect(pooled.payload.requirementCatalogue).toHaveLength(catalogue.length);
+ for(let i=0;i<catalogue.length;i++){const row=pooled.payload.requirementCatalogue[i];expect(row.id).toBe(catalogue[i].id);expect(typeof row.text==='string'?row.text:pooled.stringPool[row.text.$planningString]).toBe(catalogue[i].text);}
  const prompt=boundedSynthesisPrompt({...base,requirementCatalogue:synthesisCatalogueContext(catalogue,record)},[]);
  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(256*1024);
  expect(JSON.parse(prompt).discoveryEvidence.content.findings[0].statement).toBe(record.content.findings[0].statement);
- expect(()=>boundedSynthesisPrompt({...base,requirementCatalogue:synthesisCatalogueContext(catalogue,record),additional:'z'.repeat(100_000)},[])).toThrow('scope exceeds');
+ expect(()=>boundedSynthesisPrompt({...base,requirementCatalogue:synthesisCatalogueContext(catalogue,record),additional:'z'.repeat(200_000)},[])).toThrow('scope exceeds');
 });
