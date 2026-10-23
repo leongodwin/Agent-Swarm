@@ -1,9 +1,9 @@
 import {it,expect} from 'vitest';
 import crypto from 'node:crypto';
-import {synthesisRecordContext,synthesisCatalogueContext,boundedSynthesisPrompt} from './synthesisContext.ts';
+import {synthesisRecordContext,synthesisCatalogueContext,boundedSynthesisPrompt,synthesisEvidenceReference} from './synthesisContext.ts';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
 import {phaseRecordFixture} from './testFixtures/phaseRecord.ts';
-const evidenceFor=(view:NonNullable<ReturnType<typeof synthesisRecordContext>>,index:number)=>view.content.findings[index].evidence.map(e=>view.evidencePool[e.evidenceIndex]);
+const evidenceFor=(view:NonNullable<ReturnType<typeof synthesisRecordContext>>,index:number)=>view.content.findings[index].evidence.map(e=>(()=>{const item=view.evidencePool[e.evidenceIndex];if('reference' in item)return item;const {referenceFromSha256,...rest}=item;return{...rest,reference:synthesisEvidenceReference(item,view.evidenceReferencePrefixes,true)};})());
 it('retains current scope, critical findings and evidence while explicitly indexing omitted historical prose',()=>{
  const text='Historical proposal £ '.repeat(200),evidence=[{reference:'retained.json',sha256:'a'.repeat(64),observedAt:'2026-10-18T00:00:00Z',expiresAt:'2026-10-18T00:01:00Z'}];
  const record={id:'record',revision:93,sha256:'b'.repeat(64),content:{applicationSpec:{decisions:['unresolved']},taskPlan:{stopConditions:['fresh effective rights']},contracts:['full history required'],findings:[{id:'critical',critical:true,statement:text,remedy:text,evidence},{id:'historical',critical:false,statement:text,remedy:text,evidence}]}} as unknown as DeliveryRecord;
@@ -64,7 +64,7 @@ it('keeps accumulated historical context within the existing bound and detects c
  expect(prompt.discoveryEvidence.content.findings).toHaveLength(160);
  const legacy=structuredClone(record);
  expect(()=>boundedSynthesisPrompt({discoveryEvidence:legacy},[])).toThrow('scope exceeds');
- expect(view.projection).toBe('planning-only-exact-evidence-pool-v5');
+ expect(view.projection).toBe('planning-only-exact-evidence-pool-v6');
  const before=view.content.findings[0] as {fullFindingSha256:string};
  expect(view.content.findings[0]).not.toHaveProperty('statement');expect(view.content.findings[0]).not.toHaveProperty('remedy');
  expect(evidenceFor(view,0)).toEqual(record.content.findings[0].evidence);
@@ -93,4 +93,26 @@ it.each(['reference','sha256','observedAt','expiresAt'] as const)('shares exact 
  const original=JSON.stringify(record),view=synthesisRecordContext(record)!,edges=(id:string)=>view.content.findings.find(f=>f.id===id)!.evidence;expect(view.evidencePool).toHaveLength(3);expect(edges(first.id)).toEqual(edges(second.id));expect(edges(third.id)).not.toEqual(edges(first.id));
  for(let i=0;i<record.content.findings.length;i++)expect(evidenceFor(view,i)).toEqual(record.content.findings[i].evidence);
  expect(view.evidenceEncoding).toContain('No receipt is renewed');expect(JSON.stringify(record)).toBe(original);
+});
+it('round-trips digest-named evidence paths without normalizing identities or omitting current contracts',()=>{
+ const prefix='C:\\retained\\'+'folder\\'.repeat(30),evidence=Array.from({length:50},(_,i)=>{const sha256=i.toString(16).padStart(64,'0');return{reference:prefix+sha256+'.json',sha256,observedAt:'2026-10-21T00:00:00.000Z',expiresAt:'2026-10-22T00:00:00.000Z'};});
+ const record={id:'record',revision:1,sha256:'a'.repeat(64),content:{contracts:['Keep every critical contract and expiry unchanged.'],findings:[{id:'current',critical:true,statement:'Current critical finding',remedy:'Retain exact proof',evidence}]}} as unknown as DeliveryRecord,original=JSON.stringify(record),view=synthesisRecordContext(record)!;
+ expect(view.evidenceReferencePrefixes).toEqual([prefix]);expect(evidenceFor(view,0)).toEqual(evidence);expect(view.content.contracts).toEqual(record.content.contracts);expect(view.content.findings[0]).toHaveProperty('statement','Current critical finding');expect(JSON.stringify(record)).toBe(original);
+ const text=boundedSynthesisPrompt({discoveryEvidence:view},evidence.slice(0,2).map(e=>({reference:e.reference,sha256:e.sha256,status:'captured',text:'Exact source'})),20000),parsed=JSON.parse(text);
+ expect(Buffer.byteLength(text)).toBeLessThanOrEqual(20000);expect(parsed.capturedEvidence.map((e:any)=>e.sourceEvidenceIndex)).toEqual([0,1]);
+ const legacy={...view,projection:'planning-only-exact-evidence-pool-v5',evidencePool:evidence};expect(()=>boundedSynthesisPrompt({discoveryEvidence:legacy},[],20000)).toThrow('scope exceeds');
+});
+it('does not derive a reference from a mismatched filename or a lone path',()=>{
+ const sha256='a'.repeat(64),evidence=[{reference:'C:/original/'+ 'b'.repeat(64)+'.json',sha256,observedAt:'2026-10-21T00:00:00Z',expiresAt:'2026-10-22T00:00:00Z'}],record={content:{findings:[{id:'original',critical:true,evidence}]}} as unknown as DeliveryRecord,view=synthesisRecordContext(record)!;
+ expect(view.evidencePool).toEqual(evidence);expect(view.evidenceReferencePrefixes).toEqual([]);
+});
+it.each([null,{referenceFromSha256:-1,sha256:'a'.repeat(64)},{referenceFromSha256:0.5,sha256:'a'.repeat(64)},{referenceFromSha256:8,sha256:'a'.repeat(64)},{referenceFromSha256:0,sha256:'not-a-digest'},{reference:'literal',referenceFromSha256:0,sha256:'a'.repeat(64)}])('rejects malformed prompt reference derivation: %j',value=>{expect(synthesisEvidenceReference(value,['C:/literal/'],true)).toBeUndefined();});
+it('requires own literal prefix and digest properties and explicit v6 encoding permission',()=>{
+ const sha256='a'.repeat(64),row={referenceFromSha256:0,sha256},prefixes:string[]=[];Object.setPrototypeOf(prefixes,['C:/inherited/']);
+ expect(synthesisEvidenceReference(row,prefixes,true)).toBeUndefined();expect(synthesisEvidenceReference(row,['C:/literal/'])).toBeUndefined();expect(synthesisEvidenceReference(Object.create(row),['C:/literal/'],true)).toBeUndefined();
+ expect(synthesisEvidenceReference(row,['C:/literal/'],true)).toBe('C:/literal/'+sha256+'.json');
+});
+it('keeps malformed digest-shaped input literal instead of producing an unresolvable path',()=>{
+ const evidence=['2026-10-21T00:00:00Z','2026-10-21T00:01:00Z'].map(observedAt=>({reference:'C:/original/x.json',sha256:'x',observedAt,expiresAt:'2026-10-22T00:00:00Z'})),record={content:{findings:[{critical:true,evidence}]}} as unknown as DeliveryRecord;
+ const view=synthesisRecordContext(record)!;expect(view.evidencePool).toEqual(evidence);expect(view.evidenceReferencePrefixes).toEqual([]);
 });
