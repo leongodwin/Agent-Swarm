@@ -10,6 +10,8 @@ import {connectorProbeDigest} from './connectorMetadataProbe.ts';
 import {standaloneProbePlanSchema} from './standaloneMetadataProbe.ts';
 import {verifyStandaloneQuarantine} from './standaloneProbeQuarantine.ts';
 import {inspectStandaloneProbeAdapter,connectStandaloneProbeAdapter} from './standaloneProbeAdapter.ts';
+import {standaloneHostReviewSources} from './standaloneHostReview.ts';
+import {standaloneNativeReviewSources} from './standaloneNativeReview.ts';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
 import {executeStandaloneProbe} from './standaloneProbeExecution.ts';
 import {prepareStandaloneProbeResources,inspectStandaloneProbeResource} from './standaloneProbeResources.ts';
@@ -22,12 +24,11 @@ import type {PlatformIdentity} from './platformAuth.ts';
 
 const sourceGroups=[
  ['server/standaloneMetadataProbe.ts','server/connectorMetadataProbe.ts','shared/standaloneProbeScope.ts','shared/connectorProbeScope.ts'],
- ['server/standaloneProbeReview.ts','server/standaloneProbeRuntime.ts','server/standaloneProbeQuarantine.ts'],
+ ['server/standaloneProbeReview.ts','server/standaloneProbeRuntime.ts','server/standaloneProbeQuarantine.ts','server/standaloneHostReview.ts','server/standaloneNativeReview.ts'],
  ['server/standaloneProbeExecution.ts','server/standaloneProbeResources.ts','server/standaloneFlowOwnership.ts'],
  ['server/standaloneProbeAdapter.ts','server/standaloneFlowAgentBuild.ts','server/flowAdapter.ts'],
  ['server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/resourceLease.ts'],
  ['server/tenantDlp.ts','server/standardPolicy.ts'],
- ['server/delivery.ts'],
  ['server/flowCleanup.ts','server/flowEnvironment.ts','server/pinnedPreparationContracts.ts','server/tenancy.ts','server/clis.ts','server/platformCommandError.ts','server/unambiguousJson.ts','server/boundedJson.ts','server/config.ts','server/atomicFile.ts'],
 ];
 const configuration=z.strictObject({schemaVersion:z.literal(1),plan:standaloneProbePlanSchema,controls:standaloneProbeControlsSchema});
@@ -47,6 +48,8 @@ export function standaloneProbeRuntime(context:{home:string;configurationRoot:st
    const text='# Complete exact standalone source capsule\n\nEvery entry retains its complete original UTF8 source and SHA256. Read all entries; this logical key is not a physical Markdown file.\n\n'+JSON.stringify({schemaVersion:1,sources:entries});
    return {file:`docs/STANDALONE-PROBE-SOURCES-${index+1}.md`,sha256:sha(text),text};
   }));
+  implementationSources.push(await standaloneHostReviewSources());
+  implementationSources.push(...await standaloneNativeReviewSources(context.home,input.plan.adapter.entrySha256));
   await verifyStandaloneQuarantine(input.plan,context.home,context.record().repoId);
   await inspectStandaloneProbeAdapter(context.home,input.plan.adapter.entrySha256);
   const identity={tenantId:input.plan.identity.tenantId,caller:input.plan.identity.username},rawPolicy=context.policyObservation?.(input.plan.identity),policy=rawPolicy===undefined?null:verifyTenantSnapshot(rawPolicy,identity),evaluation=policy?evaluateStandardPolicies(policy,identity,input.plan.identity.environmentId,[{id:'digest-flow',complete:true,connectors:['shared_office365']}]):null;

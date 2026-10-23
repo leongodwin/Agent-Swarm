@@ -2,8 +2,9 @@ import {expect,it,vi} from 'vitest';
 import crypto from 'node:crypto';
 import {buildStandaloneFlowAgent,transformStandaloneFlowAgent,STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
 
+import {standaloneTransportFixture} from './testFixtures/standaloneTransport.ts';
 const duplicateFailure='logger.warn(`[no-recreate-guard] listFlows failed during duplicate check (${err instanceof Error ? err.message : String(err)}); allowing create_flow to proceed`);\n      return;';
-const fixture=`var FLOWAGENT_VERSION = "3.2.1";
+const fixture=standaloneTransportFixture+`var FLOWAGENT_VERSION = "3.2.1";
   server2.tool("create_flow", "create", {}, {}, async ({connectionRefs,allowDuplicate}) => {
     try {
       let enrichedRefs = connectionRefs;
