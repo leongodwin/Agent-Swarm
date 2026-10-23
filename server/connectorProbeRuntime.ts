@@ -17,7 +17,8 @@ import {verifyTenantSnapshot} from './tenantDlp.ts';
 import {evaluateStandardPolicies} from './standardPolicy.ts';
 import type {PlatformIdentity} from './platformAuth.ts';
 
-const sources=['server/connectorMetadataProbe.ts','server/connectorProbeReview.ts','server/connectorProbeRuntime.ts','server/connectorProbeExecution.ts','server/connectorProbeResources.ts','server/flowAdapter.ts','server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/resourceLease.ts','server/tenantDlp.ts','server/standardPolicy.ts','shared/connectorProbeScope.ts'];
+const sources=['server/connectorMetadataProbe.ts','server/connectorProbeReview.ts','server/connectorProbeRuntime.ts','server/connectorProbeExecution.ts','server/connectorProbeResources.ts','server/flowAdapter.ts','server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/resourceLease.ts','server/tenantDlp.ts','server/standardPolicy.ts','shared/connectorProbeScope.ts','server/delivery.ts'];
+const supportingSources=['server/flowCleanup.ts','server/flowEnvironment.ts','server/pinnedPreparationContracts.ts','server/tenancy.ts','server/clis.ts','server/platformCommandError.ts','server/unambiguousJson.ts','server/boundedJson.ts','server/config.ts','server/atomicFile.ts'];
 const configuration=z.strictObject({schemaVersion:z.literal(1),plan:connectorProbePlanSchema,controls:connectorProbeControlsSchema});
 const sha=(bytes:string|Uint8Array)=>crypto.createHash('sha256').update(bytes).digest('hex');
 /** Normal-host composition. Execution requires fresh exact independent probe
@@ -29,7 +30,10 @@ export function connectorProbeRuntime(context:{home:string;configurationRoot:str
   if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||await fs.realpath(file)!==path.resolve(file))throw Error('Canonical connector probe configuration required');
   const bytes=await readBoundedBytes(file,32768);if(!bytes)throw Error('Bounded connector probe configuration required');
   const input=configuration.parse(parseUnambiguousJson(new TextDecoder('utf8',{fatal:true}).decode(bytes),{maxBytes:32768}));
-  const implementationSources=await Promise.all(sources.map(async name=>{const file=fileURLToPath(new URL('../'+name,import.meta.url)),bytes=await readBoundedBytes(file,128*1024);if(!bytes)throw Error('Pinned connector probe implementation absent');return{file:name,sha256:sha(bytes),text:new TextDecoder('utf8',{fatal:true}).decode(bytes)};}));
+  const readSource=async(name:string)=>{const file=fileURLToPath(new URL('../'+name,import.meta.url)),bytes=await readBoundedBytes(file,128*1024);if(!bytes)throw Error('Pinned connector probe implementation absent');return{file:name,sha256:sha(bytes),text:new TextDecoder('utf8',{fatal:true}).decode(bytes)};};
+  const implementationSources=await Promise.all(sources.map(readSource)),supporting=await Promise.all(supportingSources.map(readSource));
+  const supportText='# Exact supporting implementation source capsule\n\nThis is a runtime-assembled logical source key, not a physical Markdown file. Every entry contains the original file path, SHA256 and COMPLETE exact UTF8 source text; no excerpts or code omissions. Read every entry to the end.\n\n'+JSON.stringify({schemaVersion:1,kind:'exact-supporting-source-capsule',sources:supporting},null,2);
+  implementationSources.push({file:'docs/CONNECTOR-PROBE-SUPPORTING-SOURCES.md',sha256:sha(supportText),text:supportText});
   const identity={tenantId:input.plan.identity.tenantId,caller:input.plan.identity.username},rawPolicy=context.policyObservation?.(input.plan.identity),policy=rawPolicy===undefined?null:verifyTenantSnapshot(rawPolicy,identity),evaluation=policy?evaluateStandardPolicies(policy,identity,input.plan.identity.environmentId,[{id:'digest-flow',complete:true,connectors:['shared_office365']}]):null;
   if(context.policyObservation&&!policy)throw Error('Current live standard policy required');
   if(evaluation&&evaluation.status!=='clear')throw Error('Current standard policy does not admit the fixed probe');
@@ -46,7 +50,7 @@ export function connectorProbeRuntime(context:{home:string;configurationRoot:str
   const cwd=context.cwd,signal=AbortSignal.timeout(120000),run=async(executable:string,args:string[])=>{signal.throwIfAborted();guard();const result=await deliveryCommands.run({executable,args},cwd,{},signal);guard();return result;};let adapter:FlowAdapter|undefined;
   return executeConnectorProbe(expected,{home:context.home,leaseRoot:context.leaseRoot,releaseStartedAt:Date.now(),authority:hash=>service.authority(hash,guard),guard,
    privateLeaf:async(plan,admit)=>{await admit();const metadata=await privateReportMetadata(plan.record.id,cwd,signal,guard);if(metadata.status!=='observed'||!('protectedOwnerOnly' in metadata)||!metadata.protectedOwnerOnly||!metadata.leaf)throw Error('Protected Windows probe capture unavailable');return metadata.leaf;},
-   connect:async(_plan,nativeSignal)=>{adapter=await connectFlowAdapter(cwd,nativeSignal);return adapter;},
+   connect:async(_plan,nativeSignal,admit)=>{adapter=await connectFlowAdapter(cwd,nativeSignal,{beforeRequest:admit,maxPages:1});return adapter;},
    prepareSameResources:async(plan,admit,journal)=>{if(!adapter)throw Error('Pinned adapter required');return prepareConnectorProbeResources(plan,{command:run,flow:adapter,admit,journal,guard});},
   });
  },handle:async(payload:unknown,actor:{id:string;role:string})=>{const input=connectorProbeReviewRequest.parse(payload);if(input.action==='inspect')return service.view(guard);if(input.action==='read')return service.read(input.kind,input.key,input.expectedSha256,input.startCharacter,input.maxCharacters,guard);const{action,...review}=input;return service.review(review,actor,guard);}};

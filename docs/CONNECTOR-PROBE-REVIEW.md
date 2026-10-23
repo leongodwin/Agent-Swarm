@@ -65,6 +65,19 @@ seconds, one-hour release bound, no cancellation/replay of unknown operations.
 No 24/8/12 scenario, four-real-run, quality, recovery, source/report checker,
 native receipt or guarded final-send credit is earned by these synthetic tests.
 
+The 64-operation counter admits MCP initialization and every tool-list request
+at dispatch. This fixed probe accepts one complete discovery page and refuses
+continuation before resource setup; the general adapter retains its existing
+twenty-page default. All later tool, managed-CLI and ACL operations use the same
+counter. No count or deadline was increased.
+
+The review includes the full command-runner module and an explicitly labelled
+runtime-assembled supporting source capsule. The capsule contains complete
+original UTF8 text and SHA256 for cleanup, environment, CLI resolution, errors,
+JSON/file readers and configuration helpers. Its logical Markdown key does not
+claim a physical file exists. The existing sixteen-entry,128KiB-per-entry and
+384KiB-total source bounds still apply; no underlying source is excerpted.
+
 Each normal-host proposal/authority check also obtains the existing service's
 live standard-policy observation, validates its tenant/caller and unchanged
 15-minute freshness bound, and evaluates the one complete Outlook-only flow.

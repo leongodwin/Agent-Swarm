@@ -18,7 +18,7 @@ export interface ConnectorProbeExecutionDependencies {
   * It must account each provider call through admit, retain each creation intent
   * before dispatch, and verify exact returned ownership/solution/reference IDs. */
  prepareSameResources(plan:ConnectorProbePlan,admit:()=>Promise<void>,journal:(stage:string,metadata:Record<string,unknown>)=>Promise<void>):Promise<{flowId:string;workflowId:string;solutionId:string}>;
- connect(plan:ConnectorProbePlan,signal:AbortSignal):Promise<FlowAdapter>;
+ connect(plan:ConnectorProbePlan,signal:AbortSignal,admit:()=>Promise<void>):Promise<FlowAdapter>;
  guard():void;
 }
 const id=z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i);
@@ -42,7 +42,7 @@ export async function executeConnectorProbe(expected:string,deps:ConnectorProbeE
  const privateLeaf=async()=>{await owned();const leaf=await deps.privateLeaf(plan,admit);await owned();if(path.basename(leaf)!=='recruitment-e2e-'+plan.record.id||await fs.realpath(leaf)!==path.resolve(leaf)||(await fs.lstat(leaf)).isSymbolicLink())throw Error('Protected probe leaf changed');return leaf;};
  const capture=async(name:string,value:unknown)=>{const text=JSON.stringify(value);if(Buffer.byteLength(text)>256000)throw Error('Probe native output exceeds capture bound');const leaf=await privateLeaf();await exclusive(path.join(leaf,plan.probeId+'.'+name+'.json'),value);if(await privateLeaf()!==leaf)throw Error('Protected probe leaf changed');return crypto.createHash('sha256').update(text).digest('hex');};
  try{
-  await privateLeaf();await admit();flow=await deps.connect(plan,signal);await owned();if(!flow.metadata||connectorProbeDigest(flow.metadata)!==connectorProbeDigest(plan.adapter))throw Error('Probe adapter differs');
+  await privateLeaf();check(true);await owned();flow=await deps.connect(plan,signal,admit);await owned();if(!flow.metadata||connectorProbeDigest(flow.metadata)!==connectorProbeDigest(plan.adapter))throw Error('Probe adapter differs');
   const call=async(tool:string,args:Record<string,unknown>)=>{await admit();const result=await flow!.call(tool,args);await owned();return result;};
   verifyFlowIdentity(await call('whoami',{}),plan.identity);
   const connectionRows=z.array(z.record(z.string(),z.unknown())).max(999).parse(await call('list_connections',{env:plan.identity.environmentId,connector:'shared_office365'})),matches=connectionRows.filter(row=>row.name===plan.connection.connectionId);
