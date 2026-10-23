@@ -9,7 +9,8 @@ It requires a captured 14-day window, explicit initializer dependencies, a bound
 Until loop, and a URI guard before each GET. The conservative continuation profile
 admits the exact original query followed by one nonempty skip token. Provider
 query reordering or other unsupported encoding fails; compatibility is unverified.
-Each successful native output must be validated and appended unchanged. A uniquely
+The source branch requires mailbox mode and dispatch=false, so final dispatch
+cannot rescan the Inbox. Each successful native output must be validated and appended unchanged. A uniquely
 named Compose exposes the complete source capsule after the data-mode branch.
 
 `headlessSourceObservation.ts` is a GET-only primitive. Its caller must provide
@@ -24,7 +25,8 @@ native read repetition's value. Independent QA must explicitly accept this
 provenance method. No native Power Automate response or skipped-path compatibility
 has been established by the synthetic tests.
 
-The proposed source-only maximum is 1,048,576 bytes. This is a new optional profile
+The proposed source-only aggregate maximum is 1,048,576 bytes. Each individual
+native page still must fit the existing 256,000-byte output limit. This is a new optional profile
 requiring explicit design revision and independent acceptance before use. It does
 not alter the existing report capture (256,000 bytes), adapter response (2 MiB),
 planning (256 KiB), or task/release deadlines. Complete source exceeding its bound
