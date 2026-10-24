@@ -9,7 +9,7 @@ import {StandaloneProbeReview,standaloneProbeControlsSchema,standaloneProbeRevie
 import {connectorProbeDigest} from './connectorMetadataProbe.ts';
 import {standaloneProbePlanSchema} from './standaloneMetadataProbe.ts';
 import {verifyStandaloneQuarantine} from './standaloneProbeQuarantine.ts';
-import {inspectStandaloneProbeAdapter,connectStandaloneProbeAdapter} from './standaloneProbeAdapter.ts';
+import {createStandaloneProbeAdapterInspector,connectStandaloneProbeAdapter} from './standaloneProbeAdapter.ts';
 import {standaloneHostReviewSources} from './standaloneHostReview.ts';
 import {exactReviewCapsule} from './nativeReviewCapsule.ts';
 import {standaloneNativeReviewSources} from './standaloneNativeReview.ts';
@@ -26,7 +26,7 @@ import type {PlatformIdentity} from './platformAuth.ts';
 
 const sourceGroups=[
  ['server/standaloneMetadataProbe.ts','server/connectorMetadataProbe.ts','shared/standaloneProbeScope.ts','shared/connectorProbeScope.ts'],
- ['server/standaloneProbeReview.ts','server/standaloneProbeRuntime.ts','server/standaloneProbeQuarantine.ts','server/standaloneHostReview.ts','server/standaloneNativeReview.ts','server/nativeReviewCapsule.ts'],
+ ['server/standaloneProbeReview.ts','server/standaloneProbeRuntime.ts','server/standaloneProbeQuarantine.ts','server/standaloneHostReview.ts','server/standaloneNativeReview.ts','server/nativeReviewCapsule.ts','server/pureTextDerivation.ts'],
  ['server/standaloneProbeExecution.ts','server/standaloneProbeResources.ts','server/standaloneFlowOwnership.ts'],
  ['server/standaloneProbeAdapter.ts','server/standaloneFlowAgentBuild.ts'],
  ['server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/identityContracts.ts'],
@@ -38,7 +38,7 @@ const sha=(bytes:string|Uint8Array)=>crypto.createHash('sha256').update(bytes).d
 /** Normal-host composition. Execution requires fresh exact independent probe
  * approval. Configuration supplies neither code nor an arbitrary definition. */
 export function standaloneProbeRuntime(context:{home:string;configurationRoot:string;cwd?:string;leaseRoot?:string;policyObservation?:(identity:PlatformIdentity)=>unknown;record():DeliveryRecord;configurationFingerprint():string;guard():void}){
- const guard=context.guard;
+ const guard=context.guard,inspectAdapter=createStandaloneProbeAdapterInspector(context.home);
  const integrated=standaloneIntegrationGate();
  const service=new StandaloneProbeReview(context.home,async()=>{
   guard();const file=path.join(context.configurationRoot,'standalone-probe-contract.json'),stat=await fs.lstat(file);
@@ -52,9 +52,9 @@ export function standaloneProbeRuntime(context:{home:string;configurationRoot:st
    return {file:`docs/STANDALONE-PROBE-SOURCES-${index+1}.md`,sha256:sha(text),text};
   }));
   implementationSources.push(await standaloneHostReviewSources());
-  implementationSources.push(...await standaloneNativeReviewSources(context.home,input.plan.adapter.entrySha256));
+  implementationSources.push(...await standaloneNativeReviewSources(context.home,input.plan.adapter.entrySha256,inspectAdapter));
   await verifyStandaloneQuarantine(input.plan,context.home,context.record().repoId);
-  await inspectStandaloneProbeAdapter(context.home,input.plan.adapter.entrySha256);
+  await inspectAdapter(input.plan.adapter.entrySha256);
   const identity={tenantId:input.plan.identity.tenantId,caller:input.plan.identity.username},rawPolicy=context.policyObservation?.(input.plan.identity),policy=rawPolicy===undefined?null:verifyTenantSnapshot(rawPolicy,identity),evaluation=policy?evaluateStandardPolicies(policy,identity,input.plan.identity.environmentId,[{id:'digest-flow',complete:true,connectors:['shared_office365']}]):null;
   if(context.policyObservation&&!policy)throw Error('Current live standard policy required');
   if(evaluation&&evaluation.status!=='clear')throw Error('Current standard policy does not admit the fixed probe');

@@ -3,11 +3,11 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import {afterEach,expect,it,vi} from 'vitest';
-const state=vi.hoisted(()=>({skillFile:'',missing:false,build:vi.fn(),connect:vi.fn()}));
-vi.mock('./skillRegistry.ts',()=>({discoverSkills:()=>({skills:state.missing?[]:[{id:'power-automate:manage-flows',file:state.skillFile}]})}));
+const state=vi.hoisted(()=>({skillFile:'',missing:false,discover:vi.fn(),build:vi.fn(),connect:vi.fn()}));
+vi.mock('./skillRegistry.ts',()=>({discoverSkills:()=>{state.discover();return{skills:state.missing?[]:[{id:'power-automate:manage-flows',file:state.skillFile}]};}}));
 vi.mock('./standaloneFlowAgentBuild.ts',async()=>({...await vi.importActual('./standaloneFlowAgentBuild.ts'),buildStandaloneFlowAgent:(...args:any[])=>state.build(...args)}));
 vi.mock('./flowAdapter.ts',()=>({connectFlowAdapter:(...args:any[])=>state.connect(...args),flowDefinitionForPreflight:(value:unknown)=>structuredClone(value)}));
-import {inspectStandaloneProbeAdapter,connectStandaloneProbeAdapter} from './standaloneProbeAdapter.ts';
+import {createStandaloneProbeAdapterInspector,inspectStandaloneProbeAdapter,connectStandaloneProbeAdapter} from './standaloneProbeAdapter.ts';
 import {STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
 import {standaloneProbeFixturePlan} from './testFixtures/standaloneProbe.ts';
 const roots:string[]=[];
@@ -27,3 +27,6 @@ it.each(['skill','source','approved-hash','entry-bytes','hardlink','directory','
  const f=await fixture();if(mode==='skill')state.missing=true;if(mode==='source')state.build.mockImplementation(()=>{throw Error('Pinned source changed');});if(mode==='approved-hash')f.plan.adapter.entrySha256='b'.repeat(64);if(mode==='entry-bytes')await fs.appendFile(f.entry,' changed');if(mode==='hardlink')await fs.link(f.entry,path.join(f.home,'other.mjs'));if(mode==='directory'){await fs.unlink(f.entry);await fs.mkdir(f.entry);}if(mode==='plan-version')(f.plan.adapter as {version:string}).version='other';if(mode==='native-version'||mode==='cleanup')(f.adapter.metadata as {version:string}).version='other';if(mode==='cleanup')f.adapter.close.mockRejectedValue(Error('Cleanup unverified'));
  await expect(connectStandaloneProbeAdapter(f.home,f.home,f.plan,new AbortController().signal,async()=>{})).rejects.toThrow();expect(f.adapter.call).not.toHaveBeenCalled();if(['native-version','cleanup'].includes(mode))expect(f.adapter.close).toHaveBeenCalledOnce();else expect(state.connect).not.toHaveBeenCalled();
 });
+
+it('pins a locator within one request but still reads current SDK and upstream bytes',async()=>{const f=await fixture(),inspect=createStandaloneProbeAdapterInspector(f.home);await inspect(f.plan.adapter.entrySha256);state.missing=true;await expect(inspect(f.plan.adapter.entrySha256)).resolves.toHaveProperty('entry',f.entry);expect(state.discover).toHaveBeenCalledTimes(1);await expect(inspectStandaloneProbeAdapter(f.home,f.plan.adapter.entrySha256)).rejects.toThrow('unavailable');await fs.appendFile(f.entry,'changed');await expect(inspect(f.plan.adapter.entrySha256)).rejects.toThrow('changed');expect(state.connect).not.toHaveBeenCalled();});
+it('never caches upstream validation through a pinned locator',async()=>{const f=await fixture(),inspect=createStandaloneProbeAdapterInspector(f.home);await inspect(f.plan.adapter.entrySha256);await fs.writeFile(path.join(f.home,'server','mcp.mjs'),'changed upstream');state.build.mockImplementation((bytes:Buffer)=>{expect(bytes.toString()).toBe('changed upstream');throw Error('Pinned upstream changed');});await expect(inspect(f.plan.adapter.entrySha256)).rejects.toThrow('upstream changed');expect(state.build).toHaveBeenCalledTimes(2);});

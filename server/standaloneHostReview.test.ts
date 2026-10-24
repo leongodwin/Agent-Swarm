@@ -1,7 +1,9 @@
 import {decodeReviewCapsule} from './testFixtures/decodeReviewCapsule.ts';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import {expect,it} from 'vitest';
+import {expect,it,vi} from 'vitest';
+const drift=vi.hoisted(()=>({enabled:false,reads:0}));
+vi.mock('./boundedJson.ts',async()=>{const original:any=await vi.importActual('./boundedJson.ts');return{...original,readBoundedBytes:async(file:string,max:number)=>{const bytes=await original.readBoundedBytes(file,max);if(drift.enabled&&file.replaceAll('\\','/').endsWith('/server/browserAuth.ts')&&++drift.reads===2)return Buffer.concat([bytes,Buffer.from('\n// changed')]);return bytes;}};});
 import {exactHostSection,standaloneHostReviewSources} from './standaloneHostReview.ts';
 const sha=(s:string)=>crypto.createHash('sha256').update(s).digest('hex');
 it('binds exact fixed host components and their complete containing files inside existing review bounds',async()=>{const capsule=await standaloneHostReviewSources();expect(sha(capsule.text)).toBe(capsule.sha256);expect(Buffer.byteLength(capsule.text)).toBeLessThanOrEqual(128*1024);const data={sources:decodeReviewCapsule(capsule.text)};for(const part of data.sources){const original=await fs.readFile(new URL('../'+part.file,import.meta.url),'utf8');expect(part.fullSourceSha256).toBe(sha(original));expect(part.text).toBe(original.slice(part.startCharacter,part.endCharacter));expect(part.sha256).toBe(sha(part.text));}expect(data.sources.some((p:any)=>p.file==='server/index.ts'&&p.text.includes('standaloneProbeFor'))).toBe(true);expect(data.sources.some((p:any)=>p.file==='server/officeHttp.ts'&&p.text.includes('browserAuth.install'))).toBe(true);expect(data.sources.some((p:any)=>p.file==='server/deliveryRecordTools.ts'&&p.text.includes('assigned independent QA'))).toBe(true);});
@@ -9,3 +11,5 @@ it('binds changes outside selected callsites instead of hiding containing-file d
 it.each(['missing-start','duplicate-start','missing-end','duplicate-end','oversize'])('refuses %s extraction rather than guessed or truncated review source',mode=>{let text='STARTabcEND';if(mode==='missing-start')text='abcEND';if(mode==='duplicate-start')text+='START';if(mode==='missing-end')text='STARTabc';if(mode==='duplicate-end')text+='END';if(mode==='oversize')text='START'+'x'.repeat(128*1024)+'END';expect(()=>exactHostSection('synthetic',text,'START','END')).toThrow();});
 
 it('supplies complete executed command resolution and PAC failure predicates with containing-file hashes',async()=>{const c=await standaloneHostReviewSources(),parts=decodeReviewCapsule(c.text);const resolver=parts.find((p:any)=>p.file==='server/clis.ts'&&p.text.startsWith('const WIN'));expect(resolver.text).toContain('export function resolveCommand(');expect(resolver.text).toContain('export function unwrapCmdShim(');expect(resolver.text).not.toContain('export function commandFor(');expect(parts.some((p:any)=>p.file==='server/delivery.ts'&&p.text.startsWith('export function pacReportedError('))).toBe(true);});
+
+it('rejects containing-file drift between the parallel snapshot and post-read checks',async()=>{drift.enabled=true;drift.reads=0;try{await expect(standaloneHostReviewSources()).rejects.toThrow('changed during review assembly');}finally{drift.enabled=false;}});

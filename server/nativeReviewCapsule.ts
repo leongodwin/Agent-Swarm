@@ -6,7 +6,7 @@ export function nativeReviewCapsule(entrySha256:string,sources:readonly NativeRe
  let longest=2;
  for(const source of sources){if(source.endCharacter-source.startCharacter!==source.text.length)throw Error('Native source range differs');for(const match of source.text.matchAll(/`+/g))longest=Math.max(longest,match[0].length);}
  const fence='`'.repeat(longest+1),metadata={schemaVersion:2,entrySha256,fence,columns:['name','startCharacter','endCharacter','sha256'],sources:sources.map(s=>[s.name,s.startCharacter,s.endCharacter,s.sha256])};
- return '# Complete exact native SDK source\n\nBodies follow tuple order. After each opening fence plus LF, read exactly endCharacter-startCharacter UTF-16 units. Every original byte is retained; UTF-8 item hashes and original-entry offsets are exact. One entry SHA binds every tuple. Ordinary MSAL/MCP/Node libraries are not reproduced.\n\n'+JSON.stringify(metadata)+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
+ return '# Complete exact native SDK source\n\nTuple-ordered raw bodies: read endCharacter-startCharacter UTF-16 units after each opening fence plus LF. Entry/item SHA256 and original ranges bind all bytes. Ordinary MSAL/MCP/Node libraries excluded.\n\n'+JSON.stringify(metadata)+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
 }
 
 export interface ExactReviewSource {file:string;sha256:string;text:string;}
@@ -14,7 +14,7 @@ export interface ExactReviewSource {file:string;sha256:string;text:string;}
 export function exactReviewCapsule(sources:readonly ExactReviewSource[]){
  let longest=2;for(const s of sources)for(const m of s.text.matchAll(/`+/g))longest=Math.max(longest,m[0].length);
  const fence='`'.repeat(longest+1);
- return '# Complete exact standalone source capsule\n\nBodies follow tuple order. Read exactly characterLength UTF-16 units after each opening fence plus LF. UTF-8 hashes bind every complete original file.\n\n'+JSON.stringify({schemaVersion:2,fence,columns:['file','sha256','characterLength'],sources:sources.map(s=>[s.file,s.sha256,s.text.length])})+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
+ return '# Complete exact standalone source capsule\n\nTuple-ordered full files: read characterLength UTF-16 units after each opening fence plus LF. SHA256 binds original UTF-8 bytes.\n\n'+JSON.stringify({schemaVersion:2,fence,columns:['file','sha256','characterLength'],sources:sources.map(s=>[s.file,s.sha256,s.text.length])})+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
 }
 
 export interface HostReviewPart extends ExactReviewSource {fullSourceSha256:string;startCharacter:number;endCharacter:number;}
@@ -22,5 +22,5 @@ export function hostReviewCapsule(sources:readonly HostReviewPart[]){
  let longest=2;
  for(const s of sources){if(s.endCharacter-s.startCharacter!==s.text.length)throw Error('Host source range differs');for(const m of s.text.matchAll(/`+/g))longest=Math.max(longest,m[0].length);}
  const fence='`'.repeat(longest+1);
- return '# Exact normal-host source components\n\nComplete fixed executed components; unrelated host sections are excluded. Bodies follow tuple order. Read exactly endCharacter-startCharacter UTF-16 units after each opening fence plus LF. Full containing-file and exact component hashes/ranges retain every selected byte.\n\n'+JSON.stringify({schemaVersion:3,fence,columns:['file','fullSourceSha256','startCharacter','endCharacter','sha256'],sources:sources.map(s=>[s.file,s.fullSourceSha256,s.startCharacter,s.endCharacter,s.sha256])})+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
+ return '# Exact normal-host source components\n\nComplete fixed components; unrelated sections excluded. Tuple-ordered raw bodies: read endCharacter-startCharacter UTF-16 units after each opening fence plus LF. Containing-file/item hashes and ranges bind all selected bytes.\n\n'+JSON.stringify({schemaVersion:3,fence,columns:['file','fullSourceSha256','startCharacter','endCharacter','sha256'],sources:sources.map(s=>[s.file,s.fullSourceSha256,s.startCharacter,s.endCharacter,s.sha256])})+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
 }
