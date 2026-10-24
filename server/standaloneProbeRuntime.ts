@@ -66,7 +66,7 @@ export function standaloneProbeRuntime(context:{home:string;configurationRoot:st
   const configurationEvidence=policy?{standardPolicy:{tenantId:policy.tenantId,caller:policy.caller,moduleVersion:policy.moduleVersion,policySha256:evaluation!.policySha256!,policies:policy.policies,maxAgeMs:900000 as const,classification:'clear' as const,complianceVerified:false as const}}:undefined;
   guard();return{record:context.record(),plan:{...input.plan,configurationSha256,implementationSha256:connectorProbeDigest(implementationSources)},configurationSha256,configurationEvidence,controls:input.controls,implementationSources};
  });
- return{service,inspect:()=>service.view(guard),execute:async(expected:string)=>{
+ return{service,inspect:()=>service.view(guard),readiness:async()=>{guard();const integration=await integrated();guard();return{integration,executionRequested:false};},execute:async(expected:string)=>{
   guard();if(!context.cwd||!context.leaseRoot||!context.policyObservation)throw Error('Normal host connector-probe execution context required');
   const cwd=context.cwd,signal=AbortSignal.timeout(115000),run=async(executable:string,args:string[])=>{signal.throwIfAborted();guard();const result=await deliveryCommands.run({executable,args},cwd,{},signal);guard();return result;};let adapter:FlowAdapter|undefined;
   // Exact-main CI is an additional machine gate, never a substitute for QA.
