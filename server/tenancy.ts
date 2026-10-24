@@ -10,7 +10,7 @@ import type { TenancyInfo, TenancyLogin, TenancyLoginInput,TenancyActivity } fro
 import {identityRoot} from './identityContracts.ts';
 import {currentEnvironment} from '../shared/tenancy.ts';
 import {parsePacIdentity} from './platformAuth.ts';
-import {parsePacTenantIdentity,pacTenantWhoSchema,verifyPacTenantOrganization} from './pacTenantIdentity.ts';
+import {pacTenantWhoSchema,verifyPacTenantOrganization} from './pacTenantIdentity.ts';
 import {parseUnambiguousJson} from './unambiguousJson.ts';
 export type { TenancyInfo, TenancyEnvironment } from '../shared/tenancy.ts';
 
@@ -169,14 +169,12 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
       try{
         guard();const before=parsePacProfiles(await run('pac',['auth','list'])),active=currentEnvironment(before);guard();
         if(!active||identityRoot(active.url)!==target||active.user.toLowerCase()!==username.toLowerCase())throw new HttpError(409,'The intended PAC account and target must already be selected');
-        const profile=parsePacTenantIdentity(await run('pac',['auth','who']));guard();
-        if(profile.username.toLowerCase()!==username.toLowerCase())throw new HttpError(409,'Selected PAC account changed during tenant discovery');
         const read=async(resource:string)=>{const text=await run('dataverse',['api','request','--target','dataverse','--environment',target,'--method','GET','--path','/api/data/v9.2/'+resource]);guard();return parseUnambiguousJson(text.trim(),{maxBytes:65536});};
         const who=pacTenantWhoSchema.parse(await read('WhoAmI')),organization=await read("RetrieveCurrentOrganization(AccessType=Microsoft.Dynamics.CRM.EndpointAccessType'Default')"),user=await read(`systemusers(${who.UserId})?$select=systemuserid,azureactivedirectoryobjectid,domainname,isdisabled,applicationid`);
-        verifyPacTenantOrganization(profile,who,organization,user,username);guard();
+        const identity=verifyPacTenantOrganization(who,organization,user,username);guard();
         const after=parsePacProfiles(await run('pac',['auth','list'])),again=currentEnvironment(after);guard();
         if(!again||again.index!==active.index||identityRoot(again.url)!==target||again.user.toLowerCase()!==username.toLowerCase())throw new HttpError(409,'PAC profile tenant and executing organization were not confirmed');
-        return {...after,tenantId:profile.tenantId};
+        return {...after,tenantId:identity.tenantId};
       }finally{nativeCommands.delete(ticket);notify();}
     },
     activity,
