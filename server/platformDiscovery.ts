@@ -38,7 +38,7 @@ export const platformDiscoveryRequest=z.discriminatedUnion('kind',[
  z.strictObject({kind:z.literal('headless-authoring-rights')}),
  z.strictObject({kind:z.literal('private-report-metadata')}),
  z.strictObject({kind:z.literal('headless-dispatch-reconciliation')}),
- z.strictObject({kind:z.literal('headless-run-reconciliation'),flowId:z.uuid(),runId:z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).optional()}),
+ z.strictObject({kind:z.literal('headless-run-reconciliation'),flowId:dataverseGuid,runId:z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).optional()}),
  z.strictObject({kind:z.literal('repository-access')}),
  z.strictObject({kind:z.literal('headless-discovery-contracts')}),
  z.strictObject({kind:z.literal('environment-rule-assignments')}),

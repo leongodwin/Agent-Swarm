@@ -118,3 +118,6 @@ describe('native repetition evidence',()=>{
  ])('rejects incomplete, replayed or overlapping metadata',mutate=>{const f={action:'Read_inbox',count:2,truncated:false,repetitions:[repetition(0),repetition(1)]};mutate(f);expect(()=>validateSourceRepetitions(f,'Read_inbox',2,run)).toThrow(/^SOURCE_REPETITION_VERIFICATION_FAILED$/);});
 });
 
+
+it('observes source for service-assigned flow and environment GUIDs while preserving exact binding',async()=>{const f=observerFixture(),binding={...f.binding,flowId:'22222222-2222-f111-8222-222222222222',environmentId:'11111111-1111-ed6f-8111-111111111111'};const result=await observeHeadlessSource(f,binding,f.def,f.guard);expect(result.receipt.flowId).toBe(binding.flowId);expect(f.call.mock.calls.every(([,args])=>args.env===binding.environmentId&&args.flow===binding.flowId)).toBe(true);});
+it.each(['22222222-2222-f111-8222-222222222222/other','not-a-guid'])('refuses malformed provider flow ID before source access: %s',async flowId=>{const f=observerFixture();await expect(observeHeadlessSource(f,{...f.binding,flowId},f.def,f.guard)).rejects.toThrow('SOURCE_OBSERVATION_FAILED_CONTENT_WITHHELD');expect(f.call).not.toHaveBeenCalled();});

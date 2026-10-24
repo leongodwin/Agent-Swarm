@@ -37,14 +37,31 @@ export class CoordinatorBrowserVerification {
  private active(row:CoordinatorBrowserRequest){const p=this.pending.get(row.id);return !!p&&!p.signal.aborted&&this.now()<row.deadlineAt;}
  async claim(id:string){return this.writer.write(async()=>{const row=await this.read(id);if(row.state!=='pending'||!this.active(row))throw new HttpError(409,'Runner browser request is stale or already claimed; never replay');const rows=await this.list();if(rows.some(r=>r.id!==id&&(r.state==='claimed'||r.state==='cancelled'&&!!r.claim)&&coordinatorAppTarget(r.baseUrl)===coordinatorAppTarget(row.baseUrl)))throw new HttpError(409,'Prior runner browser action needs reconciliation; no replay');if(rows.some(r=>r.active&&r.state==='claimed'))throw new HttpError(409,'Another runner browser action is claimed');row.state='claimed';row.claim=crypto.randomUUID();await this.save(row);if(!this.active(row))throw new HttpError(409,'Runner browser request expired before dispatch');return row;});}
  async complete(id:string,claim:string,raw:unknown){const result=resultSchema.parse(raw);return this.writer.write(async()=>{const row=await this.read(id);if(row.claim!==claim||row.nonce!==result.nonce||row.state!=='claimed'||!this.active(row))throw new HttpError(409,'Runner browser claim is stale or differs');if(!result.observedUser.includes(row.identity.expectedUser))throw new HttpError(409,'Runner browser identity differs');row.result=result;row.state='complete';await this.save(row);const pending=this.pending.get(id);if(!pending||pending.signal.aborted||this.now()>=row.deadlineAt)throw new HttpError(409,'Runner cancelled before result admission');pending.resolve(result);return {id,state:row.state,provenance:'coordinator-built-in-browser',resultSha256:sha(JSON.stringify(result))};});}
- async dispatch(input:Omit<CoordinatorBrowserRequest,'id'|'createdAt'|'state'>,signal:AbortSignal){signal.throwIfAborted();await assertCoordinatorTarget(this.root,input.baseUrl,input.repoId,input.environmentUrl);const row:CoordinatorBrowserRequest={...input,id:crypto.randomUUID(),createdAt:new Date(this.now()).toISOString(),state:'pending'};if(this.now()>=row.deadlineAt)throw Error('Browser verification budget expired');const unresolved=(await this.list()).filter(r=>r.state==='claimed'||r.state==='cancelled'&&!!r.claim);if(unresolved.some(r=>coordinatorAppTarget(r.baseUrl)===coordinatorAppTarget(row.baseUrl)))throw Error('Interrupted runner browser action requires reconciliation; no replay');
-  return new Promise<z.infer<typeof resultSchema>>((resolve,reject)=>{
-   let ended=false;const finish=(error?:Error,value?:z.infer<typeof resultSchema>)=>{if(ended)return;ended=true;clearTimeout(timer);signal.removeEventListener('abort',abort);this.pending.delete(row.id);if(error){void this.writer.write(async()=>{const retained=await this.read(row.id).catch(()=>row);if(retained.state!=='complete'){retained.state='cancelled';await this.save(retained);}}).then(()=>reject(error),reject);}else resolve(value!);};
-   const abort=()=>finish(Error('Runner browser verification cancelled; retain unknown actions')),timer=setTimeout(()=>finish(Error('Runner browser verification budget expired; retain unknown actions')),Math.max(1,row.deadlineAt-this.now()));
-   this.pending.set(row.id,{signal,resolve:value=>finish(undefined,value),reject:error=>finish(error)});signal.addEventListener('abort',abort,{once:true});
-   void this.writer.write(async()=>{signal.throwIfAborted();await this.save(row);signal.throwIfAborted();}).catch(error=>finish(error));
+ async dispatch(input:Omit<CoordinatorBrowserRequest,'id'|'createdAt'|'state'>,signal:AbortSignal){
+  signal.throwIfAborted();await assertCoordinatorTarget(this.root,input.baseUrl,input.repoId,input.environmentUrl);
+  // Admission reads and publication share the claim writer. Another dispatch
+  // cannot mistake our in-flight atomic temporary file for foreign evidence.
+  const {completion}=await this.writer.write(async()=>{
+   signal.throwIfAborted();
+   const row:CoordinatorBrowserRequest={...input,id:crypto.randomUUID(),createdAt:new Date(this.now()).toISOString(),state:'pending'};
+   if(this.now()>=row.deadlineAt)throw Error('Browser verification budget expired');
+   const unresolved=(await this.list()).filter(r=>r.state==='claimed'||r.state==='cancelled'&&!!r.claim);
+   if(unresolved.some(r=>coordinatorAppTarget(r.baseUrl)===coordinatorAppTarget(row.baseUrl)))throw Error('Interrupted runner browser action requires reconciliation; no replay');
+   let finish!:(error?:Error,value?:z.infer<typeof resultSchema>)=>void;
+   const completion=new Promise<z.infer<typeof resultSchema>>((resolve,reject)=>{
+    let ended=false;
+    finish=(error,value)=>{if(ended)return;ended=true;clearTimeout(timer);signal.removeEventListener('abort',abort);this.pending.delete(row.id);if(error){void this.writer.write(async()=>{const retained=await this.read(row.id).catch(()=>row);if(retained.state!=='complete'){retained.state='cancelled';await this.save(retained);}}).then(()=>reject(error),reject);}else resolve(value!);};
+    const abort=()=>finish(Error('Runner browser verification cancelled; retain unknown actions')),timer=setTimeout(()=>finish(Error('Runner browser verification budget expired; retain unknown actions')),Math.max(1,row.deadlineAt-this.now()));
+    this.pending.set(row.id,{signal,resolve:value=>finish(undefined,value),reject:error=>finish(error)});signal.addEventListener('abort',abort,{once:true});
+   });
+   void completion.catch(()=>{});
+   try{signal.throwIfAborted();await this.save(row);signal.throwIfAborted();}catch(error){finish(error instanceof Error?error:Error('Runner browser request publication failed'));}
+   // Never await completion while holding the writer: claim/complete need it.
+   return {completion};
   });
+  return completion;
  }
+
 }
 const instances=new Map<string,CoordinatorBrowserVerification>();
 export function coordinatorVerification(root:string){const key=path.resolve(root);let instance=instances.get(key);if(!instance){instance=new CoordinatorBrowserVerification(key);instances.set(key,instance);}return instance;}

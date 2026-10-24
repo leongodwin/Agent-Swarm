@@ -1,8 +1,10 @@
+import {platformIdentitySchema} from './identityContracts.ts';
+import {dataverseGuid} from './targetOperations.ts';
 import {z} from 'zod';
 import type {FlowAdapter} from './flowAdapter.ts';
 import {SOURCE_CAPSULE_BYTES,assertSourceCapsuleDefinition,sourceDigest,sourceNames,validateSourceCapsule,validateSourceRepetitions} from './headlessSourceContract.ts';
 
-const bindingSchema=z.strictObject({environmentId:z.uuid(),flowId:z.uuid(),runId:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),nonce:z.uuid(),dataMode:z.enum(['synthetic','mailbox']),definitionSha256:z.string().regex(/^[a-f0-9]{64}$/),startedAt:z.iso.datetime({offset:true}),endedAt:z.iso.datetime({offset:true})});
+const bindingSchema=z.strictObject({environmentId:platformIdentitySchema.shape.environmentId,flowId:dataverseGuid,runId:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),nonce:z.uuid(),dataMode:z.enum(['synthetic','mailbox']),definitionSha256:z.string().regex(/^[a-f0-9]{64}$/),startedAt:z.iso.datetime({offset:true}),endedAt:z.iso.datetime({offset:true})});
 export type SourceObservationBinding=z.infer<typeof bindingSchema>;
 
 /** Inert observation primitive. The release runner must supply reviewed admission,

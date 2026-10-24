@@ -1,3 +1,4 @@
+import {dataverseGuid} from './targetOperations.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -11,7 +12,7 @@ import type {observeHeadlessSource,SourceObservationBinding} from './headlessSou
 type Observation=Awaited<ReturnType<typeof observeHeadlessSource>>;
 const digest=(bytes:string)=>crypto.createHash('sha256').update(bytes,'utf8').digest('hex');
 const hash=z.string().regex(/^[a-f0-9]{64}$/);
-const captureReceiptSchema=z.strictObject({schemaVersion:z.literal(1),kind:z.literal('protected-source-files-v1'),recordId:z.uuid(),recordRevision:z.number().int().positive(),recordSha256:hash,flowId:z.uuid(),runId:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),nonce:z.uuid(),definitionSha256:hash,sourceSha256:hash,indexSha256:hash,sourceFileSha256:hash,indexFileSha256:hash,observationSha256:hash,successAccepted:z.literal(false),checkerExecuted:z.literal(false)});
+const captureReceiptSchema=z.strictObject({schemaVersion:z.literal(1),kind:z.literal('protected-source-files-v1'),recordId:z.uuid(),recordRevision:z.number().int().positive(),recordSha256:hash,flowId:dataverseGuid,runId:z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),nonce:z.uuid(),definitionSha256:hash,sourceSha256:hash,indexSha256:hash,sourceFileSha256:hash,indexFileSha256:hash,observationSha256:hash,successAccepted:z.literal(false),checkerExecuted:z.literal(false)});
 export type ProtectedSourceReceipt=z.infer<typeof captureReceiptSchema>;
 
 /** This callback must re-run the existing Windows ACL/path admission. A bare
@@ -40,7 +41,7 @@ const files=(root:string,nonce:string)=>({source:path.join(root,nonce+'.source.j
  * Partial files remain for reconciliation; no cleanup or replay is authorized. */
 export async function retainHeadlessSource(record:RecordReference,binding:SourceObservationBinding,observation:Observation,getLeaf:ProtectedSourceLeaf){
  try{
-  z.strictObject({id:z.uuid(),revision:z.number().int().positive(),sha256:hash}).parse(record);z.uuid().parse(binding.nonce);z.uuid().parse(binding.flowId);hash.parse(binding.definitionSha256);z.string().regex(/^[A-Za-z0-9_-]{1,200}$/).parse(binding.runId);
+  z.strictObject({id:z.uuid(),revision:z.number().int().positive(),sha256:hash}).parse(record);z.uuid().parse(binding.nonce);dataverseGuid.parse(binding.flowId);hash.parse(binding.definitionSha256);z.string().regex(/^[A-Za-z0-9_-]{1,200}$/).parse(binding.runId);
   const recordId=record.id,recordRevision=record.revision,recordSha256=record.sha256;
   const source=validateSourceCapsule(observation.privateSource.capsule,{dataMode:binding.dataMode,nonce:binding.nonce,startedAt:binding.startedAt,endedAt:binding.endedAt});
   const proof=observation.receipt;
