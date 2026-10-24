@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import {memoizeTextDerivation} from './pureTextDerivation.ts';
 
 export const STANDALONE_UPSTREAM_SHA256='c1bd1cf31363a8db2403cb87f6ee52a182528af55d0a3d17c487ae013a1731d3';
 export const STANDALONE_ADAPTER_VERSION='3.2.1-as-direct.8';
+const compiledSource=memoizeTextDerivation(source=>fixedStandaloneServerInitialization(withoutStandaloneTelemetry(transformStandaloneFlowAgent(source).source)));
 const start='  server2.tool("create_flow",';
 const end='  server2.tool("update_flow",';
 const enrichment='enrichedRefs = await enrichRefsWithLogicalNames(ctx.getClient(), envId, enrichedRefs);';
@@ -88,9 +90,8 @@ export function completeStandaloneInventory(source:string){
 export function buildStandaloneFlowAgent(upstream:Uint8Array){
  const sourceSha256=crypto.createHash('sha256').update(upstream).digest('hex');
  if(sourceSha256!==STANDALONE_UPSTREAM_SHA256)throw Error('Standalone adapter upstream differs from the pinned reviewed source');
- const built=transformStandaloneFlowAgent(Buffer.from(upstream).toString('utf8'));
- const source=fixedStandaloneServerInitialization(withoutStandaloneTelemetry(built.source));
- return {...built,source,entrySha256:crypto.createHash('sha256').update(source).digest('hex')};
+ const source=compiledSource(Buffer.from(upstream).toString('utf8'));
+ return {source,sourceSha256,entrySha256:crypto.createHash('sha256').update(source).digest('hex'),version:STANDALONE_ADAPTER_VERSION,kind:'local-standalone-compatibility-candidate' as const,tenantAuthorityGranted:false as const};
 }
 
 /** This stdio entry accepts its fixed config only; injected clients, sessions

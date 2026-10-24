@@ -41,8 +41,11 @@ const sections=[
 ] as const;
 export async function standaloneHostReviewSources(){
  const read=async(file:string)=>{const name=fileURLToPath(new URL('../'+file,import.meta.url)),stat=await fs.lstat(name);if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)throw Error('Canonical host source required');const bytes=await readBoundedBytes(name,512*1024);if(!bytes)throw Error('Host source unavailable');return new TextDecoder('utf8',{fatal:true}).decode(bytes);};
- const sources=[];for(const section of sections)sources.push(exactHostSection(section[0],await read(section[0]),section[1],section[2]));
- for(const file of ['server/deliveryRecordTools.ts','server/browserAuth.ts']){const text=await read(file);sources.push({file,fullSourceSha256:sha(text),startCharacter:0,endCharacter:text.length,sha256:sha(text),text});}
+ const files=[...new Set([...sections.map(s=>s[0]),'server/deliveryRecordTools.ts','server/browserAuth.ts'])];
+ const snapshots=new Map(await Promise.all(files.map(async file=>[file,await read(file)] as const)));
+ const sources=sections.map(section=>exactHostSection(section[0],snapshots.get(section[0])!,section[1],section[2]));
+ for(const file of ['server/deliveryRecordTools.ts','server/browserAuth.ts']){const text=snapshots.get(file)!;sources.push({file,fullSourceSha256:sha(text),startCharacter:0,endCharacter:text.length,sha256:sha(text),text});}
+ await Promise.all(files.map(async file=>{if(await read(file)!==snapshots.get(file))throw Error('Host source changed during review assembly');}));
  const text=hostReviewCapsule(sources);
  if(Buffer.byteLength(text)>128*1024)throw Error('Host source capsule exceeds the existing review bound');
  return {file:'docs/STANDALONE-NORMAL-HOST-SOURCES.md',sha256:sha(text),text};

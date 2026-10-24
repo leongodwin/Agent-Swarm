@@ -8,16 +8,20 @@ import {connectFlowAdapter,type FlowAdapter} from './flowAdapter.ts';
 import type {StandaloneProbePlan} from './standaloneMetadataProbe.ts';
 
 /** Inspection never generates, repairs or rewrites source during review. */
-export async function inspectStandaloneProbeAdapter(home:string,expectedEntrySha256:string){
- const skill=discoverSkills().skills.find(s=>s.id==='power-automate:manage-flows');
- if(!skill)throw Error('Pinned Power Automate skill is unavailable');
- const upstream=path.resolve(path.dirname(skill.file),'..','..','server','mcp.mjs');
+export function createStandaloneProbeAdapterInspector(home:string){
+ let upstream:string|undefined;
+ return async(expectedEntrySha256:string)=>{
+ if(!upstream){const skill=discoverSkills().skills.find(s=>s.id==='power-automate:manage-flows');if(!skill)throw Error('Pinned Power Automate skill is unavailable');upstream=path.resolve(path.dirname(skill.file),'..','..','server','mcp.mjs');}
  const build=buildStandaloneFlowAgent(await fs.readFile(upstream));
  if(build.entrySha256!==expectedEntrySha256)throw Error('Standalone compatibility build differs from the approved source');
  const entry=path.join(home,'bin','flowagent-standalone-'+build.entrySha256+'.mjs'),stat=await fs.lstat(entry);
  if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||await fs.realpath(entry)!==path.resolve(entry))throw Error('Standalone compatibility entry is not canonical');
  if(crypto.createHash('sha256').update(await fs.readFile(entry)).digest('hex')!==build.entrySha256)throw Error('Standalone compatibility entry changed');
  return {entry,upstreamSha256:build.sourceSha256,metadata:{name:'flowagent-mcp',version:STANDALONE_ADAPTER_VERSION,entrySha256:build.entrySha256}};
+ };
+}
+export async function inspectStandaloneProbeAdapter(home:string,expectedEntrySha256:string){
+ return createStandaloneProbeAdapterInspector(home)(expectedEntrySha256);
 }
 
 /** Called only by the exact independently approved fixed probe executor. */

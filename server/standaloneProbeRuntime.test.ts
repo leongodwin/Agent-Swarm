@@ -9,7 +9,7 @@ import {standaloneProbeControlIds} from './standaloneProbeReview.ts';
 import {standaloneProbeFixturePlan,standaloneProbeFixtureRecord} from './testFixtures/standaloneProbe.ts';
 import {taskScopeHash} from './taskScope.ts';
 vi.mock('./standaloneProbeQuarantine.ts',()=>({verifyStandaloneQuarantine:vi.fn(async()=>({originalHoldPreserved:true}))}));
-vi.mock('./standaloneProbeAdapter.ts',()=>({inspectStandaloneProbeAdapter:vi.fn(async()=>({})),connectStandaloneProbeAdapter:vi.fn()}));
+vi.mock('./standaloneProbeAdapter.ts',()=>({inspectStandaloneProbeAdapter:vi.fn(async()=>({})),createStandaloneProbeAdapterInspector:()=>vi.fn(async()=>({})),connectStandaloneProbeAdapter:vi.fn()}));
 vi.mock('./standaloneNativeReview.ts',()=>({standaloneNativeReviewSources:vi.fn(async()=>[])}));
 const roots:string[]=[];
 afterEach(async()=>{for(const root of roots.splice(0)){if(path.dirname(path.resolve(root))!==path.resolve(os.tmpdir())||!path.basename(root).startsWith('as-probe-runtime-'))throw Error('Unexpected test root');await fs.rm(root,{recursive:true,force:true});}});
