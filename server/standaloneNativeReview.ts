@@ -13,15 +13,24 @@ export const nativeReviewClasses=["DuplicateFlowError","ManagedSolutionError","F
  * does not claim to reproduce unrelated tools or the bundled MSAL/MCP libraries. */
 export function nativeReviewComponents(source:string,expected:string){
  if(sha(source)!==expected)throw Error('Native review entry changed');
- const unique=(needle:string,from=0)=>{const first=source.indexOf(needle,from);if(first<0||source.indexOf(needle,first+needle.length)>=0)throw Error('Native review component absent or ambiguous');return first;};
+ const unique=(needle:string,from=0)=>{const first=source.indexOf(needle,from);if(first<0||source.indexOf(needle,first+needle.length)>=0)throw Error('Native review component absent or ambiguous: '+needle);return first;};
  const component=(name:string,start:number,end:number)=>{const text=source.slice(start,end);if(end<=start||Buffer.byteLength(text)>128*1024)throw Error('Native component exceeds review bound');return{name,entrySha256:expected,startCharacter:start,endCharacter:end,sha256:sha(text),text};};
- const result=[];
+ const result:ReturnType<typeof component>[]=[];
  // Full bundled validation module includes its exports, validator body and lazy
  // initializer. Keep bundler helpers and cache initializer dependencies visible.
  for(const [name,begin,end] of [
   ['bundler-runtime','var __create = Object.create;','// packages/core/dist/utils/logger.js'],
   ['flow-definition-module','// packages/core/dist/validation/flow-definition.js','// packages/core/dist/auth/clear-cache-files.js'],
   ['cache-initialization-module','// packages/core/dist/auth/clear-cache-files.js','// packages/core/dist/auth/auth-operation-queue.js'],
+  ['logger-module','// packages/core/dist/utils/logger.js','// packages/core/dist/api/backups.js'],
+  ['auth-queue-and-msal-cache','// packages/core/dist/auth/auth-operation-queue.js','// node_modules/@azure/msal-node/dist/cache/serializer/Serializer.mjs'],
+  ['msal-auth-wrapper','// packages/core/dist/auth/msal-auth.js','// packages/core/dist/trigger-emulators.js'],
+  ['azure-disk-composite-auth','// packages/core/dist/auth/az-cli-auth.js\nimport { spawnSync }','// packages/core/dist/config.js'],
+  ['configuration-module','// packages/core/dist/config.js','// packages/core/dist/telemetry/index.js\nimport { spawn }'],
+  ['current-context-stores','// packages/core/dist/current-env-store.js','// packages/core/dist/index.js\ninit_trigger_emulators();'],
+  ['client-context-factory','function buildToolContext(','function enhanceFlowApiError('],
+  ['server-initialization','async function createMcpServer(authProvider, deps = {}) {','  server2.tool("whoami",'],
+  ['stdio-entry','// packages/cli/dist/bin/mcp-stdio.js','/*! Bundled license information:'],
  ] as const){const start=unique(begin),finish=unique(end,start+begin.length);result.push(component('module:'+name,start,finish));}
 
  for(const tool of nativeReviewTools){const start=unique(`  server2.tool("${tool}",`),end=source.indexOf('\n  server2.tool(',start+1);if(end<0)throw Error('Native tool boundary missing');result.push(component('tool:'+tool,start,end));}
@@ -37,9 +46,13 @@ export function nativeReviewComponents(source:string,expected:string){
  // general proof of dynamic JavaScript closure. Exact code still needs review.
  const methods=new Set([...client.matchAll(/^  (?:async )?(\w+)\(/gm)].map(m=>m[1])),functions=new Set([...source.matchAll(/^(?:async )?function (\w+)\(/gm)].map(m=>m[1])),included=new Set(result.map(p=>p.name));
  for(const part of result.filter(p=>p.name.startsWith('module:')))for(const match of part.text.matchAll(/^(?:async )?function (\w+)\(/gm))included.add('function:'+match[1]);
- const initializers=new Set([...source.matchAll(/^var (init_\w+) = __esm\(/gm)].map(m=>m[1])),exposedInitializers=new Set(result.flatMap(p=>[...p.text.matchAll(/^var (init_\w+) = __esm\(/gm)].map(m=>m[1])));
+ // Core lazy modules are in scope. Bundled third-party MSAL initializers are
+ // ordinary library code, already excluded explicitly from this review packet.
+ const initializers=new Set([...source.matchAll(/^var (init_\w+) = __esm\(\{\n  "packages\/core\//gm)].map(m=>m[1])),exposedInitializers=new Set(result.flatMap(p=>[...p.text.matchAll(/^var (init_\w+) = __esm\(/gm)].map(m=>m[1])));
  for(const part of result){for(const match of part.text.matchAll(/\b(init_\w+)\s*\(/g))if(initializers.has(match[1])&&!exposedInitializers.has(match[1]))throw Error('Executed native initializer omitted: '+match[1]);if(part.name.startsWith('module:'))continue;for(const match of part.text.matchAll(/\bthis\.(\w+)\s*\(/g))if(methods.has(match[1])&&!included.has('method:'+match[1]))throw Error('Executed native method omitted');for(const pattern of [/(?<![.\w])(\w+)\s*\(/g,/\bsafeError\s*\([^,\n]*,\s*(\w+)\s*\)/g])for(const match of part.text.matchAll(pattern))if(functions.has(match[1])&&!included.has('function:'+match[1]))throw Error('Executed native helper omitted: '+match[1]);}
- return result;
+ // Whole modules already retain these exact bytes and containing-entry hashes.
+ // Do not duplicate a selected helper/constant/class inside its complete module.
+ return result.filter(part=>part.name.startsWith('module:')||!result.some(module=>module.name.startsWith('module:')&&module.startCharacter<=part.startCharacter&&module.endCharacter>=part.endCharacter));
 }
 export async function standaloneNativeReviewSources(home:string,expected:string){
  const inspected=await inspectStandaloneProbeAdapter(home,expected),bytes=await readBoundedBytes(inspected.entry,8*1024*1024);if(!bytes)throw Error('Native review entry unavailable');

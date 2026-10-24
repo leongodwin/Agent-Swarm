@@ -1,5 +1,12 @@
 import crypto from 'node:crypto';import {expect,it} from 'vitest';
-import {exactReviewCapsule,nativeReviewCapsule} from './nativeReviewCapsule.ts';
+import {exactReviewCapsule,hostReviewCapsule,nativeReviewCapsule} from './nativeReviewCapsule.ts';
+import {decodeReviewCapsule} from './testFixtures/decodeReviewCapsule.ts';
+it('preserves host full-file hashes, exact ranges and Unicode source once',()=>{
+ const text='\u{1f600}\r\n```\n',part={file:'server/synthetic.ts',fullSourceSha256:'a'.repeat(64),startCharacter:42,endCharacter:42+text.length,sha256:crypto.createHash('sha256').update(text).digest('hex'),text};
+ expect(decodeReviewCapsule(hostReviewCapsule([part]))).toEqual([part]);
+ expect(()=>hostReviewCapsule([{...part,endCharacter:1}])).toThrow('range differs');
+ expect(()=>decodeReviewCapsule(hostReviewCapsule([part])+'unexpected')).toThrow();
+});
 it('retains complete file identity and Unicode bytes in full-file tuples',()=>{
  const bodies=['\u{1f600}\r\n```\n{"quoted":"\u00fc"}\n','second\r\n'];
  const sources=bodies.map((text,index)=>({file:'server/synthetic-'+index+'.ts',sha256:crypto.createHash('sha256').update(text).digest('hex'),text}));

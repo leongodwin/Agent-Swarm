@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 export const STANDALONE_UPSTREAM_SHA256='c1bd1cf31363a8db2403cb87f6ee52a182528af55d0a3d17c487ae013a1731d3';
-export const STANDALONE_ADAPTER_VERSION='3.2.1-as-direct.6';
+export const STANDALONE_ADAPTER_VERSION='3.2.1-as-direct.7';
 const start='  server2.tool("create_flow",';
 const end='  server2.tool("update_flow",';
 const enrichment='enrichedRefs = await enrichRefsWithLogicalNames(ctx.getClient(), envId, enrichedRefs);';
@@ -88,7 +88,16 @@ export function completeStandaloneInventory(source:string){
 export function buildStandaloneFlowAgent(upstream:Uint8Array){
  const sourceSha256=crypto.createHash('sha256').update(upstream).digest('hex');
  if(sourceSha256!==STANDALONE_UPSTREAM_SHA256)throw Error('Standalone adapter upstream differs from the pinned reviewed source');
- return transformStandaloneFlowAgent(Buffer.from(upstream).toString('utf8'));
+ const built=transformStandaloneFlowAgent(Buffer.from(upstream).toString('utf8'));
+ const source=withoutStandaloneTelemetry(built.source);
+ return {...built,source,entrySha256:crypto.createHash('sha256').update(source).digest('hex')};
+}
+
+/** The fixed stdio candidate installs no external tool telemetry observer. */
+export function withoutStandaloneTelemetry(source:string){
+ const original='var server = await createMcpServer(auth, {\n  config: config2,\n  ...createTelemetryObserver({\n    transport: "stdio",\n    getClientInfo: () => server?.server?.getClientVersion?.()\n  })\n});';
+ if(source.split(original).length!==2)throw Error('Standalone stdio observer registration differs');
+ return source.replace(original,'var server = await createMcpServer(auth, {config: config2});');
 }
 
 /** Structural transformation separated for complete offline negative tests.

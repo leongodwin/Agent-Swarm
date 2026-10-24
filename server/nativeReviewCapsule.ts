@@ -16,3 +16,11 @@ export function exactReviewCapsule(sources:readonly ExactReviewSource[]){
  const fence='`'.repeat(longest+1);
  return '# Complete exact standalone source capsule\n\nBodies follow tuple order. Read exactly characterLength UTF-16 units after each opening fence plus LF. UTF-8 hashes bind every complete original file.\n\n'+JSON.stringify({schemaVersion:2,fence,columns:['file','sha256','characterLength'],sources:sources.map(s=>[s.file,s.sha256,s.text.length])})+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
 }
+
+export interface HostReviewPart extends ExactReviewSource {fullSourceSha256:string;startCharacter:number;endCharacter:number;}
+export function hostReviewCapsule(sources:readonly HostReviewPart[]){
+ let longest=2;
+ for(const s of sources){if(s.endCharacter-s.startCharacter!==s.text.length)throw Error('Host source range differs');for(const m of s.text.matchAll(/`+/g))longest=Math.max(longest,m[0].length);}
+ const fence='`'.repeat(longest+1);
+ return '# Exact normal-host source components\n\nComplete fixed executed components; unrelated host sections are excluded. Bodies follow tuple order. Read exactly endCharacter-startCharacter UTF-16 units after each opening fence plus LF. Full containing-file and exact component hashes/ranges retain every selected byte.\n\n'+JSON.stringify({schemaVersion:3,fence,columns:['file','fullSourceSha256','startCharacter','endCharacter','sha256'],sources:sources.map(s=>[s.file,s.fullSourceSha256,s.startCharacter,s.endCharacter,s.sha256])})+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
+}

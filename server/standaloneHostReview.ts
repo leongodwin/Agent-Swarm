@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import crypto from 'node:crypto';
 import {readBoundedBytes} from './boundedJson.ts';
+import {hostReviewCapsule} from './nativeReviewCapsule.ts';
 
 const sha=(value:string|Uint8Array)=>crypto.createHash('sha256').update(value).digest('hex');
 /** Fixed complete callsites, not caller-selected excerpts. Whole-file hashes also
@@ -15,6 +16,13 @@ export function exactHostSection(file:string,text:string,start:string,end?:strin
  return {file,fullSourceSha256:sha(text),startCharacter:at,endCharacter:through,sha256:sha(selected),text:selected};
 }
 const sections=[
+ ['server/flowAdapter.ts',"import crypto from 'node:crypto';",'export async function verifyCloudFlowContext('],
+ ['server/resourceLease.ts',"import fs from 'node:fs/promises';",'export async function withResourceLease<T>('],
+ ['server/tenancy.ts',"import fs from 'node:fs';"],
+ ['server/tenancy.ts',"import path from 'node:path';"],
+ ['server/tenancy.ts',"import { resolveCommand, unwrapCmdShim } from './clis.ts';"],
+ ['server/tenancy.ts',"import { HttpError } from './httpError.ts';"],
+ ['server/tenancy.ts','export function resolveTenancyCommand(','export interface TenancyRunner'],
  ['server/clis.ts',"import fs from 'node:fs';"],
  ['server/clis.ts',"import path from 'node:path';"],
  ['server/clis.ts',"const WIN = process.platform === 'win32';",'/** How to start a CLI:'],
@@ -35,7 +43,7 @@ export async function standaloneHostReviewSources(){
  const read=async(file:string)=>{const name=fileURLToPath(new URL('../'+file,import.meta.url)),stat=await fs.lstat(name);if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)throw Error('Canonical host source required');const bytes=await readBoundedBytes(name,512*1024);if(!bytes)throw Error('Host source unavailable');return new TextDecoder('utf8',{fatal:true}).decode(bytes);};
  const sources=[];for(const section of sections)sources.push(exactHostSection(section[0],await read(section[0]),section[1],section[2]));
  for(const file of ['server/deliveryRecordTools.ts','server/browserAuth.ts']){const text=await read(file);sources.push({file,fullSourceSha256:sha(text),startCharacter:0,endCharacter:text.length,sha256:sha(text),text});}
- const text='# Exact normal-host authority and registration components\n\nThese are complete fixed factories, registration statements, review-session method, authenticated HTTP preamble/routes and complete record-dispatch/browser-auth modules. Other unrelated host sections are not reproduced. Each component carries its complete containing-file hash and exact character offsets. All hashes are re-read for every proposal/authority check.\n\n'+JSON.stringify({schemaVersion:1,sources});
+ const text=hostReviewCapsule(sources);
  if(Buffer.byteLength(text)>128*1024)throw Error('Host source capsule exceeds the existing review bound');
  return {file:'docs/STANDALONE-NORMAL-HOST-SOURCES.md',sha256:sha(text),text};
 }

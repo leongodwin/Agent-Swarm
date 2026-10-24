@@ -1,6 +1,6 @@
 import {expect,it,vi} from 'vitest';
 import crypto from 'node:crypto';
-import {buildStandaloneFlowAgent,transformStandaloneFlowAgent,STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
+import {buildStandaloneFlowAgent,transformStandaloneFlowAgent,withoutStandaloneTelemetry,STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
 
 import {standaloneTransportFixture} from './testFixtures/standaloneTransport.ts';
 const duplicateFailure='logger.warn(`[no-recreate-guard] listFlows failed during duplicate check (${err instanceof Error ? err.message : String(err)}); allowing create_flow to proceed`);\n      return;';
@@ -72,3 +72,5 @@ it('forbids duplicate override and fails closed when duplicate inventory cannot 
  await expect(guard(async()=>{throw Error('Unavailable');})).rejects.toThrow('creation refused');await expect(guard(async()=>[])).resolves.toBeUndefined();
 });
 it('refuses missing duplicate guard instead of silently keeping an upstream fail-open path',()=>{expect(()=>transformStandaloneFlowAgent(fixture.replace(duplicateFailure,''))).toThrow('structure differs');});
+
+it('removes only the exact dedicated stdio telemetry registration and refuses drift',()=>{const registration='var server = await createMcpServer(auth, {\n  config: config2,\n  ...createTelemetryObserver({\n    transport: "stdio",\n    getClientInfo: () => server?.server?.getClientVersion?.()\n  })\n});';const source='before\n'+registration+'\nafter';expect(withoutStandaloneTelemetry(source)).toBe('before\nvar server = await createMcpServer(auth, {config: config2});\nafter');expect(()=>withoutStandaloneTelemetry('different')).toThrow('registration differs');expect(()=>withoutStandaloneTelemetry(source+registration)).toThrow('registration differs');});
