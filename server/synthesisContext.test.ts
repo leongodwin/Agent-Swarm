@@ -1,3 +1,4 @@
+import {decodePlanningPrompt} from './testFixtures/decodePlanningPrompt.ts';
 import {it,expect} from 'vitest';
 import crypto from 'node:crypto';
 import {synthesisRecordContext,synthesisCatalogueContext,boundedSynthesisPrompt,synthesisEvidenceReference,synthesisEvidenceReceipt} from './synthesisContext.ts';
@@ -100,7 +101,7 @@ it('round-trips digest-named evidence paths without normalizing identities or om
  expect(view.evidenceReferencePrefixes).toEqual([prefix]);expect(evidenceFor(view,0)).toEqual(evidence);expect(view.content.contracts).toEqual(record.content.contracts);expect(view.content.findings[0]).toHaveProperty('statement','Current critical finding');expect(JSON.stringify(record)).toBe(original);
  const text=boundedSynthesisPrompt({discoveryEvidence:view},evidence.slice(0,2).map(e=>({reference:e.reference,sha256:e.sha256,status:'captured',text:'Exact source'})),20000),parsed=JSON.parse(text);
  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(20000);expect(parsed.capturedEvidence.map((e:any)=>e.sourceEvidenceIndex)).toEqual([0,1]);
- const legacy={...view,projection:'planning-only-exact-evidence-pool-v5',evidencePool:evidence};expect(()=>boundedSynthesisPrompt({discoveryEvidence:legacy},[],20000)).toThrow('scope exceeds');
+ const legacy={...view,projection:'planning-only-exact-evidence-pool-v5',evidencePool:evidence};const packed=boundedSynthesisPrompt({discoveryEvidence:legacy},[],20000),decoded=decodePlanningPrompt(packed);expect(Buffer.byteLength(packed)).toBeLessThanOrEqual(20000);expect(decoded.discoveryEvidence.content).toEqual(legacy.content);expect(decoded.discoveryEvidence.evidencePool).toEqual(evidence);
 });
 it('does not derive a reference from a mismatched filename or a lone path',()=>{
  const sha256='a'.repeat(64),evidence=[{reference:'C:/original/'+ 'b'.repeat(64)+'.json',sha256,observedAt:'2026-10-21T00:00:00Z',expiresAt:'2026-10-22T00:00:00Z'}],record={content:{findings:[{id:'original',critical:true,evidence}]}} as unknown as DeliveryRecord,view=synthesisRecordContext(record)!;

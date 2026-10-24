@@ -62,7 +62,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       # Coverage includes the real built launcher crash-recovery acceptance.
       - run: npm run build
-      - run: npm run test:coverage
+      # Keep native/fsync fixtures serial under coverage, matching the normal checks.
+      - run: npm run test:coverage -- --maxWorkers=1
       - if: always()
         uses: actions/upload-artifact@v4
         with:
