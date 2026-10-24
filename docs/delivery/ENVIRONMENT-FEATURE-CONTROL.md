@@ -1,0 +1,52 @@
+# One-shot future cloud-flow default change
+
+This is an explicitly scoped administrative prerequisite. It does not deploy a flow or approve a business design, task, private run, report or email. A successful local test, read-only metadata observation or setting update never supplies those later acceptance receipts.
+
+## Ownership and selection
+
+Assign the host implementation to an explicit engineering task in `leongodwin/Agent-Swarm`, separately from the recruitment application's authors. For the recruitment test this is host issue #25 and PR #32, owned by Leon / the current integration engineer. The existing application specialists keep tasks 5–7. The project's assigned independent QA reviewer owns the four administrative control decisions.
+
+Select `environmentFeature` in a new version of the shared discovery record using `shared/environmentFeatureScope.ts`. It must identify the owned host task, assignee, PR and exact host commit; an answered human design-scope decision; an owned administrative contract; exact tenant/environment/organization/user/Entra identity and HTTPS origin; and both distinct stopped flows and their original indices, scope and lease hashes. The only accepted operation is `disable-default-solution-flows`, field `enableflowsinsolutionbydefault`, value boolean `false`. This must match the connected record target. URLs with credentials, a port, a path or query are not accepted.
+
+The human scope decision is design inclusion, not independent approval. Preserve it without asking the same question again. Original record versions, rejected designs, stopped resources, journals, leases and unknown provider outcomes remain retained. Selecting this administrative phase does not replace or rearm either consumed flow protocol. No third flow or flow name is selected by this control.
+
+The project-scoped `environment-feature-contract.json` contains only `schemaVersion: 1` and exactly four `controls` entries, each with current content-addressed evidence under the normal `planning/evidence` root. It cannot supply code, commands, an alternative target, a flow definition or a mutation callback. Configuration and live capability fingerprints remain bound. The four controls are:
+
+- `exact-scope-and-owned-host-task`: direct human scope answer, purpose/effects, owned engineering task, exact one-field operation and independent role separation.
+- `identity-privilege-and-policy`: actual authenticated administrative metadata, target/user/Entra identity, native global organization-write privilege, field/concurrency support and applicable policy evidence. Standard Outlook classification is separately rechecked and is not a claim of complete business compliance, licensing or mailbox-use rights.
+- `conditional-acknowledgement-and-holds`: the exact native conditional request, acknowledgement versus readback, stable durable claim, source/configuration/record/time bounds and non-retry reconciliation.
+- `preserved-resources-and-business-boundary`: unchanged complete local original journals and leases, retained unknown outcomes, no flow mutation/adoption/new creation, and no transfer of business/private/report/send authority.
+
+## Independent review
+
+The normal `environment-feature/review` endpoint dispatches the assigned QA reviewer. `delivery_record` action `environment_feature` supports inspect, bounded source/control read, read-only observe/reconcile, and the exact four-control review. The review actor cannot execute the setting change through this tool. Owner/manager/developer and foreign-QA decisions are rejected. Sources and control evidence must be read completely, with hashes and paging; installation or file presence is not evidence of native behavior.
+
+Approval is prospective, applies only to this administrative phase and exact source/configuration/record/target, and expires within fifteen minutes or earlier evidence expiry. Every authority check freshly verifies source, control files, original preservation, policy identity/freshness and the selected scope. A genuine reread of unchanged policy content may refresh its live observation; it does not renew documentary controls or an old approval. Rejected business architecture and task decisions stay rejected. If independent QA cannot justify the isolated administrative scope and every applicable control, it must reject; there is no force flag or approval override.
+
+## Observation and execution
+
+Authenticated normal-host endpoints for a connected repository are:
+
+- `GET /environment-feature`: inspect the prospective proposal and saved independent decision.
+- `GET /environment-feature/readiness`: real, fixed GET-only administrative observation. It makes no execution intent or write claim. It validates existing delegated identity and server-returned organization/user/privilege/metadata/setting data. Its metadata artifact is not mutation authority.
+- `GET /environment-feature/reconcile`: inspect the original local administrative intent/journals/claim. It does not infer a current setting value or change any original record. Pair with a separate read-only observation when current state is needed.
+- `POST /environment-feature/review` with an empty object: request the assigned independent reviewer, not a caller-supplied decision.
+- `POST /environment-feature/execute` with only `proposalSha256`: run the exact independently approved administrative operation. Arbitrary fields, targets, code and actor identities are rejected.
+
+These paths are below `/api/repos/:repo`. Existing session/connected-project protections and source/profile/configuration/drain guards apply. Production observation and execution require the clean current main, matching loaded build, existing authenticated GitHub evidence and all seven exact-main checks. Operator-authored CI receipts are not accepted.
+
+The fixed native transport silently reads the existing delegated Azure CLI cache, validates token binding, and corroborates the actual server account, organization/environment/tenant, enabled user, Entra object and named write privilege. It follows no redirects and makes no login, consent, profile selection or token persistence. HTTP metadata must be native200 bounded JSON. Only allowlisted metadata is retained; tokens, arbitrary bodies and session headers are excluded. Normal source/control inspection needs current policy evidence. GET-only administrative observation is explicitly not a policy evaluation or business grant.
+
+Execution uses the existing120000ms task/3600000ms release maxima, including host preparation in its task budget, the90s soft stop and15s new-work refusal. Administrative transport admissions are capped at16. The global stable claim is keyed by operation kind/tenant/environment/organization/field, with normalized GUIDs. Changing a record, proposal, name, GUID case or project cannot rearm it. Dead owners are never reclaimed automatically.
+
+Before dispatch, persist and fsync the original grant, full selected plan, source/configuration identities, task/release times and exact conditional request intent. Read the current boolean and ETag and verify update/concurrency support and native privilege. If already false, record an observed no-op without claiming this operation changed it. Otherwise issue one PATCH with the fresh exact `If-Match` and exactly `{"enableflowsinsolutionbydefault":false}`. No wildcard, alternate provider, second write, restoration or flow operation is available. Preserve the actual HTTP status/request identity before reevaluating approval after an in-flight response. Native204 is acknowledgement; a separate exact-row false readback is also required for normal confirmation. Native412 records a stale-precondition rejection, never permission to refresh and retry. Unexpected status, timeout, lost authority or failed/malformed readback leaves the original operation held.
+
+## Reconciliation and recovery
+
+The engine retains original intents, response and state observations, source attribution and the non-reclaiming claim. Reconciliation validates the full original grant/target/proposal attribution, matching journal stages and ordinal order, native acknowledgement linkage, exact conditional request and original readback. It exposes file hashes, known native status, held/unknown distinctions and original host/application source versions. It never repairs, deletes, releases or rewrites them. Expired original approval is historical attribution, not new permission.
+
+Known acknowledgement with failed readback is different from an unacknowledged timeout. A current false value cannot establish that an unacknowledged original write succeeded. HTTP500/202/429 and other unexpected responses remain unknown; only the documented412 is identified as precondition rejection. Corrupt, contradictory, linked, missing or foreign records are refused, not adopted. No retry endpoint or automatic restoration exists. If the retained evidence cannot establish a terminal fact, preserve the unknown and obtain a separately supported independent reconciliation/isolation decision. This controller does not authorize any replacement operation.
+
+Changing the default cannot convert existing solution-aware flows or settle their original membership operations. The two earlier stopped resources and their holds are verified locally on every prospective/admin authority check and are never mutation targets. Local file preservation is not complete provider-history proof. Any later flow creation needs its own independently accepted disjoint-resource plan and genuine standalone runner support. All business case counts, real runs, privacy/semantic review, quality, handover/recovery, exact-report/single-send and unique Inbox-receipt gates remain unchanged. This administrative guide is not credit for the four business handover documents.
+
+Microsoft references: [feature setting](https://learn.microsoft.com/en-us/power-apps/maker/canvas-apps/add-app-solution-default), [conditional updates](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api), [named user privilege lookup](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveuserprivilegebyprivilegename).

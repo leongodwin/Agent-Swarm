@@ -4,7 +4,7 @@ import {createEnvironmentFeatureClient} from './environmentFeatureClient.ts';
 
 const id=(n:number)=>`abcdefab-0000-4000-8000-${String(n).padStart(12,'0')}`;
 function fixture(){
- const plan=environmentFeaturePlanSchema.parse({schemaVersion:1,kind:'disable-default-solution-flows',record:{id:id(1),revision:1,sha256:'a'.repeat(64)},sourceCommit:'b'.repeat(40),configurationSha256:'c'.repeat(64),implementationSha256:'d'.repeat(64),owner:'engineer',qaOwner:'qa',target:{tenantId:id(2),environmentId:id(3),organizationId:id(4),userId:id(5),aadObjectId:id(6),username:'owner@example.com',environmentUrl:'https://synthetic.crm4.dynamics.com/'},field:'enableflowsinsolutionbydefault',value:false}),t=plan.target;
+ const plan=environmentFeaturePlanSchema.parse({schemaVersion:1,kind:'disable-default-solution-flows',record:{id:id(1),revision:1,sha256:'a'.repeat(64)},sourceCommit:'b'.repeat(40),hostCommit:'e'.repeat(40),configurationSha256:'c'.repeat(64),implementationSha256:'d'.repeat(64),owner:'engineer',qaOwner:'qa',target:{tenantId:id(2),environmentId:id(3),organizationId:id(4),userId:id(5),aadObjectId:id(6),username:'owner@example.com',environmentUrl:'https://synthetic.crm4.dynamics.com/'},field:'enableflowsinsolutionbydefault',value:false}),t=plan.target;
  const claims:any={tid:t.tenantId,oid:t.aadObjectId,aud:new URL(t.environmentUrl).origin,exp:Math.floor(Date.now()/1000)+3600,scp:'user_impersonation',upn:t.username};
  const token=()=>['header',Buffer.from(JSON.stringify(claims)).toString('base64url'),'synthetic-signature'].join('.');
  const command=vi.fn(async()=>JSON.stringify({accessToken:token()})),signal=AbortSignal.timeout(30000),guard=vi.fn(),admit=vi.fn(async()=>{});

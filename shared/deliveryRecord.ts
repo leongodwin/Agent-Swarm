@@ -7,6 +7,7 @@ import {taskPlanSchema,taskPlanErrors} from './taskPlan.ts';
 import {executionEvidenceContractSchema} from './executionEvidence.ts';
 import {connectorProbeScopeSchema} from './connectorProbeScope.ts';
 import {standaloneProbeScopeSchema} from './standaloneProbeScope.ts';
+import {environmentFeatureScopeSchema} from './environmentFeatureScope.ts';
 
 const text = z.string().trim().min(1).max(4000);
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
@@ -47,6 +48,7 @@ export const deliveryRecordContentSchema = z.strictObject({
   taskPlan:taskPlanSchema.optional(),
   connectorProbe:connectorProbeScopeSchema.optional(),
   standaloneProbe:standaloneProbeScopeSchema.optional(),
+  environmentFeature:environmentFeatureScopeSchema.optional(),
   sourceCommit: z.string().regex(/^[a-f0-9]{40,64}$/).nullable(),
   environmentUrl: z.url().refine(value => {const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash;}).nullable(),
   requirements: z.array(z.strictObject({id, description: text, acceptance: text})).min(1).max(100),
@@ -59,6 +61,7 @@ export const deliveryRecordContentSchema = z.strictObject({
   if (value.owner === value.qaOwner) fail('Delivery owner and independent QA owner must differ');
   if(value.applicationSpec)for(const error of applicationSpecLinkErrors(value.applicationSpec,value))fail(error);
   if(value.connectorProbe&&value.standaloneProbe)fail('Select one technical probe protocol; do not rebind the original held operation');
+  if(value.environmentFeature){const feature=value.environmentFeature,decision=value.applicationSpec?.decisions.find(item=>item.id===feature.decisionId);if(feature.hostTask.owner!==value.owner||!value.contracts.some(item=>item.id===feature.contractId&&item.owner===value.owner)||!decision||decision.status!=='answered'||decision.owner!==value.owner||!value.environmentUrl||new URL(feature.target.environmentUrl).origin!==new URL(value.environmentUrl).origin)fail('Administrative feature scope needs its owned host contract, answered scope decision and exact record target');}
   if(value.standaloneProbe){const scope=value.standaloneProbe,task=value.taskPlan?.tasks.find(t=>t.issue===scope.taskIssue);if(value.taskPlan?.schemaVersion!==2||!task||task.owner===value.qaOwner||!task.componentIds.includes(scope.flowComponentId)||!task.resources.includes(scope.flowResource)||!value.contracts.some(c=>c.id===scope.authoringOrderContractId&&c.owner===task.owner)||!value.applicationSpec?.components.length||value.applicationSpec.components.some(c=>c.platform!=='flow'))fail('Standalone probe requires its explicit owned version-2 headless flow resource and independent quarantine contract');}
   if(value.taskPlan)for(const error of taskPlanErrors(value))fail(error);
   if(value.connectorProbe){const scope=value.connectorProbe,task=value.taskPlan?.tasks.find(t=>t.issue===scope.taskIssue);if(value.taskPlan?.schemaVersion!==2||!task||task.owner===value.qaOwner||!task.componentIds.includes(scope.flowComponentId)||!task.resources.includes(scope.solutionResource)||!value.contracts.some(c=>c.id===scope.authoringOrderContractId&&c.owner===task.owner)||!value.applicationSpec?.components.length||value.applicationSpec.components.some(c=>c.platform!=='flow'))fail('Connector probe requires an explicit headless-only owned version-2 task and the same eventual flow/solution components');}

@@ -4,6 +4,8 @@ A solution is complete when the intended user can open it in the approved develo
 
 For capability configuration, versioned starters, measurable UX gates, recovery receipts and monitoring, see [Reliability priorities 5–8](RELIABILITY.md).
 
+An explicitly selected, independently reviewed administrative phase can change only the future cloud-flow solution default through the bounded normal-host [environment feature control](delivery/ENVIRONMENT-FEATURE-CONTROL.md). It is separately owned host work and grants no business design/task approval, flow authoring/deployment, private source/report access, retry/hold release or send. All applicable four-control approval, source/integration, policy/identity, native acknowledgement/readback, preservation and reconciliation requirements remain enforced. Existing stopped resources and rejected business decisions stay preserved; no generic setting or gate override is provided.
+
 For reviewed functional-development imports, manifests may opt in to `importTransport: "dataverse-tracked"` with `manualDevelopmentGovernance: true`, `targetBinding` and `platformIdentity`. This path records and flushes the exact ImportJob ID before the authenticated Dataverse request. It refuses settings files, production publish-changes semantics and packages over47 MiB; omitted transport retains PAC behavior. See [tracked import/adoption evidence and limits](TRACKED-IMPORT-ADOPTION-QA.md). Missing jobs or interrupted intents never authorize automatic replay, and maintenance adoption does not establish deployment success.
 
 ## Team contract

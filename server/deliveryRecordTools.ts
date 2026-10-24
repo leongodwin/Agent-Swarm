@@ -21,6 +21,7 @@ const planningAmendment=z.strictObject({
 }).refine(value=>Object.keys(value).length>0,'Supply at least one changed planning section');
 
 export interface RecordToolContext {
+  environmentFeature?:(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void)=>Promise<unknown>;
   acceptedReports?:(repoId:string,record:import('../shared/deliveryRecord.ts').DeliveryRecord,guard:()=>void)=>Promise<unknown>;
   browserHandoff?:(repoId:string,payload:unknown,actor:{id:string;role:string},guard:()=>void)=>Promise<unknown>;
   repo(repoId:string):RecordContext & {checkoutPath:string};
@@ -39,7 +40,7 @@ export interface RecordToolContext {
 export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolContext,actor:{id:string;role:'ceo'|'dev'|'qa'|'manager';repoId?:string;reviewOnly?:boolean}):RecordToolHandler {
   return async input => {
     deps.assertOpen();
-    if(actor.reviewOnly&&!['browser_handoff','read','evidence_index','accepted_reports','task_input','review','reject_inputs','review_task','reconcile_task','accept_preparation','accept_slice','schema_bootstrap','connector_probe','standalone_probe','canvas_packaging'].includes(input.action))throw new HttpError(403,'Independent review cannot change its discovery inputs; report findings in the review notes');
+    if(actor.reviewOnly&&!['browser_handoff','read','evidence_index','accepted_reports','task_input','review','reject_inputs','review_task','reconcile_task','accept_preparation','accept_slice','schema_bootstrap','connector_probe','standalone_probe','environment_feature','canvas_packaging'].includes(input.action))throw new HttpError(403,'Independent review cannot change its discovery inputs; report findings in the review notes');
     if(actor.repoId&&actor.repoId!==input.repo_id)throw new HttpError(403,'Delivery record belongs to another project');
     const context=deps.repo(input.repo_id);
     const guard=()=>{deps.assertOpen();const current=deps.repo(input.repo_id);if(current.brief!==context.brief||current.environmentUrl!==context.environmentUrl||current.tenantId!==context.tenantId||current.checkoutPath!==context.checkoutPath)throw new HttpError(409,'Project scope changed during record update');};
@@ -71,6 +72,10 @@ export function deliveryRecordHandler(records:DeliveryRecords,deps:RecordToolCon
     if(input.action==='connector_probe'){
       if(!current||!deps.connectorProbe||actor.role!=='qa'||actor.id!==current.content.qaOwner)throw new HttpError(403,'Connector probe belongs to assigned independent QA');
       records.assertContext(current,context);return JSON.stringify(await deps.connectorProbe(input.repo_id,payload,actor,guard));
+    }
+    if(input.action==='environment_feature'){
+      if(!current||!deps.environmentFeature||actor.role!=='qa'||actor.id!==current.content.qaOwner)throw new HttpError(403,'Administrative review belongs to assigned independent QA');
+      records.assertContext(current,context);return JSON.stringify(await deps.environmentFeature(input.repo_id,payload,actor,guard));
     }
     if(input.action==='standalone_probe'){
       if(!current||!deps.standaloneProbe||actor.role!=='qa'||actor.id!==current.content.qaOwner)throw new HttpError(403,'Standalone probe belongs to assigned independent QA');
