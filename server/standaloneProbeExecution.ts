@@ -22,7 +22,7 @@ export interface StandaloneProbeExecutionDependencies {
   * before dispatch, and verify exact returned ownership, direct binding and original-resource isolation. */
  prepareStandaloneResources(plan:StandaloneProbePlan,admit:()=>Promise<void>,journal:(stage:string,metadata:Record<string,unknown>)=>Promise<void>,quarantine:Awaited<ReturnType<typeof verifyStandaloneQuarantine>>):Promise<{flowId:string;workflowId?:string}>;
  verifyStandaloneResources(plan:StandaloneProbePlan,flowId:string,admit:()=>Promise<void>):Promise<unknown>;
- connect(plan:StandaloneProbePlan,signal:AbortSignal,admit:()=>Promise<void>):Promise<FlowAdapter>;
+ connect(plan:StandaloneProbePlan,signal:AbortSignal,admit:()=>Promise<void>,captureNativeFailure:(tool:string,result:unknown)=>Promise<void>):Promise<FlowAdapter>;
  guard():void;
 }
 const id=z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i);
@@ -47,7 +47,7 @@ export async function executeStandaloneProbe(expected:string,deps:StandaloneProb
  const privateLeaf=async()=>{await owned();const leaf=await deps.privateLeaf(plan,admit);await owned();if(path.basename(leaf)!=='recruitment-e2e-'+plan.record.id||await fs.realpath(leaf)!==path.resolve(leaf)||(await fs.lstat(leaf)).isSymbolicLink())throw Error('Protected probe leaf changed');return leaf;};
  const capture=async(name:string,value:unknown)=>{const text=JSON.stringify(value);if(Buffer.byteLength(text)>256000)throw Error('Probe native output exceeds capture bound');const leaf=await privateLeaf();await exclusive(path.join(leaf,plan.probeId+'.'+name+'.json'),value);if(await privateLeaf()!==leaf)throw Error('Protected probe leaf changed');return crypto.createHash('sha256').update(text).digest('hex');};
  try{
-  await privateLeaf();check(true);await owned();flow=await deps.connect(plan,signal,admit);await owned();if(!flow.metadata||connectorProbeDigest(flow.metadata)!==connectorProbeDigest(plan.adapter))throw Error('Probe adapter differs');
+  await privateLeaf();check(true);await owned();flow=await deps.connect(plan,signal,admit,async(tool,result)=>{await capture('native-failure',{tool,result});});await owned();if(!flow.metadata||connectorProbeDigest(flow.metadata)!==connectorProbeDigest(plan.adapter))throw Error('Probe adapter differs');
   const call=async(tool:string,args:Record<string,unknown>)=>{await admit();const result=await flow!.call(tool,args);await owned();return result;};
   verifyFlowIdentity(await call('whoami',{}),plan.identity);
   const connectionRows=z.array(z.record(z.string(),z.unknown())).max(999).parse(await call('list_connections',{env:plan.identity.environmentId,connector:'shared_office365'})),matches=connectionRows.filter(row=>row.name===plan.connection.connectionId);
@@ -65,21 +65,21 @@ export async function executeStandaloneProbe(expected:string,deps:StandaloneProb
   await call('publish_flow',args);if((await pinned()).state!=='Started')throw Error('Probe activation unknown');
   const nonce=crypto.randomUUID();await journal('trigger-intent',{...resources,correlationId:nonce});
   const invoked=await call('run_flow',{...args,body:{kind:plan.kind,correlationId:nonce},triggerName:'manual',wait:true,timeout:30});
-  const result=z.object({triggered:z.literal(true),runId,status:z.enum(['Succeeded','Failed','TimedOut','Cancelled']),startTime:z.string().min(1),endTime:z.string().min(1)}).parse(invoked);
-  await journal('terminal-run',{...resources,runId:result.runId,providerResultSha256:connectorProbeDigest(invoked)});
-  // A known terminal run can be disabled without cancelling an active run.
-  // Restore the exact manual flow before later capture can fail or time out.
-  await pinned();await journal('disable-intent',{...resources,runId:result.runId});await call('disable_flow',args);if((await pinned()).state!=='Stopped')throw Error('Probe stopped-state cleanup unknown');
   await capture('run',invoked);
+  const result=z.object({triggered:z.literal(true),runId,invocationRunId:runId,status:z.enum(['Succeeded','Failed','TimedOut','Cancelled']),startTime:z.iso.datetime({offset:true}),endTime:z.iso.datetime({offset:true})}).parse(invoked);
+  if(result.invocationRunId!==result.runId||Date.parse(result.endTime)<Date.parse(result.startTime)||Date.parse(result.endTime)>Date.now()||Date.parse(result.startTime)<started)throw Error('Invocation identity or chronology differs');
   const runArgs={...args,run:result.runId};
   const actions=await call('get_run_actions',{...runArgs,includeSizes:true});const actionSha256=await capture('actions',actions);
   const context=await call('get_run_action_content',{...runArgs,action:'Probe_context',which:'outputs',maxBytes:256000});
   await capture('context',context);
+  z.object({action:z.literal('Probe_context'),which:z.literal('outputs'),content:z.object({kind:z.literal(plan.kind),probeId:z.literal(plan.probeId),correlationId:z.literal(nonce)})}).parse(context);
+  await journal('terminal-run',{...resources,runId:result.runId,providerResultSha256:connectorProbeDigest(invoked),contextSha256:connectorProbeDigest(context)});
+  // Only this invocation's terminal state and captured nonce authorize stop.
+  await pinned();await journal('disable-intent',{...resources,runId:result.runId});await call('disable_flow',args);if((await pinned()).state!=='Stopped')throw Error('Probe stopped-state cleanup unknown');
   // Preserve original native shapes, including errors and unknown wrappers.
   // Their semantic acceptance belongs a subsequent independent evidence review.
   const positive=await call('get_run_action_content',{...runArgs,action:'Metadata_http',which:'outputs',maxBytes:256000});const positiveSha256=await capture('folder-output',positive);
   const negative=await call('get_run_action_content',{...runArgs,action:'Missing_folder_http',which:'outputs',maxBytes:256000});const negativeSha256=await capture('invalid-folder-output',negative);
-  z.object({action:z.literal('Probe_context'),which:z.literal('outputs'),content:z.object({kind:z.literal(plan.kind),probeId:z.literal(plan.probeId),correlationId:z.literal(nonce)})}).parse(context);
   if((await pinned()).state!=='Stopped')throw Error('Probe state changed during capture');
   const afterContext=await deps.verifyStandaloneResources(plan,resources.flowId,admit);await owned();await journal('standalone-context-after-capture',{observation:afterContext});
   await flow.close();closed=true;await owned();

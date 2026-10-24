@@ -1,0 +1,70 @@
+import crypto from 'node:crypto';
+import {inspectStandaloneProbeAdapter} from './standaloneProbeAdapter.ts';
+import {readBoundedBytes} from './boundedJson.ts';
+import {nativeReviewCapsule} from './nativeReviewCapsule.ts';
+import {memoizeTextDerivation} from './pureTextDerivation.ts';
+
+const sha=(value:string|Uint8Array)=>crypto.createHash('sha256').update(value).digest('hex');
+export const nativeReviewTools=Object.freeze(['whoami','list_connections','read_standalone_flow_owners','get_flow','get_run_history','list_flows','preflight_flow','create_standalone_flow','get_flow_context','publish_flow','run_flow','disable_flow','get_run_actions','get_run_action_content'] as const);
+export const nativeReviewMethods=Object.freeze(["listFlows","getFlow","createFlow","assertNoDuplicateDisplayName","publishFlow","disableFlow","triggerFlowRun","getRunHistory","getRunDetails","getRunActionDetails","getRunActionContent","preflightFlow","listConnections","getFlowContext","assertNotManaged","adminGetFlowPermissions","dataverseGet","ppapiOperationRequest","ppapiRequest","ppapiRequestWithFallback","requestWithToken","request","ppapiBase","ppapiFlowQs","classicFlowRpRequest","resolveTrigger","runFlowViaLogicFlowsConnector","constructor","getConnections","getConnection","getDataverseInstanceUrl","isPpapiDnsFailure","getCachedConnections","setCachedConnections","get","isCdsPermissionError","resolveTriggerName","connectivityRequest","getEnvironment"] as const);
+export const nativeReviewFunctions=Object.freeze(["admitStandaloneProvider","fetchContentLink","fetchWithNetworkError","assertTriggerInputsSatisfied","safeResult","safeError","followPagination","dataverseConnectionReferencesUrl","extractLogicalNamesFromFlow","dataverseWorkflowUrl","dataverseWorkflowByUniqueUrl","dataverseSolutionByIdUrl","adminFlowPermissionsUrl","ppapiBaseUrl","ppapiConnectorUrl","ppapiConnectionsUrl","ppapiConnectionUrl","environmentUrl","whoAmI","isNotFoundError","notFoundResult","summarizeList","injectTemplateMetadata","readContentText","parseContentText","hostnameOf","explain","safeErrorName","escapeODataString","qs","resolveShardLength","ppapiFlowQs","connQs","readActiveAzIdentity","readTokenIdentity","compareTokenIdentity","readCachedMsalIdentities","effectiveConnectivityIdentity","azureConfigDir","defaultCacheDir","defaultMsalCacheDir","connectivityIdentityMismatch","getNestedValue","parseJwtClaims","normalizeIdentity","safeIdentity","isTokenCacheFile","selectCachedMsalAccount","enhanceFlowApiError"] as const);
+export const nativeReviewConstants=Object.freeze(["FLOWAGENT_VERSION","MAX_RETRIES","INITIAL_DELAY_MS","LOGIC_FLOWS_CONNECTOR","APIHUB_RESOURCE","MAX_SINGLE_ITEM_CHARS","MAX_RESPONSE_CHARS","DEFAULT_MAX_PAGES","PPAPI_DEFAULT_SUFFIX","FLOWAGENT_TEMPLATE_ID","API_VERSION","PPAPI_DEFAULT_SHARD_LENGTH","PPAPI_API_VERSION","PREFERRED_ACCOUNT_FILE"] as const);
+export const nativeReviewClasses=Object.freeze(["DuplicateFlowError","ManagedSolutionError","FlowApiError","TriggerInputError","InvalidEnvironmentIdError"] as const);
+/** Select complete fixed handlers/methods from the exact compiled entry. This
+ * does not claim to reproduce unrelated tools or the bundled MSAL/MCP libraries. */
+export function nativeReviewComponents(source:string,expected:string){
+ if(sha(source)!==expected)throw Error('Native review entry changed');
+ const unique=(needle:string,from=0)=>{const first=source.indexOf(needle,from);if(first<0||source.indexOf(needle,first+needle.length)>=0)throw Error('Native review component absent or ambiguous: '+needle);return first;};
+ const component=(name:string,start:number,end:number)=>{const text=source.slice(start,end);if(end<=start||Buffer.byteLength(text)>128*1024)throw Error('Native component exceeds review bound');return{name,entrySha256:expected,startCharacter:start,endCharacter:end,sha256:sha(text),text};};
+ const result:ReturnType<typeof component>[]=[];
+ // Full bundled validation module includes its exports, validator body and lazy
+ // initializer. Keep bundler helpers and cache initializer dependencies visible.
+ for(const [name,begin,end] of [
+  ['bundler-runtime',"import{createRequire}from'module';const require=createRequire(import.meta.url);",'// packages/core/dist/utils/logger.js'],
+  ['backup-initialization','var RETENTION;','// packages/core/dist/validation/flow-definition.js'],
+  ['tool-input-admission','// packages/core/dist/mcp/server.js\ninit_backups();','function buildToolContext('],
+  ['flow-definition-module','// packages/core/dist/validation/flow-definition.js','// packages/core/dist/auth/clear-cache-files.js'],
+  ['cache-initialization-module','// packages/core/dist/auth/clear-cache-files.js','// packages/core/dist/auth/auth-operation-queue.js'],
+  ['logger-module','// packages/core/dist/utils/logger.js','// packages/core/dist/api/backups.js'],
+  ['auth-queue-and-msal-cache','// packages/core/dist/auth/auth-operation-queue.js','// node_modules/@azure/msal-node/dist/cache/serializer/Serializer.mjs'],
+  ['msal-auth-wrapper','// packages/core/dist/auth/msal-auth.js','// packages/core/dist/trigger-emulators.js'],
+  ['azure-disk-composite-auth','// packages/core/dist/auth/az-cli-auth.js\nimport { spawnSync }','// packages/core/dist/config.js'],
+  ['configuration-module','// packages/core/dist/config.js','// packages/core/dist/telemetry/index.js\nimport { spawn }'],
+  ['current-context-stores','// packages/core/dist/current-env-store.js','// packages/core/dist/index.js\ninit_trigger_emulators();'],
+  ['client-context-factory','function buildToolContext(','function enhanceFlowApiError('],
+  ['server-initialization','async function createMcpServer(authProvider, deps = {}) {','  server2.tool("whoami",'],
+  ['stdio-entry','// packages/cli/dist/bin/mcp-stdio.js','/*! Bundled license information:'],
+ ] as const){const start=unique(begin),finish=unique(end,start+begin.length);result.push(component('module:'+name,start,finish));}
+
+ for(const tool of nativeReviewTools){const start=unique(`  server2.tool("${tool}",`),end=source.indexOf('\n  server2.tool(',start+1);if(end<0)throw Error('Native tool boundary missing');result.push(component('tool:'+tool,start,end));}
+ const classStart=unique('var FlowClient = class _FlowClient {'),classEnd=source.indexOf('\n};',classStart);if(classEnd<0)throw Error('Native client boundary missing');
+ const client=source.slice(classStart,classEnd);
+ const constructor=client.indexOf('  constructor(');if(constructor<0)throw Error('Native client initialization absent');
+ result.push(component('client-state',classStart,classStart+constructor));
+ for(const method of nativeReviewMethods){const pattern=new RegExp('^  (?:async )?'+method+'\\(','gm'),matches=[...client.matchAll(pattern)];if(matches.length!==1)throw Error('Native client method absent or ambiguous');const start=classStart+matches[0].index!,match=/\r?\n  \}(?:\r?\n|;)/.exec(source.slice(start));if(!match)throw Error('Native method boundary missing');result.push(component('method:'+method,start,start+match.index+match[0].length));}
+ for(const name of nativeReviewFunctions){const matches=[...source.matchAll(new RegExp('^(?:async )?function '+name+'\\(','gm'))];if(matches.length!==1)throw Error('Native function absent or ambiguous');const start=matches[0].index!,match=/\r?\n\}\r?\n/.exec(source.slice(start));if(!match)throw Error('Native function boundary missing');result.push(component('function:'+name,start,start+match.index+match[0].length));}
+ for(const name of nativeReviewClasses){const start=unique('var '+name+' = class '),end=source.indexOf('\n};',start);if(end<0)throw Error('Native error class boundary missing');result.push(component('class:'+name,start,end+4));}
+ for(const name of nativeReviewConstants){const matches=[...source.matchAll(new RegExp('^var '+name+'(?: =|;)','gm'))];if(matches.length!==1)throw Error('Native constant absent or ambiguous');const start=matches[0].index!;let end=source.indexOf('\n',start);if(name==='PREFERRED_ACCOUNT_FILE'){const initializer=unique('var init_msal_disk_cache = __esm({',start);end=source.indexOf('\n});',initializer);if(end<0)throw Error('Native cache constant initializer absent');end+=5;}if(end<0)throw Error('Native constant boundary missing');result.push(component('constant:'+name,start,end));}
+ // Regression checks for direct calls and named callback arguments, not a
+ // general proof of dynamic JavaScript closure. Exact code still needs review.
+ const methods=new Set([...client.matchAll(/^  (?:async )?(\w+)\(/gm)].map(m=>m[1])),functions=new Set([...source.matchAll(/^(?:async )?function (\w+)\(/gm)].map(m=>m[1])),included=new Set(result.map(p=>p.name));
+ for(const part of result.filter(p=>p.name.startsWith('module:')))for(const match of part.text.matchAll(/^(?:async )?function (\w+)\(/gm))included.add('function:'+match[1]);
+ // Core lazy modules are in scope. Bundled third-party MSAL initializers are
+ // ordinary library code, already excluded explicitly from this review packet.
+ const initializers=new Set([...source.matchAll(/^var (init_\w+) = __esm\(\{\n  "packages\/core\//gm)].map(m=>m[1])),exposedInitializers=new Set(result.flatMap(p=>[...p.text.matchAll(/^var (init_\w+) = __esm\(/gm)].map(m=>m[1])));
+ for(const part of result){for(const match of part.text.matchAll(/\b(init_\w+)\s*\(/g))if(initializers.has(match[1])&&!exposedInitializers.has(match[1]))throw Error('Executed native initializer omitted: '+match[1]);if(part.name.startsWith('module:'))continue;for(const match of part.text.matchAll(/\bthis\.(\w+)\s*\(/g))if(methods.has(match[1])&&!included.has('method:'+match[1]))throw Error('Executed native method omitted');for(const pattern of [/(?<![.\w])(\w+)\s*\(/g,/\bsafeError\s*\([^,\n]*,\s*(\w+)\s*\)/g])for(const match of part.text.matchAll(pattern))if(functions.has(match[1])&&!included.has('function:'+match[1]))throw Error('Executed native helper omitted: '+match[1]);}
+ // Whole modules already retain these exact bytes and containing-entry hashes.
+ // Do not duplicate a selected helper/constant/class inside its complete module.
+ return result.filter(part=>part.name.startsWith('module:')||!result.some(module=>module.name.startsWith('module:')&&module.startCharacter<=part.startCharacter&&module.endCharacter>=part.endCharacter));
+}
+const nativeCapsules=memoizeTextDerivation(source=>{
+ const expected=sha(source),components=nativeReviewComponents(source,expected).map(({entrySha256:_entry,...component})=>component),groups:typeof components[]=[];let current:typeof components=[];
+ for(const item of components){if(Buffer.byteLength(nativeReviewCapsule(expected,[...current,item]))>110*1024){if(!current.length||Buffer.byteLength(nativeReviewCapsule(expected,[item]))>110*1024)throw Error('Native review component cannot fit');groups.push(current);current=[];}current.push(item);}if(current.length)groups.push(current);
+ return JSON.stringify(groups.map((sources,index)=>{const text=nativeReviewCapsule(expected,sources);return {file:`docs/STANDALONE-NATIVE-SOURCES-${index+1}.md`,sha256:sha(text),text};}));
+});
+
+export async function standaloneNativeReviewSources(home:string,expected:string,inspect?:(expected:string)=>Promise<{entry:string}>){
+ const inspected=await(inspect?inspect(expected):inspectStandaloneProbeAdapter(home,expected)),bytes=await readBoundedBytes(inspected.entry,8*1024*1024);
+ if(!bytes||sha(bytes)!==expected)throw Error('Native review entry unavailable or changed');
+ return JSON.parse(nativeCapsules(new TextDecoder('utf8',{fatal:true}).decode(bytes))) as {file:string;sha256:string;text:string}[];
+}

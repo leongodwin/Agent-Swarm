@@ -1,9 +1,29 @@
 import {expect,it,vi} from 'vitest';
 import crypto from 'node:crypto';
-import {buildStandaloneFlowAgent,transformStandaloneFlowAgent,STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
+import {buildStandaloneFlowAgent,transformStandaloneFlowAgent,withoutStandaloneTelemetry,fixedStandaloneServerInitialization,STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
 
+it('admits fixed stdio config and refuses injected contexts, clients and observers before setup',async()=>{
+ const source='async function createMcpServer(authProvider, deps = {}) {\n  function telemetryEnvironment() { return {}; }\n  function getActiveToolContext() { return authProvider; }\n  const server2={tool(){}};\n  if (deps.getContext || deps.onToolStart || deps.onToolEnd) { throw Error("observer called"); }\n  server2.tool("whoami", "synthetic");\n  return deps.config;\n}';
+ const built=fixedStandaloneServerInitialization(source),create=Function(built+';return createMcpServer;')();
+ expect(built).not.toContain('function telemetryEnvironment(');expect(built).not.toContain('observer called');
+ await expect(create({}, {config:{fixed:true}})).resolves.toEqual({fixed:true});
+ for(const key of ['clientFactory','getContext','onToolStart','onToolEnd','serverInfo'])await expect(create({}, {[key]:vi.fn()})).rejects.toThrow('forbids injected');
+ for(const altered of [source.replace('async function createMcpServer','async function missing'),source.replace('  function telemetryEnvironment(', '  function missing('),source.replace('  function getActiveToolContext()', '  function missingContext()'),source.replace('  if (deps.getContext || deps.onToolStart || deps.onToolEnd) {','  if (false) {'),source.replace('  server2.tool("whoami",','  server2.tool("missing",'),source+source])expect(()=>fixedStandaloneServerInitialization(altered)).toThrow();
+});
+
+import {standaloneTransportFixture} from './testFixtures/standaloneTransport.ts';
 const duplicateFailure='logger.warn(`[no-recreate-guard] listFlows failed during duplicate check (${err instanceof Error ? err.message : String(err)}); allowing create_flow to proceed`);\n      return;';
-const fixture=`var FLOWAGENT_VERSION = "3.2.1";
+const fixture=standaloneTransportFixture+`var FLOWAGENT_VERSION = "3.2.1";
+async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES, stopWhen, onLimitReached) {
+  let response = await fetchPage();
+  const allItems = response.value;
+  return allItems;
+}
+async function fetchWithNetworkError(url2, init) {
+  return await fetch(url2, init);
+}
+  server2.tool("run_flow", "synthetic", {}, {}, async ({ env, flow, body, triggerName, useCallbackUrl, wait, timeout }, extra) => {});
+  server2.tool("get_run_history", "synthetic");
   server2.tool("create_flow", "create", {}, {}, async ({connectionRefs,allowDuplicate}) => {
     try {
       let enrichedRefs = connectionRefs;
@@ -61,3 +81,5 @@ it('forbids duplicate override and fails closed when duplicate inventory cannot 
  await expect(guard(async()=>{throw Error('Unavailable');})).rejects.toThrow('creation refused');await expect(guard(async()=>[])).resolves.toBeUndefined();
 });
 it('refuses missing duplicate guard instead of silently keeping an upstream fail-open path',()=>{expect(()=>transformStandaloneFlowAgent(fixture.replace(duplicateFailure,''))).toThrow('structure differs');});
+
+it('removes only the exact dedicated stdio telemetry registration and refuses drift',()=>{const registration='var server = await createMcpServer(auth, {\n  config: config2,\n  ...createTelemetryObserver({\n    transport: "stdio",\n    getClientInfo: () => server?.server?.getClientVersion?.()\n  })\n});';const source='before\n'+registration+'\nafter';expect(withoutStandaloneTelemetry(source)).toBe('before\nvar server = await createMcpServer(auth, {config: config2});\nafter');expect(()=>withoutStandaloneTelemetry('different')).toThrow('registration differs');expect(()=>withoutStandaloneTelemetry(source+registration)).toThrow('registration differs');});

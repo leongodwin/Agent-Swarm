@@ -1,0 +1,7 @@
+import {expect,it,vi} from 'vitest';
+import {boundedStandaloneProvider} from './standaloneFlowAgentBuild.ts';
+const source='async function fetchWithNetworkError(url2, init) {\n return await fetch(url2, init);\n}\n';
+function fixture(){const fetch=vi.fn(async()=>({synthetic:true})),request=Function('fetch',boundedStandaloneProvider(source)+';return fetchWithNetworkError;')(fetch);return{fetch,request};}
+it('counts every provider attempt across reads, retries, writes and content requests for the SDK lifetime',async()=>{const f=fixture();for(let n=0;n<64;n++)await f.request('synthetic://provider/'+n,{method:n%2?'GET':'POST'});await expect(f.request('synthetic://provider/65',{})).rejects.toThrow('ceiling');expect(f.fetch).toHaveBeenCalledTimes(64);});
+it('does not refund failed requests or permit automatic redirect dispatch',async()=>{const f=fixture();f.fetch.mockRejectedValue(Error('Synthetic unknown outcome'));for(let n=0;n<64;n++)await expect(f.request('synthetic://provider',{redirect:'follow'})).rejects.toThrow('Synthetic');await expect(f.request('synthetic://provider',{})).rejects.toThrow('ceiling');expect(f.fetch).toHaveBeenCalledTimes(64);expect(f.fetch.mock.calls.every((args:any[])=>args[1].redirect==='error')).toBe(true);});
+it.each([source+source,source.replace('fetchWithNetworkError','other'),source.replace('return await fetch(url2, init);','return undefined;')])('refuses provider structural drift',value=>expect(()=>boundedStandaloneProvider(value)).toThrow());
