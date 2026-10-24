@@ -1,6 +1,15 @@
 import {expect,it,vi} from 'vitest';
 import crypto from 'node:crypto';
-import {buildStandaloneFlowAgent,transformStandaloneFlowAgent,withoutStandaloneTelemetry,STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
+import {buildStandaloneFlowAgent,transformStandaloneFlowAgent,withoutStandaloneTelemetry,fixedStandaloneServerInitialization,STANDALONE_ADAPTER_VERSION} from './standaloneFlowAgentBuild.ts';
+
+it('admits fixed stdio config and refuses injected contexts, clients and observers before setup',async()=>{
+ const source='async function createMcpServer(authProvider, deps = {}) {\n  function telemetryEnvironment() { return {}; }\n  function getActiveToolContext() { return authProvider; }\n  const server2={tool(){}};\n  if (deps.getContext || deps.onToolStart || deps.onToolEnd) { throw Error("observer called"); }\n  server2.tool("whoami", "synthetic");\n  return deps.config;\n}';
+ const built=fixedStandaloneServerInitialization(source),create=Function(built+';return createMcpServer;')();
+ expect(built).not.toContain('function telemetryEnvironment(');expect(built).not.toContain('observer called');
+ await expect(create({}, {config:{fixed:true}})).resolves.toEqual({fixed:true});
+ for(const key of ['clientFactory','getContext','onToolStart','onToolEnd','serverInfo'])await expect(create({}, {[key]:vi.fn()})).rejects.toThrow('forbids injected');
+ for(const altered of [source.replace('async function createMcpServer','async function missing'),source.replace('  function telemetryEnvironment(', '  function missing('),source.replace('  function getActiveToolContext()', '  function missingContext()'),source.replace('  if (deps.getContext || deps.onToolStart || deps.onToolEnd) {','  if (false) {'),source.replace('  server2.tool("whoami",','  server2.tool("missing",'),source+source])expect(()=>fixedStandaloneServerInitialization(altered)).toThrow();
+});
 
 import {standaloneTransportFixture} from './testFixtures/standaloneTransport.ts';
 const duplicateFailure='logger.warn(`[no-recreate-guard] listFlows failed during duplicate check (${err instanceof Error ? err.message : String(err)}); allowing create_flow to proceed`);\n      return;';

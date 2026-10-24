@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 export const STANDALONE_UPSTREAM_SHA256='c1bd1cf31363a8db2403cb87f6ee52a182528af55d0a3d17c487ae013a1731d3';
-export const STANDALONE_ADAPTER_VERSION='3.2.1-as-direct.7';
+export const STANDALONE_ADAPTER_VERSION='3.2.1-as-direct.8';
 const start='  server2.tool("create_flow",';
 const end='  server2.tool("update_flow",';
 const enrichment='enrichedRefs = await enrichRefsWithLogicalNames(ctx.getClient(), envId, enrichedRefs);';
@@ -89,8 +89,19 @@ export function buildStandaloneFlowAgent(upstream:Uint8Array){
  const sourceSha256=crypto.createHash('sha256').update(upstream).digest('hex');
  if(sourceSha256!==STANDALONE_UPSTREAM_SHA256)throw Error('Standalone adapter upstream differs from the pinned reviewed source');
  const built=transformStandaloneFlowAgent(Buffer.from(upstream).toString('utf8'));
- const source=withoutStandaloneTelemetry(built.source);
+ const source=fixedStandaloneServerInitialization(withoutStandaloneTelemetry(built.source));
  return {...built,source,entrySha256:crypto.createHash('sha256').update(source).digest('hex')};
+}
+
+/** This stdio entry accepts its fixed config only; injected clients, sessions
+ * and tool observers are outside the dedicated single-owner protocol. */
+export function fixedStandaloneServerInitialization(source:string){
+ const header='async function createMcpServer(authProvider, deps = {}) {',at=source.indexOf(header);
+ if(at<0||source.indexOf(header,at+header.length)>=0)throw Error('Standalone server initialization differs');
+ const environment='  function telemetryEnvironment(',context='  function getActiveToolContext()',wrapper='  if (deps.getContext || deps.onToolStart || deps.onToolEnd) {',tools='  server2.tool("whoami",';
+ const first=source.indexOf(environment,at),last=source.indexOf(context,first),begin=source.indexOf(wrapper,last),end=source.indexOf(tools,begin);
+ if(first<at||last<first||begin<last||end<begin||source.indexOf(environment,first+environment.length)>=0||source.indexOf(wrapper,begin+wrapper.length)>=0)throw Error('Standalone observer boundary differs');
+ return (source.slice(0,first)+source.slice(last,begin)+source.slice(end)).replace(header,header+'\n  if (Object.keys(deps).some(key => key !== "config")) throw new Error("Standalone stdio forbids injected clients, contexts and observers");');
 }
 
 /** The fixed stdio candidate installs no external tool telemetry observer. */
