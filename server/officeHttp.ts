@@ -46,7 +46,7 @@ export interface OfficeHttpServices {
   canvasPackaging?:(repoId:string,action:'inspect'|'execute'|'reconcile'|'recover',body:unknown)=>Promise<unknown>;
   requestCanvasPackagingReview?:(repoId:string)=>Promise<string>;
   schemaBootstrap?:(repoId:string,action:'inspect'|'execute',body:unknown)=>Promise<unknown>;
-  standaloneProbe?:(repoId:string)=>Promise<unknown>;
+  standaloneProbe?:(repoId:string,readiness?:boolean)=>Promise<unknown>;
   executeStandaloneProbe?:(repoId:string,proposalSha256:string)=>Promise<unknown>;
   requestStandaloneProbeReview?:(repoId:string)=>Promise<unknown>;
   connectorProbe?:(repoId:string)=>Promise<unknown>;
@@ -159,6 +159,7 @@ export function createOfficeHttpApp(services: OfficeHttpServices) {
   app.post('/api/repos/:repo/connector-probe/execute',route(req=>{connectedRepo(repoId(req));const body=parseBody(z.strictObject({proposalSha256:z.string().regex(/^[a-f0-9]{64}$/)}),req.body);if(!services.executeConnectorProbe)throw new HttpError(503,'Connector probe execution unavailable');return services.executeConnectorProbe(repoId(req),body.proposalSha256);}));
   app.post('/api/repos/:repo/connector-probe/review',route(req=>{connectedRepo(repoId(req));parseBody(z.strictObject({}),req.body);if(!services.requestConnectorProbeReview)throw new HttpError(503,'Connector probe review unavailable');return services.requestConnectorProbeReview(repoId(req));}));
   app.get('/api/repos/:repo/standalone-probe',route(req=>{connectedRepo(repoId(req));if(!services.standaloneProbe)throw new HttpError(503,'Standalone probe review unavailable');return services.standaloneProbe(repoId(req));}));
+  app.get('/api/repos/:repo/standalone-probe/readiness',route(req=>{connectedRepo(repoId(req));if(!services.standaloneProbe)throw new HttpError(503,'Standalone readiness unavailable');return services.standaloneProbe(repoId(req),true);}));
   app.post('/api/repos/:repo/standalone-probe/execute',route(req=>{connectedRepo(repoId(req));const body=parseBody(z.strictObject({proposalSha256:z.string().regex(/^[a-f0-9]{64}$/)}),req.body);if(!services.executeStandaloneProbe)throw new HttpError(503,'Standalone probe execution unavailable');return services.executeStandaloneProbe(repoId(req),body.proposalSha256);}));
   app.post('/api/repos/:repo/standalone-probe/review',route(req=>{connectedRepo(repoId(req));parseBody(z.strictObject({}),req.body);if(!services.requestStandaloneProbeReview)throw new HttpError(503,'Standalone probe review unavailable');return services.requestStandaloneProbeReview(repoId(req));}));
   app.get('/api/repos/:repo/canvas-packaging',route(req=>{connectedRepo(repoId(req));if(!services.canvasPackaging)throw new HttpError(503,'Canvas packaging unavailable');return services.canvasPackaging(repoId(req),'inspect',{});}));
