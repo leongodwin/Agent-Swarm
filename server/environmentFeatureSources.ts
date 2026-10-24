@@ -7,7 +7,7 @@ import {standaloneHostReviewSources} from './standaloneHostReview.ts';
 export const environmentFeatureSourceGroups=[
  ['server/environmentFeatureChange.ts','server/environmentFeatureClient.ts','server/environmentFeatureReview.ts','server/environmentFeaturePreservation.ts','server/environmentFeatureReconciliation.ts','server/environmentFeatureRuntime.ts','server/environmentFeatureSources.ts','server/environmentFeaturePrompt.ts'],
  ['shared/environmentFeatureScope.ts','shared/deliveryRecord.ts','shared/applicationSpec.ts','shared/taskPlan.ts','shared/executionEvidence.ts','shared/governanceProfile.ts'],
- ['server/resourceLease.ts','server/boundedJson.ts','server/unambiguousJson.ts','server/atomicFile.ts','server/identityContracts.ts'],
+ ['server/resourceLease.ts','server/boundedJson.ts','server/unambiguousJson.ts','server/atomicFile.ts','server/identityContracts.ts','server/pacTenantIdentity.ts','server/tenancy.ts'],
  ['server/tenantDlp.ts','server/standardPolicy.ts','server/standaloneIntegrationGate.ts','server/standaloneBuildIdentity.ts','scripts/build-server.mjs'],
  ['server/standaloneHostReview.ts','server/nativeReviewCapsule.ts','docs/delivery/ENVIRONMENT-FEATURE-CONTROL.md'],
 ] as const;
