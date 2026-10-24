@@ -45,10 +45,11 @@ export function defaultSkillOptions(): SkillRegistryOptions {
 export function discoverSkills(options = defaultSkillOptions()): SkillCatalogue {
   const skills: InstalledSkill[] = [], warnings: string[] = []; const seen = new Set<string>();
   const add = (file: string, alias: string, source: InstalledSkill['source'], plugin?: string, version?: string) => {
+    const platform = platformFor(plugin ? `${plugin}-${alias}` : alias); if (!platform) return;
     let real: string; try { real = fs.realpathSync(file); } catch { return; }
     if (seen.has(real)) return;
     const content = read(real); if (!content) return;
-    const platform = platformFor(plugin ? `${plugin}-${alias}` : alias); if (!platform) return;
+
     seen.add(real);
     skills.push({ id: plugin ? `${plugin}:${alias}` : alias, name: metadata(content, 'name') || alias, platform, file: real, source, plugin, version,
       sha256: crypto.createHash('sha256').update(content).digest('hex'), description: metadata(content, 'description').slice(0, 350), toolStatus: 'unverified' });
@@ -88,15 +89,14 @@ export function selectSkills(catalogue: SkillCatalogue, task: string, limit = 8)
   if (/code app/.test(tokens)) platforms.add('code-apps');
   if (/mobile|offline/.test(tokens)) platforms.add('mobile');
   if (/copilot/.test(tokens)) platforms.add('copilot-studio');
-  const words = tokens.match(/[a-z][a-z-]{3,}/g) ?? [];
+  const words = tokens.match(/[a-z][a-z-]{3,}/g) ?? [], counts=new Map<string,number>();for(const word of words)counts.set(word,(counts.get(word)??0)+1);const weightedWords=[...counts];
   const candidates = new Map<string, InstalledSkill>();
   for (const skill of catalogue.skills) {
     const identity = `${skill.platform}:${skill.name}`;
     const previous = candidates.get(identity);
     if (!previous || skill.source === 'plugin' && previous.source !== 'plugin') candidates.set(identity, skill);
   }
-  return [...candidates.values()].map((skill) => ({ skill, score: words.filter((word) => `${skill.id} ${skill.description}`.toLowerCase().includes(word)).length +
-    (/canvas-app$|dv-overview|build-flow|create-site|app-builder|create-code-app/.test(skill.id) ? 2 : 0) }))
+  return [...candidates.values()].map((skill) => {const text=`${skill.id} ${skill.description}`.toLowerCase();return{skill,score:weightedWords.reduce((score,[word,count])=>score+(text.includes(word)?count:0),0)+(/canvas-app$|dv-overview|build-flow|create-site|app-builder|create-code-app/.test(skill.id)?2:0)};})
     .filter(({ skill }) => platforms.has(skill.platform)).sort((a, b) => b.score - a.score || a.skill.id.localeCompare(b.skill.id))
     .slice(0, limit).map(({ skill }) => skill);
 }
