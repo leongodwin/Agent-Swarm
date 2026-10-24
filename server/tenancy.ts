@@ -10,6 +10,7 @@ import type { TenancyInfo, TenancyLogin, TenancyLoginInput,TenancyActivity } fro
 import {identityRoot} from './identityContracts.ts';
 import {currentEnvironment} from '../shared/tenancy.ts';
 import {parsePacIdentity} from './platformAuth.ts';
+import {parsePacTenantIdentity} from './pacTenantIdentity.ts';
 export type { TenancyInfo, TenancyEnvironment } from '../shared/tenancy.ts';
 
 /** Resolve CLI shims to programs so values never pass through a shell. */
@@ -90,6 +91,7 @@ export function parsePacProfiles(output: string): TenancyInfo {
 }
 export interface TenancyService {
   info(): Promise<TenancyInfo>;
+  verifyCurrentTenant?(environmentUrl:string,username:string):Promise<TenancyInfo>;
   select(index: number): Promise<{ ok: boolean; message: string }>;
   selectEnvironment?(environmentUrl:string,username:string):Promise<{ok:boolean;message:string}>;
   login(input: TenancyLoginInput): TenancyLogin;
@@ -158,6 +160,21 @@ export function createTenancyService(demo = false, runner: TenancyRunner = realR
   };
   return {
     info,
+    async verifyCurrentTenant(environmentUrl,username){
+      assertOpen();assertProfileIdle();const target=identityRoot(environmentUrl),current=generation,ticket={};
+      if(demo)return structuredClone(demoInfo);
+      nativeCommands.add(ticket);
+      const guard=()=>{assertOpen();if(generation!==current||profileBusy())throw new HttpError(409,'Selected PAC profile changed during tenant verification');};
+      try{
+        guard();const before=parsePacProfiles(await run('pac',['auth','list'])),active=currentEnvironment(before);guard();
+        if(!active||identityRoot(active.url)!==target||active.user.toLowerCase()!==username.toLowerCase())throw new HttpError(409,'The intended PAC account and target must already be selected');
+        const profile=parsePacTenantIdentity(await run('pac',['auth','who']));guard();
+        const organization=parsePacIdentity(await run('pac',['org','who','--environment',target]));guard();
+        const after=parsePacProfiles(await run('pac',['auth','list'])),again=currentEnvironment(after);guard();
+        if(!again||again.index!==active.index||identityRoot(again.url)!==target||again.user.toLowerCase()!==username.toLowerCase()||profile.username.toLowerCase()!==username.toLowerCase()||organization.username.toLowerCase()!==username.toLowerCase()||organization.environmentUrl!==target||profile.environmentId.toLowerCase()!==organization.environmentId.toLowerCase()||profile.organizationId.toLowerCase()!==organization.organizationId.toLowerCase())throw new HttpError(409,'PAC profile tenant and executing organization were not confirmed');
+        return {...after,tenantId:profile.tenantId};
+      }finally{nativeCommands.delete(ticket);notify();}
+    },
     activity,
     close,
     shutdown(){

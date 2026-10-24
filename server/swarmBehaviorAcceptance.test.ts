@@ -57,6 +57,15 @@ async function office(withRepo = false, configure?: (fake: ReturnType<typeof bac
   await swarm.init(); return {swarm, fake};
 }
 beforeEach(()=>vi.useFakeTimers());
+it.each([false,true])('uses selected PAC tenant verification for project binding, rejected=%s',async rejected=>{
+ const {swarm,fake}=await office(true),m=swarm as any,repo=m.state.repos[0],url='https://synthetic.crm4.dynamics.com/',username='owner@example.test',tenantId='11111111-1111-4111-8111-111111111111';repo.targetTenancy={environmentUrl:url,user:username,tenantId:''};
+ const verify=vi.fn(async()=>{if(rejected)throw Error('PAC tenant not confirmed');return{tenantName:'',tenantDomain:'',tenantId,user:username,isReal:true,status:'connected' as const,environments:[{index:1,name:'Synthetic',url,user:username,active:true}]};});
+ (fake.tenancy as any).verifyCurrentTenant=verify;
+ (fake.tenancy as any).activity=()=>({busy:false});
+ const request=swarm.refreshRepoTarget(repo.id,url,url,username);
+ if(rejected){await expect(request).rejects.toThrow('PAC tenant not confirmed');expect(repo.targetTenancy.tenantId).toBe('');}else{await request;expect(repo.targetTenancy.tenantId).toBe(tenantId);}
+ expect(verify).toHaveBeenCalledWith(url.slice(0,-1),username);expect(fake.tenancy.info).not.toHaveBeenCalled();expect(repo.autoAssign).toBe(false);expect(repo.autoMerge).toBe(false);
+});
 it.each(['valid','stale-target','foreign-account','foreign-selected-target','disconnected','not-real','busy','coordinator','authentication','changed-during-discovery','delivery-started','unbound','unsafe-url'])('changes project target only through idle authenticated admission: %s',async mode=>{
  const {swarm,fake}=await office(true),m=swarm as any,repo=m.state.repos[0],old='https://old.crm.dynamics.com/',next='https://new.crm.dynamics.com/',owner='owner@example.test';
  repo.targetTenancy={environmentUrl:old,user:owner};repo.autoAssign=true;repo.autoMerge=true;if(mode==='unbound')delete repo.targetTenancy;const original=JSON.stringify(repo.targetTenancy);let guardCalls=0;
