@@ -23,6 +23,9 @@ const sections=[
  ['server/ceo.ts','export type RecordToolHandler =','function skillTools()'],
  ['server/swarm.ts','  async reviewDeliveryRelease(','  requestReview()'],
  ['server/delivery.ts','export const deliveryCommands: DeliveryDependencies = {','const canonical ='],
+ ['server/targetOperations.ts',"import { z } from 'zod';"],
+ ['server/targetOperations.ts','export const dataverseGuid =','export const targetComponentSchema'],
+ ['server/targetOperations.ts','export async function verifyTarget(','/** Complete bounded membership inventory;'],
 ] as const;
 export async function standaloneHostReviewSources(){
  const read=async(file:string)=>{const name=fileURLToPath(new URL('../'+file,import.meta.url)),stat=await fs.lstat(name);if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)throw Error('Canonical host source required');const bytes=await readBoundedBytes(name,512*1024);if(!bytes)throw Error('Host source unavailable');return new TextDecoder('utf8',{fatal:true}).decode(bytes);};

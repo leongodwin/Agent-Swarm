@@ -25,10 +25,10 @@ import type {PlatformIdentity} from './platformAuth.ts';
 
 const sourceGroups=[
  ['server/standaloneMetadataProbe.ts','server/connectorMetadataProbe.ts','shared/standaloneProbeScope.ts','shared/connectorProbeScope.ts'],
- ['server/standaloneProbeReview.ts','server/standaloneProbeRuntime.ts','server/standaloneProbeQuarantine.ts','server/standaloneHostReview.ts','server/standaloneNativeReview.ts'],
+ ['server/standaloneProbeReview.ts','server/standaloneProbeRuntime.ts','server/standaloneProbeQuarantine.ts','server/standaloneHostReview.ts','server/standaloneNativeReview.ts','server/nativeReviewCapsule.ts'],
  ['server/standaloneProbeExecution.ts','server/standaloneProbeResources.ts','server/standaloneFlowOwnership.ts'],
  ['server/standaloneProbeAdapter.ts','server/standaloneFlowAgentBuild.ts','server/flowAdapter.ts'],
- ['server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/resourceLease.ts'],
+ ['server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/identityContracts.ts','server/resourceLease.ts'],
  ['server/tenantDlp.ts','server/standardPolicy.ts','server/standaloneIntegrationGate.ts','server/standaloneBuildIdentity.ts','scripts/build-server.mjs'],
  ['server/flowCleanup.ts','server/flowEnvironment.ts','server/pinnedPreparationContracts.ts','server/tenancy.ts','server/clis.ts','server/platformCommandError.ts','server/unambiguousJson.ts','server/boundedJson.ts','server/config.ts','server/atomicFile.ts'],
 ];
