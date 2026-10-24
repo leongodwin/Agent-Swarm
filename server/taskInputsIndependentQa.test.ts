@@ -45,6 +45,16 @@ it('losslessly packs critical-finding labels only after the exact v2 index excee
  expect(JSON.stringify(record)).toBe(before);record.content.taskPlan!.tasks[1].inputs=['x'.repeat(TASK_CONTEXT_BYTES)];expect(()=>taskInputPrompt(record,6)).toThrow('24 KiB');
 });
 
+it('round-trips the pooled metadata beyond v3 without changing any source, hash or input admission',()=>{
+ const record=fixture(),original=structuredClone(record.content.findings[0]);let prompt:any;
+ for(let n=140;n<=240;n++){record.content.findings=Array.from({length:n},(_,i)=>({...original,id:'finding-\u00e9-'+i,statement:'Complete exact source '+i}));const candidate=JSON.parse(taskInputPrompt(record,6));if(candidate.taskInputs.projection==='exact-task-input-index-v4'&&Buffer.byteLength(JSON.stringify(candidate))<=TASK_CONTEXT_BYTES){prompt=candidate;break;}}
+ expect(prompt).toBeDefined();delete record.content.findings[0].conclusion;prompt=JSON.parse(taskInputPrompt(record,6));expect(prompt.taskInputs.projection).toBe('exact-task-input-index-v4');const before=JSON.stringify(record),manifest=taskInputManifest(record,6),{projection,inputIndexEncoding,strings,inputIndexRows,criticalFindingRows,...rest}=prompt.taskInputs;
+ const expanded={...rest,inputIndex:inputIndexRows.map(([section,id,bytes,sha256]:[number,number,number,string])=>({section:strings[section],id:strings[id],bytes,sha256})),criticalFindings:criticalFindingRows.map((indices:number[])=>{const [id,area,owner,status,conclusion]=indices.map(index=>strings[index]);return{id,area,owner,status,conclusion};})};
+ expect(criticalFindingRows[0][4]).toBe(-1);expect(expanded).toEqual(manifest);expect(prompt.taskAuthorityHash).toBe(taskAuthorityHash(record,6));expect(prompt.taskInputs.taskHash).toBe(taskScopeHash(record,6));expect(JSON.stringify(record)).toBe(before);
+ for(const row of expanded.inputIndex){const result=readTaskInput(record,6,row.section,row.id);expect(result.sha256).toBe(row.sha256);expect(result.bytes).toBe(row.bytes);}
+ record.content.taskPlan!.tasks[1].inputs=['x'.repeat(TASK_CONTEXT_BYTES)];expect(()=>taskInputPrompt(record,6)).toThrow('24 KiB');
+});
+
 it('returns every indexed input as complete exact hashed bytes with unchanged record/task binding',()=>{
  const record=fixture(),manifest=taskInputManifest(record,6);for(const row of manifest.inputIndex){const result=readTaskInput(record,6,row.section,row.id);expect(result.sha256).toBe(hash(result.value));expect(result.sha256).toBe(row.sha256);expect(result.bytes).toBe(Buffer.byteLength(JSON.stringify(result.value)));expect(result.taskHash).toBe(manifest.taskHash);expect(result.reference).toEqual(manifest.reference);}
  expect(readTaskInput(record,6,'finding','e29').value).toEqual(record.content.findings[29]);expect(readTaskInput(record,6,'global','global').value).toEqual(taskScope(record.content,6)!.global);

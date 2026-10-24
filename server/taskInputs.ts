@@ -53,7 +53,16 @@ export function taskInputPrompt(record:RecordInput,issue:number){
  // unchanged; an irreducible packet is still refused by admission.
  const {criticalFindings,...indexed}=rest;
  const rows=JSON.stringify({...prompt,taskInputs:{...indexed,projection:'exact-task-input-index-v3',inputIndexEncoding:'inputIndexRows=[section,id,bytes,sha256]; criticalFindingRows=[id,area,owner,status,conclusion]. Expand every tuple exactly in original order. Complete source retrieval, scope and authority hashes are unchanged; no finding or input is omitted.',inputIndexRows:inputIndex.map(({section,id,bytes,sha256})=>[section,id,bytes,sha256]),criticalFindingRows:criticalFindings.map(({id,area,owner,status,conclusion})=>[id,area,owner,status,conclusion])}});
- return Buffer.byteLength(rows)<Buffer.byteLength(selected)?rows:selected;
+ const previous=Buffer.byteLength(rows)<Buffer.byteLength(selected)?rows:selected;
+ if(Buffer.byteLength(previous)<=TASK_CONTEXT_BYTES)return previous;
+ // Pool repeated index/finding metadata strings, never source values. The
+ // decoder retains every row, exact string, size and digest in original order.
+ const strings:string[]=[],positions=new Map<string,number>();
+ const intern=(value:string|undefined)=>{if(value===undefined)return -1;let index=positions.get(value);if(index===undefined){index=strings.length;positions.set(value,index);strings.push(value);}return index;};
+ const inputIndexRows=inputIndex.map(({section,id,bytes,sha256})=>[intern(section),intern(id),bytes,sha256]);
+ const criticalFindingRows=criticalFindings.map(({id,area,owner,status,conclusion})=>[id,area,owner,status,conclusion].map(intern));
+ const pooled=JSON.stringify({...prompt,taskInputs:{...indexed,projection:'exact-task-input-index-v4',inputIndexEncoding:'strings is an exact string pool. inputIndexRows=[sectionIndex,idIndex,bytes,sha256]; criticalFindingRows=[idIndex,areaIndex,ownerIndex,statusIndex,conclusionIndex]. Replace each named Index with strings[Index]; -1 means absent optional field, not null. Preserve every row and order. No source, digest, finding, scope or authority is omitted. Retrieve complete inputs with the expanded section/id and unchanged taskHash.',strings,inputIndexRows,criticalFindingRows}});
+ return Buffer.byteLength(pooled)<Buffer.byteLength(previous)?pooled:previous;
 }
 /** Admission-only checks preserve historical records for audit and correction. */
 export function taskPlanningBlockers(record:RecordInput):string[]{
