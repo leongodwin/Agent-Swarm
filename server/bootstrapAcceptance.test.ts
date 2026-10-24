@@ -3,6 +3,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {EventEmitter} from 'node:events';
 import fs from 'node:fs';
 import {phaseRecordFixture} from './testFixtures/phaseRecord.ts';
+import {environmentFeatureScopeFixture} from './testFixtures/environmentFeatureScope.ts';
 
 // No listener, model, tenant or user state is used: exercise the entry point's
 // dependency wiring and invoke its installed admission callbacks directly.
@@ -45,6 +46,7 @@ vi.mock('./skillRegistry.ts',()=>({discoverSkills:()=>({fingerprint:'catalogue',
 vi.mock('./synthesisSkills.ts',()=>({selectSynthesisSkills:()=>[]}));
 vi.mock('./canvasPackagingRuntime.ts',()=>({canvasPackagingRuntime:(context:any)=>{h.args.packagingRuntime=context;return h.services.packagingRuntime;}}));
 vi.mock('./schemaBootstrapRuntime.ts',()=>({schemaBootstrapConfigurationRoot:()=>h.args.configurationRoot??'synthetic-bootstrap-home',schemaBootstrapRuntime:(context:any)=>{h.args.bootstrapRuntime=context;return h.services.bootstrapRuntime;}}));
+vi.mock('./environmentFeatureRuntime.ts',()=>({environmentFeatureRuntime:(context:any)=>{h.args.environmentFeatureRuntime=context;return h.services.environmentFeatureRuntime;}}));
 vi.mock('./browserHandoff.ts',async original=>({...await original<typeof import('./browserHandoff.ts')>(),BrowserHandoff:service('browser')}));
 
 beforeEach(()=>{
@@ -67,6 +69,8 @@ const repo=()=>({id:'project',fullName:'demo/project',checkoutPath:'synthetic-ch
 function releasePlan(){return {acceptanceProfile:'functional-development',name:'Synthetic release',owner:'author',qaOwner:'qa',requiredIssues:[1],components:['app'],acceptanceCriteria:['Task works'],quality:{maxTaskDurationMs:30000,maxSeriousAccessibilityIssues:0},monitoring:{intervalMinutes:15,criticalProbeIds:['worker']},verification:{baseUrl:'https://app.example.test',identities:[{id:'tester',expectedUser:'tester@example.test',userSelector:'#user'}],scenarios:['loading','empty','validation','failure','recovery','success'].map((state,i)=>({name:state,states:[state],category:['journey','journey','error-handling','authorization','persistence','journey'][i],identity:'tester',criterion:0,steps:[{action:'press',selector:'#result',key:'Tab'},...(i===4?[{action:'reload'}]:[]),{action:'text',selector:'#result',contains:'Expected'}]}))}};}
 
 describe('isolated office bootstrap acceptance',()=>{
+  it('routes the administrative feature through its exact project scope and preserves profile/config guards',async()=>{const scope=environmentFeatureScopeFixture();h.record=phaseRecordFixture();h.record.content.environmentFeature=scope;h.record.content.qaOwner='qa';h.snapshot.repos=[{...repo(),targetTenancy:{environmentUrl:scope.target.environmentUrl,tenantId:scope.target.tenantId}}];h.services.capabilities.configuration.mockReturnValue({environmentUrl:scope.target.environmentUrl});h.services.environmentFeatureRuntime={inspect:vi.fn(async()=>({scope:'synthetic-inspection'})),observe:vi.fn(async()=>({executionRequested:false})),reconcile:vi.fn(async()=>({readOnly:true})),execute:vi.fn(async()=>({status:'synthetic-execution-admission-only'})),handle:vi.fn(async()=>({handled:true}))};await boot();expect(await h.args.http.environmentFeature('project','observe')).toEqual({executionRequested:false});expect(h.args.environmentFeatureRuntime.cwd).toBe('synthetic-checkout');expect(()=>h.args.environmentFeatureRuntime.guard()).not.toThrow();await h.args.http.environmentFeature('project','execute',{proposalSha256:'a'.repeat(64)});expect(h.services.environmentFeatureRuntime.execute).toHaveBeenCalledWith('a'.repeat(64));await h.args.http.environmentFeature('project','reconcile');expect(h.services.environmentFeatureRuntime.reconcile).toHaveBeenCalledOnce();await h.args.http.requestEnvironmentFeatureReview('project');expect(h.services.swarm.reviewDeliveryRelease).toHaveBeenCalledWith('qa','project','future cloud-flow default only',true,false,false,false,undefined,false,false,true);h.profileGeneration++;expect(()=>h.args.environmentFeatureRuntime.guard()).toThrow(/authentication or configuration changed/);});
+  it('refuses administrative inspection without a selected scope instead of using a default environment',async()=>{h.record=phaseRecordFixture();h.snapshot.repos=[repo()];h.services.capabilities.configuration.mockReturnValue({environmentUrl:'https://target.example'});await boot();await expect(h.args.http.environmentFeature('project','inspect')).rejects.toThrow(/exact authenticated project scope/);expect(h.args.environmentFeatureRuntime).toBeUndefined();});
   async function phaseHost(){
    h.record=phaseRecordFixture();h.record.repoId='project';const target=h.record.content.environmentUrl;
    h.snapshot.repos=[{...repo(),targetTenancy:{environmentUrl:target,tenantId:'tenant'}}];h.view.policy.environmentUrl=target;

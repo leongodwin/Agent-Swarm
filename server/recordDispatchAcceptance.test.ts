@@ -85,3 +85,15 @@ it('routes standalone probe inspection only to assigned independent QA without c
  expect(JSON.parse(await handler('qa',{reviewOnly:true})(request))).toMatchObject({businessAuthorityGranted:false});expect(records.save).not.toHaveBeenCalled();
  deps.standaloneProbe=undefined;await expect(handler('qa')(request)).rejects.toThrow('assigned independent QA');
 });
+it('keeps administrative review with assigned QA and rechecks context after asynchronous reads',async()=>{
+ deps.environmentFeature=vi.fn(async(_repo,_payload,_actor,guard)=>{guard();return{settingChangeAllowed:false,businessAuthorityGranted:false};});
+ const request=input('environment_feature',{action:'inspect'});
+ for(const role of ['dev','ceo','manager'] as const)await expect(handler(role)(request)).rejects.toThrow('assigned independent QA');
+ await expect(handler('qa',{id:'other'})(request)).rejects.toThrow('assigned independent QA');
+ expect(JSON.parse(await handler('qa',{reviewOnly:true})(request))).toEqual({settingChangeAllowed:false,businessAuthorityGranted:false});
+ expect(deps.environmentFeature).toHaveBeenCalledWith('project',{action:'inspect'},{id:'qa',role:'qa',repoId:'project',reviewOnly:true},expect.any(Function));
+ expect(records.save).not.toHaveBeenCalled();
+ deps.environmentFeature.mockImplementation(async(_repo:string,_payload:unknown,_actor:unknown,guard:()=>void)=>{context.environmentUrl='https://changed.example';guard();return{};});
+ await expect(handler('qa',{reviewOnly:true})(request)).rejects.toThrow(/Project scope changed/);
+ deps.environmentFeature=undefined;await expect(handler('qa')(request)).rejects.toThrow('assigned independent QA');
+});

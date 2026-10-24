@@ -771,6 +771,17 @@ it('gives completed slices an explicit independent receipt task without repeatin
  expect(options.prompt).toContain('Do not repeat unchanged design');expect(options.prompt).not.toContain('action review with');
  expect(await options.authorizeTool!()).toBeNull();
 });
+it('starts the setting-only reviewer with complete source paging and no business execution authority',async()=>{
+ const {swarm,fake}=await office(true);const qa=swarm.snapshot().agents.find(a=>a.role==='qa')!;
+ await swarm.reviewDeliveryRelease(qa.id,'synthetic/repo','future cloud-flow default only',true,false,false,false,undefined,false,false,true);
+ const options=fake.startSession.mock.calls[0][0] as SessionOptions;
+ expect(options.prompt).toContain('action environment_feature');
+ expect(options.prompt).toContain('follow nextCharacter until null');
+ expect(options.prompt).toContain('exactly four control decisions');
+ expect(options.prompt).toContain('Do not release/reclaim/reset holds');
+ expect(options.prompt).toContain('not execution, deployment, private/report or email acceptance');
+ expect(await options.authorizeTool!()).toBeNull();
+});
 
 it('does not start release QA on blocked readiness or after the reviewer is stopped', async () => {
   const {swarm, fake} = await office(true); const qa = swarm.snapshot().agents.find(a => a.role === 'qa')!;
