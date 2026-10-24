@@ -93,7 +93,7 @@ it('keeps administrative review with assigned QA and rechecks context after asyn
  expect(JSON.parse(await handler('qa',{reviewOnly:true})(request))).toEqual({settingChangeAllowed:false,businessAuthorityGranted:false});
  expect(deps.environmentFeature).toHaveBeenCalledWith('project',{action:'inspect'},{id:'qa',role:'qa',repoId:'project',reviewOnly:true},expect.any(Function));
  expect(records.save).not.toHaveBeenCalled();
- deps.environmentFeature.mockImplementation(async(_repo,_payload,_actor,guard)=>{context.environmentUrl='https://changed.example';guard();return{};});
+ deps.environmentFeature.mockImplementation(async(_repo:string,_payload:unknown,_actor:unknown,guard:()=>void)=>{context.environmentUrl='https://changed.example';guard();return{};});
  await expect(handler('qa',{reviewOnly:true})(request)).rejects.toThrow(/Project scope changed/);
  deps.environmentFeature=undefined;await expect(handler('qa')(request)).rejects.toThrow('assigned independent QA');
 });
