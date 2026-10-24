@@ -5,12 +5,15 @@ import {performance} from 'node:perf_hooks';
 import {z} from 'zod';
 import {acquireResourceLease} from './resourceLease.ts';
 
-const guid=z.uuid().transform(value=>value.toLowerCase()),hash=z.string().regex(/^[a-f0-9]{64}$/),owner=z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
+// Provider IDs include legacy/sequential GUIDs without RFC UUID version bits,
+// matching targetOperations.dataverseGuid and platformIdentitySchema.
+export const environmentFeatureGuidSchema=z.string().regex(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i).transform(value=>value.toLowerCase());
+const guid=environmentFeatureGuidSchema,uuid=z.uuid().transform(value=>value.toLowerCase()),hash=z.string().regex(/^[a-f0-9]{64}$/),owner=z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
 const origin=z.url().refine(value=>{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!u.search&&!u.hash&&u.pathname==='/'&&/^[-a-z0-9]+\.crm[0-9]*\.dynamics\.com$/.test(u.hostname);},'Exact commercial Dataverse origin required').transform(value=>new URL(value).origin+'/');
 export const environmentFeaturePlanSchema=z.strictObject({
  schemaVersion:z.literal(1),kind:z.literal('disable-default-solution-flows'),
- record:z.strictObject({id:guid,revision:z.number().int().positive(),sha256:hash}),sourceCommit:z.string().regex(/^[a-f0-9]{40}$/),configurationSha256:hash,implementationSha256:hash,
- owner,qaOwner:owner,target:z.strictObject({tenantId:guid,environmentId:guid,organizationId:guid,userId:guid,aadObjectId:guid,username:z.email(),environmentUrl:origin}),
+ record:z.strictObject({id:uuid,revision:z.number().int().positive(),sha256:hash}),sourceCommit:z.string().regex(/^[a-f0-9]{40}$/),configurationSha256:hash,implementationSha256:hash,
+ owner,qaOwner:owner,target:z.strictObject({tenantId:uuid,environmentId:guid,organizationId:guid,userId:guid,aadObjectId:uuid,username:z.email(),environmentUrl:origin}),
  field:z.literal('enableflowsinsolutionbydefault'),value:z.literal(false),
 }).refine(value=>value.owner!==value.qaOwner,'Independent QA required');
 export type EnvironmentFeaturePlan=z.infer<typeof environmentFeaturePlanSchema>;
