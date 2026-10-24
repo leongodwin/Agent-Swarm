@@ -9,7 +9,7 @@ import {privateReportMetadata} from './privateReportMetadata.ts';
 import {sourceMailboxGuardExpression} from './headlessSourceContract.ts';
 import type {AcceptedHeadlessReport} from './headlessAcceptedReport.ts';
 const hash=z.string().regex(/^[a-f0-9]{64}$/),scalar=z.union([z.string().max(2000),z.number(),z.boolean(),z.null()]);
-const baseHeadlessFlowSchema=z.strictObject({flowId:z.uuid(),identity:platformIdentitySchema,definitionSha256:hash,
+const baseHeadlessFlowSchema=z.strictObject({flowId:dataverseGuid,identity:platformIdentitySchema,definitionSha256:hash,
  operationScope:z.enum(['legacy-ai','standard-mail-v1']).default('legacy-ai'),dataMode:z.enum(['mailbox','synthetic']).default('mailbox'),
  historyPolicy:z.strictObject({kind:z.literal('existing-tenant-run-history-v1'),recordId:z.uuid(),recordSha256:hash,ownerId:dataverseGuid}).optional(),
  dispatchReport:z.strictObject({sliceRunId:z.uuid(),checkName:z.string().min(5).max(200),reportSha256:hash}).optional(),
@@ -103,7 +103,7 @@ export async function reconcileHeadlessDispatch(binding:z.infer<typeof platformI
  const check=()=>{signal.throwIfAborted();guard();};check();
  try{
   z.uuid().parse(recordId);const file=path.join(root,digest({owner:binding.username,requestKey:recordId})+'.json'),snapshot=await claimSnapshot(file);
-  const claim=z.object({flowId:z.uuid(),operationScope:z.enum(['legacy-ai','standard-mail-v1']),dataMode:z.enum(['synthetic','mailbox']),definitionSha256:hash,nonce:z.uuid(),startedAt:z.iso.datetime(),identity:platformIdentitySchema,requestKey:z.literal(recordId),status:z.literal('dispatched-or-unknown'),acceptedReport:z.object({sliceRunId:z.uuid(),checkName:z.string(),reportSha256:hash,action:z.string()}).optional(),verification:z.object({contextAction:z.string(),resultAction:z.string(),sendAction:z.string(),receiptAction:z.string(),assertions:z.array(z.object({pointer:z.array(z.string()),equals:scalar})).min(1)})}).parse(snapshot.value);
+  const claim=z.object({flowId:dataverseGuid,operationScope:z.enum(['legacy-ai','standard-mail-v1']),dataMode:z.enum(['synthetic','mailbox']),definitionSha256:hash,nonce:z.uuid(),startedAt:z.iso.datetime(),identity:platformIdentitySchema,requestKey:z.literal(recordId),status:z.literal('dispatched-or-unknown'),acceptedReport:z.object({sliceRunId:z.uuid(),checkName:z.string(),reportSha256:hash,action:z.string()}).optional(),verification:z.object({contextAction:z.string(),resultAction:z.string(),sendAction:z.string(),receiptAction:z.string(),assertions:z.array(z.object({pointer:z.array(z.string()),equals:scalar})).min(1)})}).parse(snapshot.value);
   if(claim.operationScope==='standard-mail-v1'&&claim.dataMode!=='mailbox')throw Error();
    if(digest(claim.identity)!==digest({tenantId:binding.tenantId,username:binding.username,environmentId:binding.environmentId})||Date.parse(claim.startedAt)>Date.now())throw Error();
   const owned=async()=>{check();verifyFlowIdentity(await flow.call('whoami',{}),claim.identity);check();if((await claimSnapshot(file)).raw!==snapshot.raw)throw Error('Claim changed');};
