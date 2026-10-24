@@ -15,6 +15,9 @@ export function exactHostSection(file:string,text:string,start:string,end?:strin
  return {file,fullSourceSha256:sha(text),startCharacter:at,endCharacter:through,sha256:sha(selected),text:selected};
 }
 const sections=[
+ ['server/clis.ts',"import fs from 'node:fs';"],
+ ['server/clis.ts',"import path from 'node:path';"],
+ ['server/clis.ts',"const WIN = process.platform === 'win32';",'/** How to start a CLI:'],
  ['server/index.ts','const standaloneProbeFor=','const packagingFor='],
  ['server/index.ts','const recordDependencies=','const sourceReaderFor='],
  ['server/index.ts','const {app,browserAuth,closeAdmission}=createOfficeHttpApp('],
@@ -23,6 +26,7 @@ const sections=[
  ['server/ceo.ts','export type RecordToolHandler =','function skillTools()'],
  ['server/swarm.ts','  async reviewDeliveryRelease(','  requestReview()'],
  ['server/delivery.ts','export const deliveryCommands: DeliveryDependencies = {','const canonical ='],
+ ['server/delivery.ts','export function pacReportedError(','export function importJobId('],
  ['server/targetOperations.ts',"import { z } from 'zod';"],
  ['server/targetOperations.ts','export const dataverseGuid =','export const targetComponentSchema'],
  ['server/targetOperations.ts','export async function verifyTarget(','/** Complete bounded membership inventory;'],

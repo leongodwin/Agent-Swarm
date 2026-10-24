@@ -16,6 +16,14 @@ export function nativeReviewComponents(source:string,expected:string){
  const unique=(needle:string,from=0)=>{const first=source.indexOf(needle,from);if(first<0||source.indexOf(needle,first+needle.length)>=0)throw Error('Native review component absent or ambiguous');return first;};
  const component=(name:string,start:number,end:number)=>{const text=source.slice(start,end);if(end<=start||Buffer.byteLength(text)>128*1024)throw Error('Native component exceeds review bound');return{name,entrySha256:expected,startCharacter:start,endCharacter:end,sha256:sha(text),text};};
  const result=[];
+ // Full bundled validation module includes its exports, validator body and lazy
+ // initializer. Keep bundler helpers and cache initializer dependencies visible.
+ for(const [name,begin,end] of [
+  ['bundler-runtime','var __create = Object.create;','// packages/core/dist/utils/logger.js'],
+  ['flow-definition-module','// packages/core/dist/validation/flow-definition.js','// packages/core/dist/auth/clear-cache-files.js'],
+  ['cache-initialization-module','// packages/core/dist/auth/clear-cache-files.js','// packages/core/dist/auth/auth-operation-queue.js'],
+ ] as const){const start=unique(begin),finish=unique(end,start+begin.length);result.push(component('module:'+name,start,finish));}
+
  for(const tool of nativeReviewTools){const start=unique(`  server2.tool("${tool}",`),end=source.indexOf('\n  server2.tool(',start+1);if(end<0)throw Error('Native tool boundary missing');result.push(component('tool:'+tool,start,end));}
  const classStart=unique('var FlowClient = class _FlowClient {'),classEnd=source.indexOf('\n};',classStart);if(classEnd<0)throw Error('Native client boundary missing');
  const client=source.slice(classStart,classEnd);
@@ -28,7 +36,9 @@ export function nativeReviewComponents(source:string,expected:string){
  // Regression checks for direct calls and named callback arguments, not a
  // general proof of dynamic JavaScript closure. Exact code still needs review.
  const methods=new Set([...client.matchAll(/^  (?:async )?(\w+)\(/gm)].map(m=>m[1])),functions=new Set([...source.matchAll(/^(?:async )?function (\w+)\(/gm)].map(m=>m[1])),included=new Set(result.map(p=>p.name));
- for(const part of result){for(const match of part.text.matchAll(/\bthis\.(\w+)\s*\(/g))if(methods.has(match[1])&&!included.has('method:'+match[1]))throw Error('Executed native method omitted');for(const pattern of [/(?<![.\w])(\w+)\s*\(/g,/\bsafeError\s*\([^,\n]*,\s*(\w+)\s*\)/g])for(const match of part.text.matchAll(pattern))if(functions.has(match[1])&&!included.has('function:'+match[1]))throw Error('Executed native helper omitted: '+match[1]);}
+ for(const part of result.filter(p=>p.name.startsWith('module:')))for(const match of part.text.matchAll(/^(?:async )?function (\w+)\(/gm))included.add('function:'+match[1]);
+ const initializers=new Set([...source.matchAll(/^var (init_\w+) = __esm\(/gm)].map(m=>m[1])),exposedInitializers=new Set(result.flatMap(p=>[...p.text.matchAll(/^var (init_\w+) = __esm\(/gm)].map(m=>m[1])));
+ for(const part of result){for(const match of part.text.matchAll(/\b(init_\w+)\s*\(/g))if(initializers.has(match[1])&&!exposedInitializers.has(match[1]))throw Error('Executed native initializer omitted: '+match[1]);if(part.name.startsWith('module:'))continue;for(const match of part.text.matchAll(/\bthis\.(\w+)\s*\(/g))if(methods.has(match[1])&&!included.has('method:'+match[1]))throw Error('Executed native method omitted');for(const pattern of [/(?<![.\w])(\w+)\s*\(/g,/\bsafeError\s*\([^,\n]*,\s*(\w+)\s*\)/g])for(const match of part.text.matchAll(pattern))if(functions.has(match[1])&&!included.has('function:'+match[1]))throw Error('Executed native helper omitted: '+match[1]);}
  return result;
 }
 export async function standaloneNativeReviewSources(home:string,expected:string){

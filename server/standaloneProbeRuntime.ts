@@ -11,6 +11,7 @@ import {standaloneProbePlanSchema} from './standaloneMetadataProbe.ts';
 import {verifyStandaloneQuarantine} from './standaloneProbeQuarantine.ts';
 import {inspectStandaloneProbeAdapter,connectStandaloneProbeAdapter} from './standaloneProbeAdapter.ts';
 import {standaloneHostReviewSources} from './standaloneHostReview.ts';
+import {exactReviewCapsule} from './nativeReviewCapsule.ts';
 import {standaloneNativeReviewSources} from './standaloneNativeReview.ts';
 import type {DeliveryRecord} from '../shared/deliveryRecord.ts';
 import {executeStandaloneProbe} from './standaloneProbeExecution.ts';
@@ -30,7 +31,7 @@ const sourceGroups=[
  ['server/standaloneProbeAdapter.ts','server/standaloneFlowAgentBuild.ts','server/flowAdapter.ts'],
  ['server/privateReportMetadata.ts','server/platformAuth.ts','server/dataverseIdentity.ts','server/identityContracts.ts','server/resourceLease.ts'],
  ['server/tenantDlp.ts','server/standardPolicy.ts','server/standaloneIntegrationGate.ts','server/standaloneBuildIdentity.ts','scripts/build-server.mjs'],
- ['server/flowCleanup.ts','server/flowEnvironment.ts','server/pinnedPreparationContracts.ts','server/tenancy.ts','server/clis.ts','server/platformCommandError.ts','server/unambiguousJson.ts','server/boundedJson.ts','server/config.ts','server/atomicFile.ts'],
+ ['server/flowCleanup.ts','server/flowEnvironment.ts','server/pinnedPreparationContracts.ts','server/tenancy.ts','server/httpError.ts','server/platformCommandError.ts','server/unambiguousJson.ts','server/boundedJson.ts','server/config.ts','server/atomicFile.ts'],
 ];
 const configuration=z.strictObject({schemaVersion:z.literal(1),plan:standaloneProbePlanSchema,controls:standaloneProbeControlsSchema});
 const sha=(bytes:string|Uint8Array)=>crypto.createHash('sha256').update(bytes).digest('hex');
@@ -47,7 +48,7 @@ export function standaloneProbeRuntime(context:{home:string;configurationRoot:st
   const readSource=async(name:string)=>{const file=fileURLToPath(new URL('../'+name,import.meta.url)),bytes=await readBoundedBytes(file,128*1024);if(!bytes)throw Error('Pinned connector probe implementation absent');return{file:name,sha256:sha(bytes),text:new TextDecoder('utf8',{fatal:true}).decode(bytes)};};
   const implementationSources=await Promise.all(sourceGroups.map(async(group,index)=>{
    const entries=await Promise.all(group.map(readSource));if(entries.length===1)return entries[0];
-   const text='# Complete exact standalone source capsule\n\nEvery entry retains its complete original UTF8 source and SHA256. Read all entries; this logical key is not a physical Markdown file.\n\n'+JSON.stringify({schemaVersion:1,sources:entries});
+   const text=exactReviewCapsule(entries);
    return {file:`docs/STANDALONE-PROBE-SOURCES-${index+1}.md`,sha256:sha(text),text};
   }));
   implementationSources.push(await standaloneHostReviewSources());
