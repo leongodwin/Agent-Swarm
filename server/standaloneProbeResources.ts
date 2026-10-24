@@ -35,6 +35,7 @@ export async function prepareStandaloneProbeResources(plan:StandaloneProbePlan,d
  const {command,request,flow}=readers(plan,deps);
  await verifyPlatformAuthentication(command,request,plan.target.environmentUrl,{organizationId:plan.target.organizationId,userId:plan.target.userId},plan.identity,()=>flow('whoami',{}));
  z.object({systemuserid:z.literal(plan.target.userId),azureactivedirectoryobjectid:z.literal(plan.ownerObjectId),isdisabled:z.literal(false),applicationid:z.null()}).parse(await request('GET',`systemusers(${plan.target.userId})?$select=systemuserid,azureactivedirectoryobjectid,isdisabled,applicationid`));
+ const direct=async()=>z.object({organizationid:z.literal(plan.target.organizationId),enableflowsinsolutionbydefault:z.literal(false)}).parse(await request('GET',`organizations(${plan.target.organizationId})?$select=organizationid,enableflowsinsolutionbydefault`));await direct();
  const old={env:plan.identity.environmentId,flow:plan.quarantine.flowId};
  assertStandaloneFlowOwnership(plan,old.flow,await flow('read_standalone_flow_owners',old));
  if(await flow('get_flow',{...old,path:'properties.state'})!=='Stopped')throw Error('Original quarantined flow is not stopped');
@@ -44,6 +45,7 @@ export async function prepareStandaloneProbeResources(plan:StandaloneProbePlan,d
  if(inventory.some(item=>item.displayName.toLowerCase()===plan.flow.name.toLowerCase()))throw Error('Standalone flow name already exists; no adoption or duplicate override');
  const built=buildStandaloneMetadataProbe(plan);
  z.object({overall:z.literal('ready')}).parse(await flow('preflight_flow',{env:plan.identity.environmentId,definition:built.definition,connectionReferences:built.connectionRefs}));
+ await direct();
  await deps.journal('create-standalone-flow-intent',{name:plan.flow.name,definitionSha256:built.definitionSha256,connectionRefsSha256:built.connectionRefsSha256,oldFlowId:old.flow,originalHoldPreserved:true,state:'Stopped',allowDuplicate:false});
  const created=z.object({name:dataverseGuid,displayName:z.literal(plan.flow.name),state:z.literal('Stopped')}).parse(await flow('create_standalone_flow',{env:plan.identity.environmentId,name:plan.flow.name,definition:built.definition,connectionRefs:built.connectionRefs,state:'Stopped',allowDuplicate:false}));
  await deps.journal('created-standalone-flow',{flowId:created.name,oldFlowId:old.flow,originalHoldPreserved:true});

@@ -14,7 +14,7 @@ export interface ExactReviewSource {file:string;sha256:string;text:string;}
 export function exactReviewCapsule(sources:readonly ExactReviewSource[]){
  let longest=2;for(const s of sources)for(const m of s.text.matchAll(/`+/g))longest=Math.max(longest,m[0].length);
  const fence='`'.repeat(longest+1);
- return '# Complete exact standalone source capsule\n\nTuple-ordered full files: read characterLength UTF-16 units after each opening fence plus LF. SHA256 binds original UTF-8 bytes.\n\n'+JSON.stringify({schemaVersion:2,fence,columns:['file','sha256','characterLength'],sources:sources.map(s=>[s.file,s.sha256,s.text.length])})+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
+ return '# Exact full source\n\nTuple-ordered full files: read characterLength UTF-16 units after each opening fence plus LF. SHA256 binds original UTF-8 bytes.\n\n'+JSON.stringify({schemaVersion:2,fence,columns:['file','sha256','characterLength'],sources:sources.map(s=>[s.file,s.sha256,s.text.length])})+'\n\n'+sources.map(s=>fence+'\n'+s.text+'\n'+fence).join('\n\n');
 }
 
 export interface HostReviewPart extends ExactReviewSource {fullSourceSha256:string;startCharacter:number;endCharacter:number;}
